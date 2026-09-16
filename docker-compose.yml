@@ -50,6 +50,8 @@ services:
       # Код примонтирован — правки применяются без пересборки образа.
       - ./backend:/app
       - storage_data:/app/var/storage
+      # Исходные файлы организаторов (справочник работ, ссылки на датасеты).
+      - ./data:/app/data:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -71,6 +73,7 @@ services:
     volumes:
       - ./backend:/app
       - storage_data:/app/var/storage
+      - ./data:/app/data:ro
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,7 +1,7 @@
 # Короткие команды для повседневной работы. Всё, что нужно знать новому
 # участнику: make up, make logs, make down.
 
-.PHONY: help up down logs ps rebuild migrate revision shell test lint fmt
+.PHONY: help up down logs ps rebuild migrate revision import-catalog shell test lint fmt
 
 help:  ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -32,6 +32,9 @@ revision:  ## Создать миграцию: make revision m="описание
 	# контейнер работает от root и иначе оставляет нередактируемые файлы.
 	docker compose exec --user $(shell id -u):$(shell id -g) api \
 		alembic revision --autogenerate -m "$(m)"
+
+import-catalog:  ## Загрузить справочник видов работ из data/work_catalog.xlsx
+	docker compose exec api python -m app.cli import-catalog
 
 shell:  ## Python-консоль внутри контейнера api
 	docker compose exec api python
