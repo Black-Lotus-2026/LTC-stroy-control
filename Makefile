@@ -28,7 +28,10 @@ migrate:  ## Применить миграции
 	docker compose exec api alembic upgrade head
 
 revision:  ## Создать миграцию: make revision m="описание"
-	docker compose exec api alembic revision --autogenerate -m "$(m)"
+	# --user нужен, чтобы файл миграции принадлежал вам, а не root:
+	# контейнер работает от root и иначе оставляет нередактируемые файлы.
+	docker compose exec --user $(shell id -u):$(shell id -g) api \
+		alembic revision --autogenerate -m "$(m)"
 
 shell:  ## Python-консоль внутри контейнера api
 	docker compose exec api python
