@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Настройки окружения и данные стенда
+.env
+backend/var/
+*.db
+celerybeat-schedule*
+
+# Node / фронтенд
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Собранные артефакты не хранятся в репозитории
+*.html.build
+Строй-контроль.html
+
+# Редакторы и ОС
+.idea/
+.vscode/
+.DS_Store
+*~
+.~lock.*#

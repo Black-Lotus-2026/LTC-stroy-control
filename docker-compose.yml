@@ -1,0 +1,100 @@
+# Полный стенд: API, воркер детекции, планировщик, база, брокер.
+# Запуск: make up   (или docker compose up --build)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stroy
+      POSTGRES_PASSWORD: stroy
+      POSTGRES_DB: stroy_control
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Наружу нестандартный порт: на машинах участников часто уже стоит
+      # локальный PostgreSQL, и 5432 оказывается занят. Внутри сети compose
+      # сервисы по-прежнему ходят на 5432.
+      - "5433:5432"
+    healthcheck:
+      # Остальные сервисы ждут именно готовности принимать запросы,
+      # а не просто старта контейнера.
+      test: ["CMD-SHELL", "pg_isready -U stroy -d stroy_control"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      # То же соображение, что и с PostgreSQL: локальный Redis не должен
+      # мешать поднять стенд.
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      ENVIRONMENT: docker
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      STORAGE_LOCAL_ROOT: /app/var/storage
+      STORAGE_PUBLIC_URL: http://localhost:8000/media
+    volumes:
+      # Код примонтирован — правки применяются без пересборки образа.
+      - ./backend:/app
+      - storage_data:/app/var/storage
+      # Исходные файлы организаторов (справочник работ, ссылки на датасеты).
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    # Две очереди в одном воркере на время прототипа; когда появится модель,
+    # очередь cv выносится в отдельный сервис с своим параллелизмом.
+    command: celery -A app.workers.celery_app:celery_app worker -Q default,cv -c 2 -l info
+    environment:
+      ENVIRONMENT: docker
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      STORAGE_LOCAL_ROOT: /app/var/storage
+    volumes:
+      - ./backend:/app
+      - storage_data:/app/var/storage
+      - ./data:/app/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: ./backend
+    # Файл расписания пишется вне примонтированного кода, чтобы beat не
+    # оставлял служебные файлы в репозитории.
+    command: celery -A app.workers.celery_app:celery_app beat -l info --schedule /tmp/celerybeat-schedule
+    environment:
+      ENVIRONMENT: docker
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  storage_data:
