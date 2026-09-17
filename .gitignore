@@ -18,6 +18,9 @@ celerybeat-schedule*
 node_modules/
 dist/
 dist-ssr/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 
 # Собранные артефакты не хранятся в репозитории
 *.html.build
