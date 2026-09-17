@@ -21,10 +21,21 @@ class AppError(Exception):
     status_code: int = status.HTTP_400_BAD_REQUEST
     code: str = "APP_ERROR"
 
-    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+        *,
+        code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
+        # Уточнённый код вместо общего: фронтенду важно отличать
+        # INCIDENT_NOT_FOUND от USER_NOT_FOUND — на них разная реакция,
+        # а HTTP-код у обоих один и тот же.
+        if code is not None:
+            self.code = code
 
 
 class NotFoundError(AppError):
