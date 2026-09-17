@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 
 from celery import shared_task
 
+from app.db.session import session_scope
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,3 +33,12 @@ def heartbeat() -> dict[str, str]:
 @shared_task(name="system.heartbeat")
 def heartbeat_task() -> dict[str, str]:
     return heartbeat()
+
+
+@shared_task(name="reports.generate_due")
+def generate_due_reports_task() -> dict[str, int]:
+    """Раз в минуту создаёт отчёты по наступившим расписаниям."""
+    from app.services.report_service import run_due_report_schedules
+
+    with session_scope() as db:
+        return run_due_report_schedules(db)

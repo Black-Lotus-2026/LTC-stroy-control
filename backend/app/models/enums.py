@@ -76,9 +76,9 @@ class RuleKind(StrEnum):
 class FrameSource(StrEnum):
     """Откуда пришёл кадр. Дальше по конвейеру источник не имеет значения."""
 
-    STREAM = "stream"      # выборка из видеопотока камеры
-    UPLOAD = "upload"      # ручная загрузка через интерфейс
-    DATASET = "dataset"    # пакетный импорт из папки с изображениями
+    STREAM = "stream"  # выборка из видеопотока камеры
+    UPLOAD = "upload"  # ручная загрузка через интерфейс
+    DATASET = "dataset"  # пакетный импорт из папки с изображениями
 
 
 class FrameStatus(StrEnum):
@@ -121,10 +121,10 @@ class IncidentType(StrEnum):
 
 
 class IncidentStatus(StrEnum):
-    PENDING = "pending"            # требует проверки
-    CONFIRMED = "confirmed"        # подтверждено человеком
-    IN_PROGRESS = "in_progress"    # взято в работу
-    RESOLVED = "resolved"          # устранено
+    PENDING = "pending"  # требует проверки
+    CONFIRMED = "confirmed"  # подтверждено человеком
+    IN_PROGRESS = "in_progress"  # взято в работу
+    RESOLVED = "resolved"  # устранено
     FALSE_POSITIVE = "false_positive"  # отклонено как ошибка распознавания
 
 
@@ -142,8 +142,8 @@ class RejectReason(StrEnum):
 
 
 class IncidentEventType(StrEnum):
-    DETECTED = "detected"          # создано движком правил
-    UPDATED = "updated"            # обновлено новым наблюдением
+    DETECTED = "detected"  # создано движком правил
+    UPDATED = "updated"  # обновлено новым наблюдением
     ASSIGNED = "assigned"
     STATUS_CHANGED = "status_changed"
     COMMENTED = "commented"
@@ -163,3 +163,49 @@ class UserRole(StrEnum):
     MANAGER = "manager"
     INSPECTOR = "inspector"
     VIEWER = "viewer"
+
+
+class ObservationSource(StrEnum):
+    """Источник нормализованной записи в журнале площадки."""
+
+    CCTV = "cctv"
+    CV = "cv"
+    VLC = "vlc"
+    MANUAL = "manual"
+    SYSTEM = "system"
+
+
+class ObservationCategory(StrEnum):
+    SAFETY = "safety"
+    PPE = "ppe"
+    EQUIPMENT = "equipment"
+    CAMERA = "camera"
+    PROGRESS = "progress"
+    DATA = "data"
+    SYSTEM = "system"
+
+
+class ObservationSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class ReportPeriod(StrEnum):
+    HOUR = "hour"
+    DAY = "day"
+    WEEK = "week"
+    CUSTOM = "custom"
+
+
+class ReportStatus(StrEnum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReportScheduleFrequency(StrEnum):
+    HOURLY = "hourly"
+    DAILY = "daily"
+    WEEKLY = "weekly"

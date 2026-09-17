@@ -53,4 +53,8 @@ celery_app.conf.beat_schedule = {
         "task": "system.heartbeat",
         "schedule": crontab(minute="*"),
     },
+    "generate-due-reports": {
+        "task": "reports.generate_due",
+        "schedule": crontab(minute="*"),
+    },
 }

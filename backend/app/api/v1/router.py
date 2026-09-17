@@ -6,10 +6,11 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import health
+from app.api.v1 import health, reports
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+api_router.include_router(reports.router)
 
 # По мере реализации сюда подключаются: projects, zones, cameras, schedule,
-# rules, frames, detections, incidents, progress, analytics, reports.
+# rules, frames, detections, incidents, progress, analytics.

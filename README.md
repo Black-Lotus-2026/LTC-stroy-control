@@ -53,6 +53,16 @@ PostgreSQL и Redis. Миграции применяются автоматич�
 make import-catalog
 ```
 
+Создать mock-журнал CCTV/CV/VLC и расписания для отчётного агента:
+
+```bash
+make seed-report-demo
+```
+
+После этого отчёт за час, день, неделю или произвольный интервал можно
+сформировать через `POST /api/v1/reports/generate`. Архитектура и примеры API:
+[docs/report-agent.md](docs/report-agent.md).
+
 Остановить: `make down`. Полный список команд: `make help`.
 
 ### Запуск без Docker

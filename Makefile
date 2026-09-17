@@ -1,7 +1,7 @@
 # Короткие команды для повседневной работы. Всё, что нужно знать новому
 # участнику: make up, make logs, make down.
 
-.PHONY: help up down logs ps rebuild migrate revision import-catalog shell test lint fmt
+.PHONY: help up down logs ps rebuild migrate revision import-catalog seed-report-demo shell test lint fmt
 
 help:  ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -35,6 +35,9 @@ revision:  ## Создать миграцию: make revision m="описание
 
 import-catalog:  ## Загрузить справочник видов работ из data/work_catalog.xlsx
 	docker compose exec api python -m app.cli import-catalog
+
+seed-report-demo:  ## Создать mock-логи и расписания для отчётного агента
+	docker compose exec api python -m app.cli seed-report-demo
 
 shell:  ## Python-консоль внутри контейнера api
 	docker compose exec api python
