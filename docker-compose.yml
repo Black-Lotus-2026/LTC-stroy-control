@@ -46,6 +46,12 @@ services:
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
       STORAGE_PUBLIC_URL: http://localhost:8000/media
+      REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
+      REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
+      REPORT_LLM_REASONING_EFFORT: ${REPORT_LLM_REASONING_EFFORT:-low}
+      REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
+      REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       # Код примонтирован — правки применяются без пересборки образа.
       - ./backend:/app
@@ -70,6 +76,12 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
+      REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
+      REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
+      REPORT_LLM_REASONING_EFFORT: ${REPORT_LLM_REASONING_EFFORT:-low}
+      REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
+      REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ./backend:/app
       - storage_data:/app/var/storage

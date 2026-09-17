@@ -63,6 +63,11 @@ make seed-report-demo
 сформировать через `POST /api/v1/reports/generate`. Архитектура и примеры API:
 [docs/report-agent.md](docs/report-agent.md).
 
+Отчётный агент умеет формулировать сводку через OpenAI и LangChain.
+Интеграция опциональна: без ключа отчёты строятся детерминированным
+шаблоном. Настройка и границы передачи данных описаны в
+[docs/report-agent.md](docs/report-agent.md#llm-через-langchain).
+
 Остановить: `make down`. Полный список команд: `make help`.
 
 ### Запуск без Docker

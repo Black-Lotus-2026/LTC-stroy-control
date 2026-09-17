@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, time, timedelta
 
@@ -8,9 +9,16 @@ import pytest
 from app.core.errors import ValidationError
 from app.models import ReportPeriod, ReportScheduleFrequency
 from app.services.report_agent import (
+    AgentReport,
     ConstructionReportAgent,
     TimelineContext,
     TimelineEvent,
+)
+from app.services.report_llm import (
+    LangChainOpenAIReportNarrator,
+    LLMReportNarrative,
+    LLMSectionNarrative,
+    enhance_report_narrative,
 )
 from app.services.report_service import calculate_next_run, resolve_report_window
 
@@ -75,6 +83,124 @@ def test_agent_builds_auditable_report() -> None:
     metrics = {item["key"]: item["value"] for item in result.content["metrics"]}
     assert metrics["critical"] == 1
     assert metrics["camera_issues"] == 1
+
+
+class FakeNarrator:
+    provider = "test-langchain"
+    model_name = "fake-model"
+
+    def generate(self, report: AgentReport) -> LLMReportNarrative:
+        assert report.content["metrics"]
+        return LLMReportNarrative(
+            executive_summary="LLM-сводка только по переданным фактам.",
+            section_summaries=[
+                LLMSectionNarrative(
+                    key="confirmed_events",
+                    summary="Обнаружено одно подтверждённое событие.",
+                )
+            ],
+            manager_actions=["Проверить критическое событие."],
+        )
+
+
+class FailingNarrator:
+    provider = "test-langchain"
+    model_name = "fake-model"
+
+    def generate(self, report: AgentReport) -> LLMReportNarrative:
+        raise TimeoutError("simulated timeout")
+
+
+class RecordingChain:
+    def __init__(self) -> None:
+        self.facts: dict = {}
+
+    def invoke(self, values: dict[str, str]) -> dict:
+        self.facts = json.loads(values["facts_json"])
+        return {
+            "executive_summary": "Сводка.",
+            "section_summaries": [],
+            "manager_actions": [],
+        }
+
+
+def test_llm_changes_only_narrative_fields() -> None:
+    base = ConstructionReportAgent(FakeTimelineTool([make_event()])).generate(
+        uuid.uuid4(),
+        datetime(2026, 9, 17, 8, 0, tzinfo=UTC),
+        datetime(2026, 9, 17, 10, 0, tzinfo=UTC),
+    )
+
+    result = enhance_report_narrative(base, enabled=True, narrator=FakeNarrator())
+
+    assert result.executive_summary.startswith("LLM-")
+    assert result.content["metrics"] == base.content["metrics"]
+    assert result.content["trace"]["source_log_ids"] == base.content["trace"][
+        "source_log_ids"
+    ]
+    assert result.content["trace"]["narrative"] == {
+        "provider": "test-langchain",
+        "model": "fake-model",
+        "status": "completed",
+    }
+    assert result.content["manager_actions"] == [
+        "Проверить критическое событие."
+    ]
+
+
+def test_llm_failure_keeps_template_report() -> None:
+    base = ConstructionReportAgent(FakeTimelineTool([make_event()])).generate(
+        uuid.uuid4(),
+        datetime(2026, 9, 17, 8, 0, tzinfo=UTC),
+        datetime(2026, 9, 17, 10, 0, tzinfo=UTC),
+    )
+
+    result = enhance_report_narrative(
+        base,
+        enabled=True,
+        narrator=FailingNarrator(),
+    )
+
+    assert result.executive_summary == base.executive_summary
+    assert result.content["metrics"] == base.content["metrics"]
+    assert result.content["trace"]["narrative"] == {
+        "provider": "deterministic-template",
+        "status": "fallback",
+        "model": "fake-model",
+        "fallback_reason": "TimeoutError",
+    }
+
+
+def test_missing_api_key_uses_template_fallback() -> None:
+    base = ConstructionReportAgent(FakeTimelineTool([])).generate(
+        uuid.uuid4(),
+        datetime(2026, 9, 17, 8, 0, tzinfo=UTC),
+        datetime(2026, 9, 17, 10, 0, tzinfo=UTC),
+    )
+
+    result = enhance_report_narrative(base, enabled=True, api_key="")
+
+    narrative_trace = result.content["trace"]["narrative"]
+    assert narrative_trace["status"] == "fallback"
+    assert narrative_trace["fallback_reason"] == "missing_api_key"
+
+
+def test_langchain_payload_excludes_internal_ids_and_evidence_urls() -> None:
+    event = make_event()
+    base = ConstructionReportAgent(FakeTimelineTool([event])).generate(
+        uuid.uuid4(),
+        datetime(2026, 9, 17, 8, 0, tzinfo=UTC),
+        datetime(2026, 9, 17, 10, 0, tzinfo=UTC),
+    )
+    chain = RecordingChain()
+    narrator = LangChainOpenAIReportNarrator(chain=chain, model_name="fake-model")
+
+    narrator.generate(base)
+
+    serialized = json.dumps(chain.facts)
+    assert str(event.id) not in serialized
+    assert "/media/test.jpg" not in serialized
+    assert "trace" not in chain.facts
 
 
 @pytest.mark.parametrize(

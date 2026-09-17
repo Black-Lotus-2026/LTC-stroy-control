@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # --- Часовой пояс проекта по умолчанию ---
     default_timezone: str = "Europe/Moscow"
 
+    # --- LLM-формулировки для отчётов ---
+    # Ключ не является полем Settings: ChatOpenAI читает OPENAI_API_KEY
+    # из окружения, а мы не рискуем вывести его при сериализации.
+    report_llm_enabled: bool = False
+    report_llm_model: str = "gpt-5.5"
+    report_llm_reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh"
+    ] = "low"
+    report_llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    report_llm_max_retries: int = Field(default=2, ge=0, le=5)
+
     # --- CORS: адреса, с которых ходит фронтенд ---
     cors_origins: list[str] = Field(
         default=["http://localhost:5173", "http://localhost:4173"]

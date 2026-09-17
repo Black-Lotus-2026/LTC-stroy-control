@@ -1,9 +1,8 @@
 """Single-agent генератор проверяемых отчётов по временной шкале.
 
-Агент намеренно детерминированный: сейчас нет ключа LLM и реальных CV-логов,
-поэтому он не выдумывает факты, а вызывает один инструмент выборки данных,
-агрегирует записи и формирует объяснимый структурированный результат. Позже
-шаблонный narrator можно заменить LLM, не меняя API и модель хранения.
+Агент детерминированно считает метрики и формирует trace. Опциональный
+LLM-narrator может переформулировать текст по уже извлечённым фактам, но не
+меняет сами факты, метрики и ссылки на источники.
 """
 
 from __future__ import annotations
@@ -107,7 +106,7 @@ class ConstructionReportAgent:
     """Один агент: получает интервал, вызывает timeline tool и строит сводку."""
 
     name = "construction-report-agent"
-    version = "1.0"
+    version = "1.1"
 
     _section_definitions: tuple[tuple[str, str, set[str]], ...] = (
         ("camera_state", "Состояние камер", {"camera"}),
@@ -216,6 +215,7 @@ class ConstructionReportAgent:
                 ],
                 "sections": sections,
                 "limitations": limitations,
+                "manager_actions": [],
                 "trace": {
                     "agent": self.name,
                     "version": self.version,
@@ -223,6 +223,10 @@ class ConstructionReportAgent:
                     "source_log_ids": [str(event.id) for event in events],
                     "range_start": range_start.isoformat(),
                     "range_end": range_end.isoformat(),
+                    "narrative": {
+                        "provider": "deterministic-template",
+                        "status": "template",
+                    },
                 },
             },
         )

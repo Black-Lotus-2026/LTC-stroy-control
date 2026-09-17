@@ -59,6 +59,7 @@ class ReportContent(BaseModel):
     metrics: list[ReportMetric] = Field(default_factory=list)
     sections: list[ReportSection] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    manager_actions: list[str] = Field(default_factory=list)
     trace: dict[str, Any] = Field(default_factory=dict)
 
 

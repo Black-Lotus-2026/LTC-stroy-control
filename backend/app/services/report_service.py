@@ -20,6 +20,7 @@ from app.models import (
     ReportStatus,
 )
 from app.services.report_agent import ConstructionReportAgent, DatabaseTimelineTool
+from app.services.report_llm import enhance_report_narrative
 
 MAX_REPORT_RANGE = timedelta(days=31)
 
@@ -85,6 +86,7 @@ def generate_report(
     try:
         agent = ConstructionReportAgent(DatabaseTimelineTool(db))
         result = agent.generate(project_id, start, end)
+        result = enhance_report_narrative(result)
         report.title = result.title
         report.executive_summary = result.executive_summary
         report.content = result.content
