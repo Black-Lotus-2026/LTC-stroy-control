@@ -58,6 +58,7 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
     "crane_truck": "truck_crane",
     "crane": "truck_crane",
     "autocran": "truck_crane",
+    "crane_manipulator": "truck_crane",
     "tower_crane": "tower_crane",
     "concrete_mixer": "concrete_mixer",
     "concrete_truck": "concrete_mixer",
@@ -66,6 +67,11 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
     "loader": "loader",
     "wheel_loader": "loader",
     "bucket_loader": "loader",
+    "bucket_loader_big": "loader",
+    "bucket_loader_standard": "loader",
+    "forklift": "loader",
+    "forklift_standard": "loader",
+    "forklift_giraffe": "loader",
     "roller": "roller",
     "compactor": "roller",
     "grader": "grader",
@@ -122,6 +128,10 @@ class MachineryDetector:
         custom_weights = base_dir / "construction_machinery.pt"
         if custom_weights.exists():
             return custom_weights
+
+        best_weights = base_dir / "best.pt"
+        if best_weights.exists():
+            return best_weights
 
         # Standard fallback to yolov8n.pt in storage, app or backend root
         storage_yolo = base_dir / "yolov8n.pt"
