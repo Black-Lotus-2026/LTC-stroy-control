@@ -18,6 +18,9 @@ import {
   createProjectZone,
   fetchCameras,
   createCamera,
+  updateCamera,
+  deleteCamera,
+  getCameraStreamProxyUrl,
   fetchStages,
   loadDemoSchedule,
   uploadScheduleFile,
@@ -86,32 +89,6 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
 function Status({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: string }) {
   return <span className={`status status-${tone}`}><span className="status-dot" />{children}</span>
 }
-
-// ----------------------------------------------------------------------------
-// Machinery Trajectories for Dynamic Bounding Box Animation on Video Playback
-// ----------------------------------------------------------------------------
-interface MachineryTrack {
-  id: string
-  label: string
-  baseTop: number
-  baseLeft: number
-  baseWidth: number
-  baseHeight: number
-  dx: number
-  dy: number
-  freq: number
-  phase: number
-  confidence: number
-}
-
-const MACHINERY_TRACKS: MachineryTrack[] = [
-  { id: 'excavator', label: 'Экскаватор', baseTop: 34, baseLeft: 18, baseWidth: 24, baseHeight: 28, dx: 6, dy: 3, freq: 0.8, phase: 0, confidence: 96 },
-  { id: 'truck', label: 'Самосвал', baseTop: 48, baseLeft: 52, baseWidth: 22, baseHeight: 24, dx: 14, dy: 4, freq: 0.5, phase: 1.2, confidence: 93 },
-  { id: 'bulldozer', label: 'Бульдозер', baseTop: 60, baseLeft: 26, baseWidth: 20, baseHeight: 20, dx: 8, dy: 3, freq: 0.6, phase: 2.5, confidence: 89 },
-  { id: 'loader', label: 'Погрузчик', baseTop: 22, baseLeft: 64, baseWidth: 19, baseHeight: 22, dx: 5, dy: 4, freq: 0.7, phase: 3.8, confidence: 88 },
-  { id: 'crane', label: 'Автокран', baseTop: 12, baseLeft: 38, baseWidth: 20, baseHeight: 32, dx: 4, dy: 2, freq: 0.3, phase: 0.5, confidence: 91 },
-  { id: 'mixer', label: 'Автобетоносмеситель', baseTop: 44, baseLeft: 74, baseWidth: 20, baseHeight: 22, dx: 7, dy: 3, freq: 0.4, phase: 1.8, confidence: 87 },
-]
 
 export interface LiveDetectionInfo {
   label: string
@@ -183,13 +160,60 @@ function CameraFrame({
   const [realDetections, setRealDetections] = useState<LiveDetectionInfo[]>([])
   const [isDetecting, setIsDetecting] = useState(false)
   const [liveClock, setLiveClock] = useState('')
+  const [streamLoadError, setStreamLoadError] = useState(false)
+  const [detectorNotice, setDetectorNotice] = useState<string | null>(null)
+  const [streamRetryKey, setStreamRetryKey] = useState(0)
+  const [detectionViewport, setDetectionViewport] = useState({ left: 0, top: 0, width: 0, height: 0 })
+  const frameRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const lastDetectTimeRef = useRef<number>(-999)
+  const detectionInFlightRef = useRef(false)
 
   const effectiveStreamUrl = streamUrl || (videoUrl?.toLowerCase().startsWith('rtsp://') ? videoUrl : null)
   const isRtsp = Boolean(effectiveStreamUrl && effectiveStreamUrl.toLowerCase().startsWith('rtsp://'))
+  const isHttpStream = Boolean(effectiveStreamUrl && /^https?:\/\//i.test(effectiveStreamUrl))
+  const proxiedStreamUrl = isHttpStream && effectiveStreamUrl
+    ? getCameraStreamProxyUrl(effectiveStreamUrl)
+    : null
   const isFileVideo = Boolean(videoUrl && !isRtsp && (videoUrl.startsWith('http') || videoUrl.startsWith('blob:') || videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov')))
+
+  useEffect(() => {
+    setStreamLoadError(false)
+    setRealDetections([])
+    setDetectorNotice(null)
+    lastDetectTimeRef.current = -999
+  }, [effectiveStreamUrl, videoUrl])
+
+  const updateDetectionViewport = useCallback(() => {
+    const frame = frameRef.current
+    const media = isFileVideo ? videoRef.current : imgRef.current
+    if (!frame || !media) return
+    const sourceWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth
+    const sourceHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight
+    const frameWidth = frame.clientWidth
+    const frameHeight = frame.clientHeight
+    if (!sourceWidth || !sourceHeight || !frameWidth || !frameHeight) return
+
+    const sourceAspect = sourceWidth / sourceHeight
+    const frameAspect = frameWidth / frameHeight
+    const width = sourceAspect > frameAspect ? frameWidth : frameHeight * sourceAspect
+    const height = sourceAspect > frameAspect ? frameWidth / sourceAspect : frameHeight
+    setDetectionViewport({
+      left: Math.max(0, Math.round((frameWidth - width) / 2)),
+      top: Math.max(0, Math.round((frameHeight - height) / 2)),
+      width: Math.round(width),
+      height: Math.round(height),
+    })
+  }, [isFileVideo])
+
+  useEffect(() => {
+    const frame = frameRef.current
+    if (!frame) return
+    const observer = new ResizeObserver(updateDetectionViewport)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [updateDetectionViewport])
 
   // Live real-time clock for RTSP and live camera feeds
   useEffect(() => {
@@ -204,6 +228,7 @@ function CameraFrame({
   }, [])
 
   const triggerDetection = useCallback(async () => {
+    if (detectionInFlightRef.current) return
     try {
       let canvas: HTMLCanvasElement | null = null
       if (isFileVideo && videoRef.current && videoRef.current.readyState >= 2) {
@@ -223,37 +248,43 @@ function CameraFrame({
       }
 
       if (!canvas) return
+      detectionInFlightRef.current = true
       setIsDetecting(true)
 
       canvas.toBlob(async (blob) => {
         if (!blob) {
+          detectionInFlightRef.current = false
           setIsDetecting(false)
           return
         }
         try {
           const res = await detectFrameImage(blob, activeStageName)
-          if (res.detections && res.detections.length > 0) {
-            const secStr = Math.floor(currentTime % 60).toString().padStart(2, '0')
-            const mapped: LiveDetectionInfo[] = res.detections.map((d) => ({
-              label: d.label_ru,
-              conf: Math.round(d.confidence * 100),
-              time: isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : `14:39:${secStr}`,
-              top: Math.round(d.top),
-              left: Math.round(d.left),
-              width: Math.round(d.width),
-              height: Math.round(d.height),
-            }))
-            setRealDetections(mapped)
-            onDetectionsUpdate?.(mapped)
-          }
+          setDetectorNotice(res.model_ready ? res.message ?? null : res.message || 'Модель YOLO не готова')
+          const secStr = Math.floor(currentTime % 60).toString().padStart(2, '0')
+          const mapped: LiveDetectionInfo[] = res.detections.map((d) => ({
+            label: d.label_ru,
+            conf: Math.round(d.confidence * 100),
+            time: isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : `14:39:${secStr}`,
+            top: d.top,
+            left: d.left,
+            width: d.width,
+            height: d.height,
+          }))
+          setRealDetections(mapped)
+          onDetectionsUpdate?.(mapped)
         } catch (err) {
           console.warn('Real AI detection error:', err)
+          setRealDetections([])
+          onDetectionsUpdate?.([])
+          setDetectorNotice(err instanceof Error ? err.message : 'Ошибка обращения к YOLO')
         } finally {
+          detectionInFlightRef.current = false
           setIsDetecting(false)
         }
       }, 'image/jpeg', 0.85)
     } catch (e) {
       console.warn('Canvas capture error:', e)
+      detectionInFlightRef.current = false
       setIsDetecting(false)
     }
   }, [activeStageName, currentTime, isFileVideo, onDetectionsUpdate])
@@ -265,52 +296,73 @@ function CameraFrame({
         lastDetectTimeRef.current = currentTime
         triggerDetection()
       }
+    } else if (isHttpStream) {
+      const initialTimer = setTimeout(triggerDetection, 800)
+      const interval = setInterval(triggerDetection, 2000)
+      return () => {
+        clearTimeout(initialTimer)
+        clearInterval(interval)
+      }
     } else {
-      const timer = setTimeout(() => {
-        triggerDetection()
-      }, 400)
+      const timer = setTimeout(triggerDetection, 400)
       return () => clearTimeout(timer)
     }
-  }, [currentTime, isFileVideo, triggerDetection])
+  }, [currentTime, isFileVideo, isHttpStream, triggerDetection])
 
-  // Fallback initial trajectory while first frame analysis completes
-  const fallbackDetections = useMemo(() => {
-    return MACHINERY_TRACKS.slice(0, 4).map((track) => {
-      const top = Math.round(track.baseTop + Math.sin(currentTime * track.freq + track.phase) * track.dy)
-      const left = Math.round(track.baseLeft + Math.cos(currentTime * track.freq * 0.7 + track.phase) * track.dx)
-      const conf = Math.min(99, Math.max(82, Math.round(track.confidence + Math.sin(currentTime * 1.5 + track.phase) * 3)))
-      const sec = Math.floor(currentTime % 60)
-      const timeStr = `14:39:${sec.toString().padStart(2, '0')}`
-      return {
-        label: track.label,
-        conf,
-        time: timeStr,
-        top,
-        left,
-        width: track.baseWidth,
-        height: track.baseHeight,
-      }
-    })
-  }, [currentTime])
-
-  const displayedDetections = realDetections.length > 0 ? realDetections : fallbackDetections
-
-  useEffect(() => {
-    if (realDetections.length === 0) {
-      onDetectionsUpdate?.(fallbackDetections)
-    }
-  }, [fallbackDetections, onDetectionsUpdate, realDetections.length])
+  const displayedDetections = streamLoadError ? [] : realDetections
 
   return (
-    <div className={`camera-frame ${compact ? 'compact-frame' : ''}`} style={{ position: 'relative' }}>
-      {isRtsp ? (
+    <div ref={frameRef} className={`camera-frame ${compact ? 'compact-frame' : ''}`} style={{ position: 'relative' }}>
+      {isHttpStream ? (
+        <div className="live-stream-container">
+          {streamLoadError ? (
+            <div className="stream-error">
+              <Icon name="alert" size={30} />
+              <strong>Не удалось открыть видеопоток</strong>
+              <span>Проверьте адрес, доступность камеры из сети backend и настройки VLC.</span>
+              <code>{effectiveStreamUrl}</code>
+              <button
+                type="button"
+                className="button"
+                onClick={() => {
+                  setStreamLoadError(false)
+                  setStreamRetryKey((value) => value + 1)
+                }}
+              >
+                Повторить подключение
+              </button>
+            </div>
+          ) : (
+            <img
+              key={streamRetryKey}
+              ref={imgRef}
+              crossOrigin="anonymous"
+              src={proxiedStreamUrl ?? undefined}
+              alt={`Видеопоток ${streamName}`}
+              onLoad={() => {
+                setStreamLoadError(false)
+                updateDetectionViewport()
+                triggerDetection()
+              }}
+              onError={() => setStreamLoadError(true)}
+            />
+          )}
+          <div className="stream-telemetry">
+            <strong><i /> HTTP LIVE</strong>
+            <span>{effectiveStreamUrl}</span>
+          </div>
+        </div>
+      ) : isRtsp ? (
         <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: compact ? '220px' : '440px', background: '#090b0e', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
           <img
             ref={imgRef}
             src={cameraImage}
             alt="RTSP Поток стройплощадки"
             style={{ width: '100%', height: '100%', objectFit: 'contain', opacity: 0.92, filter: 'contrast(1.05)' }}
-            onLoad={() => triggerDetection()}
+            onLoad={() => {
+              updateDetectionViewport()
+              triggerDetection()
+            }}
           />
           {/* RTSP Stream Header Telemetry Overlay */}
           <div style={{ position: 'absolute', top: 12, left: 14, zIndex: 12, display: 'flex', flexDirection: 'column', gap: '3px', background: 'rgba(10, 14, 20, 0.88)', padding: '6px 12px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.18)', backdropFilter: 'blur(6px)' }}>
@@ -344,6 +396,7 @@ function CameraFrame({
           playsInline
           onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           onSeeked={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={updateDetectionViewport}
           style={{
             width: '100%',
             height: '100%',
@@ -358,7 +411,11 @@ function CameraFrame({
           ref={imgRef}
           src={cameraImage}
           alt="Кадр с камеры: площадка, техника"
-          onLoad={() => triggerDetection()}
+          style={{ objectFit: 'contain', background: '#090b0e' }}
+          onLoad={() => {
+            updateDetectionViewport()
+            triggerDetection()
+          }}
         />
       )}
 
@@ -387,8 +444,25 @@ function CameraFrame({
         {isDetecting ? '🔄 Анализ...' : '⚡ Распознать кадр (AI)'}
       </button>
 
-      {boxes && (
-        <>
+      {detectorNotice && (
+        <div className="detector-notice" role="status">
+          YOLO: {detectorNotice}
+        </div>
+      )}
+
+      {boxes && displayedDetections.length > 0 && (
+        <div
+          className="detection-viewport"
+          style={{
+            position: 'absolute',
+            left: detectionViewport.width > 0 ? `${detectionViewport.left}px` : 0,
+            top: detectionViewport.width > 0 ? `${detectionViewport.top}px` : 0,
+            width: detectionViewport.width > 0 ? `${detectionViewport.width}px` : '100%',
+            height: detectionViewport.width > 0 ? `${detectionViewport.height}px` : '100%',
+            zIndex: 20,
+            pointerEvents: 'none',
+          }}
+        >
           {displayedDetections.map((det) => {
             const isFocused = activeClass === det.label
             return (
@@ -404,14 +478,35 @@ function CameraFrame({
                   width: `${det.width}%`,
                   height: `${det.height}%`,
                   cursor: 'pointer',
+                  pointerEvents: 'auto',
+                  border: isFocused ? '2px solid #38bdf8' : '2px solid #cf9d3d',
+                  boxShadow: isFocused ? '0 0 10px #38bdf8' : '0 0 8px rgba(207,157,61,0.6)',
+                  background: isFocused ? 'rgba(56, 189, 248, 0.15)' : 'rgba(207, 157, 61, 0.1)',
+                  zIndex: 25,
                   transition: 'top 0.25s ease-out, left 0.25s ease-out, width 0.25s ease-out, height 0.25s ease-out',
                 }}
               >
-                <span>{det.label} · {det.conf}%</span>
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: '-2px',
+                    bottom: '100%',
+                    background: isFocused ? '#38bdf8' : '#cf9d3d',
+                    color: '#0b0d10',
+                    padding: '2px 6px',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    borderRadius: '2px 2px 0 0',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  {det.label} · {det.conf}%
+                </span>
               </div>
             )
           })}
-        </>
+        </div>
       )}
 
       <div className="frame-meta">
@@ -419,7 +514,7 @@ function CameraFrame({
           {streamName} · AI Computer Vision (10 классов)
           {isDetecting ? ' [Анализ...]' : ` · Найдено: ${displayedDetections.length} ед.`}
         </span>
-        <span>{isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : isRtsp ? `RTSP LIVE · ${liveClock}` : timestamp}</span>
+        <span>{isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : isRtsp ? `RTSP LIVE · ${liveClock}` : isHttpStream ? `HTTP LIVE · ${liveClock}` : timestamp}</span>
       </div>
     </div>
   )
@@ -1403,14 +1498,18 @@ function Settings({
   activeZones,
   camerasList,
   setIsCreateZoneOpen,
-  setIsCameraModalOpen,
+  onAddCamera,
+  onEditCamera,
+  onDeleteCamera,
   toast,
 }: {
   activeProject?: ProjectItem
   activeZones: ZoneItem[]
   camerasList: CameraItem[]
   setIsCreateZoneOpen: (b: boolean) => void
-  setIsCameraModalOpen: (b: boolean) => void
+  onAddCamera: () => void
+  onEditCamera: (camera: CameraItem) => void
+  onDeleteCamera: (camera: CameraItem) => void
   toast: (s: string) => void
 }) {
   return (
@@ -1480,10 +1579,18 @@ function Settings({
                 <strong>{c.code} · {c.name}</strong>
                 <span>{c.stream_url || 'Локальный канал'}</span>
               </div>
-              <Status tone={c.status === 'online' ? 'success' : 'critical'}>{c.status}</Status>
+              <div className="setting-row-actions">
+                <Status tone={c.status === 'online' ? 'success' : 'critical'}>{c.status}</Status>
+                <button className="button" type="button" onClick={() => onEditCamera(c)}>
+                  Изменить
+                </button>
+                <button className="button danger" type="button" onClick={() => onDeleteCamera(c)}>
+                  Удалить
+                </button>
+              </div>
             </div>
           ))}
-          <button className="button" style={{ marginTop: '8px' }} onClick={() => setIsCameraModalOpen(true)}>
+          <button className="button" style={{ marginTop: '8px' }} onClick={onAddCamera}>
             + Подключить камеру
           </button>
         </div>
@@ -1523,7 +1630,33 @@ export default function App() {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false)
   const [isCreateZoneOpen, setIsCreateZoneOpen] = useState(false)
   const [isCreateCameraOpen, setIsCameraModalOpen] = useState(false)
+  const [editingCamera, setEditingCamera] = useState<CameraItem | null>(null)
   const [isUploadVideoOpen, setIsUploadModalOpen] = useState(false)
+  const [streamCheckResult, setStreamCheckResult] = useState<{ status: string; message: string } | null>(null)
+  const [isCheckingStream, setIsCheckingStream] = useState(false)
+
+  const handleCheckStream = async () => {
+    const el = document.getElementById('cam_stream_input') as HTMLInputElement
+    const url = el?.value?.trim()
+    if (!url) return
+    setIsCheckingStream(true)
+    setStreamCheckResult(null)
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/videos/check-stream?url=${encodeURIComponent(url)}`)
+      const data = await res.json()
+      setStreamCheckResult({
+        status: data.status,
+        message: data.message || (data.status === 'online' ? 'Связь с камерой установлена' : 'Камера недоступна'),
+      })
+    } catch (e) {
+      setStreamCheckResult({
+        status: 'offline',
+        message: e instanceof Error ? e.message : 'Ошибка проверки связи',
+      })
+    } finally {
+      setIsCheckingStream(false)
+    }
+  }
 
   const toast = (text: string) => {
     setToastText(text)
@@ -1614,18 +1747,34 @@ export default function App() {
     }
   }
 
-  // Handle Create Camera (Immediately activate and select the camera, with RTSP support)
-  const handleCreateCameraSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  // Handle camera creation and editing in one form.
+  const handleCameraSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!activeProjectId) return
     const form = e.currentTarget
     const name = (form.elements.namedItem('cam_name') as HTMLInputElement).value
+    const code = (form.elements.namedItem('cam_code') as HTMLInputElement).value
     const streamUrl = (form.elements.namedItem('cam_stream') as HTMLInputElement).value
     const zoneId = (form.elements.namedItem('cam_zone') as HTMLSelectElement).value
 
     try {
+      if (editingCamera) {
+        const updated = await updateCamera(activeProjectId, editingCamera.id, {
+          name,
+          code,
+          stream_url: streamUrl,
+          zone_id: zoneId || null,
+        })
+        setCamerasList((prev) => prev.map((camera) => camera.id === updated.id ? updated : camera))
+        setEditingCamera(null)
+        setIsCameraModalOpen(false)
+        toast(`Настройки камеры «${updated.name}» обновлены`)
+        return
+      }
+
       const created = await createCamera(activeProjectId, {
         name,
+        code: code || undefined,
         stream_url: streamUrl || undefined,
         zone_id: zoneId || undefined,
       })
@@ -1637,6 +1786,21 @@ export default function App() {
       toast(`Камера «${created.name}» успешно подключена и активирована`)
     } catch (err: unknown) {
       toast(err instanceof Error ? err.message : 'Ошибка добавления камеры')
+    }
+  }
+
+  const handleDeleteCamera = async (camera: CameraItem) => {
+    if (!activeProjectId || !window.confirm(`Удалить камеру «${camera.name}»?`)) return
+    try {
+      await deleteCamera(activeProjectId, camera.id)
+      const remaining = camerasList.filter((item) => item.id !== camera.id)
+      setCamerasList(remaining)
+      if (selectedCameraId === camera.id) {
+        setSelectedCameraId(remaining[0]?.id ?? null)
+      }
+      toast(`Камера «${camera.name}» удалена`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка удаления камеры')
     }
   }
 
@@ -1683,7 +1847,10 @@ export default function App() {
             setUploadedVideoUrl={setUploadedVideoUrl}
             setUploadedVideoName={setUploadedVideoName}
             setIsUploadModalOpen={setIsUploadModalOpen}
-            setIsCameraModalOpen={setIsCameraModalOpen}
+            setIsCameraModalOpen={(open) => {
+              if (open) setEditingCamera(null)
+              setIsCameraModalOpen(open)
+            }}
             toast={toast}
           />
         )
@@ -1709,7 +1876,15 @@ export default function App() {
             activeZones={activeZones}
             camerasList={camerasList}
             setIsCreateZoneOpen={setIsCreateZoneOpen}
-            setIsCameraModalOpen={setIsCameraModalOpen}
+            onAddCamera={() => {
+              setEditingCamera(null)
+              setIsCameraModalOpen(true)
+            }}
+            onEditCamera={(camera) => {
+              setEditingCamera(camera)
+              setIsCameraModalOpen(true)
+            }}
+            onDeleteCamera={handleDeleteCamera}
             toast={toast}
           />
         )
@@ -1947,20 +2122,71 @@ export default function App() {
       {/* Modal: Connect Camera */}
       {isCreateCameraOpen && (
         <div className="modal-backdrop">
-          <div className="dialog">
-            <h3>Подключить камеру</h3>
-            <p>Добавьте сетевую IP/RTSP/HLS камеру к объекту «{activeProject?.name}».</p>
-            <form onSubmit={handleCreateCameraSubmit}>
+          <div className="dialog" key={editingCamera?.id || 'new-camera'}>
+            <h3>{editingCamera ? 'Редактировать камеру' : 'Подключить камеру'}</h3>
+            <p>{editingCamera ? 'Измените название, код, поток или привязку камеры.' : `Добавьте сетевую IP/RTSP/HLS камеру к объекту «${activeProject?.name}».`}</p>
+            <form onSubmit={handleCameraSubmit}>
               <label>
                 Название камеры *
-                <input name="cam_name" placeholder="например, Камера 1 (Обзор котлована)" required />
+                <input name="cam_name" placeholder="например, Камера 1 (Обзор котлована)" defaultValue={editingCamera?.name || ''} required />
               </label>
               <label>
-                URL потока (RTSP, HLS или IP)
-                <input id="cam_stream_input" name="cam_stream" placeholder="rtsp://192.168.1.100:554/stream1" defaultValue="rtsp://192.168.1.120:554/live/ch01" />
+                Код камеры
+                <input name="cam_code" placeholder="CAM-01" defaultValue={editingCamera?.code || ''} />
               </label>
-              <div style={{ display: 'flex', gap: '6px', marginTop: '-6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '10px', color: 'var(--muted)', width: '100%' }}>Шаблоны RTSP потоков:</span>
+              <label>
+                URL потока (HTTP(S) MJPEG, RTSP, HLS или IP)
+                <input id="cam_stream_input" name="cam_stream" placeholder="https://192.168.1.106:8080/video" defaultValue={editingCamera?.stream_url || ''} />
+              </label>
+              <div style={{ display: 'flex', gap: '6px', marginTop: '-4px', marginBottom: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '11px', padding: '3px 10px' }}
+                  onClick={handleCheckStream}
+                  disabled={isCheckingStream}
+                >
+                  {isCheckingStream ? '🔄 Проверка связи...' : '⚡ Проверить связь с камерой'}
+                </button>
+                {streamCheckResult && (
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: streamCheckResult.status === 'online' ? '#34d399' : '#f87171',
+                    }}
+                  >
+                    {streamCheckResult.status === 'online' ? '● В сети: ' : '● Оффлайн: '}
+                    {streamCheckResult.message}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '10px', color: 'var(--muted)', width: '100%' }}>Быстрые шаблоны подключения:</span>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '10px', padding: '2px 8px' }}
+                  onClick={() => {
+                    const el = document.getElementById('cam_stream_input') as HTMLInputElement
+                    if (el) el.value = 'rtsp://192.168.1.106:8554/video'
+                    setStreamCheckResult(null)
+                  }}
+                >
+                  VLC RTSP (:8554/video)
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '10px', padding: '2px 8px' }}
+                  onClick={() => {
+                    const el = document.getElementById('cam_stream_input') as HTMLInputElement
+                    if (el) el.value = 'https://192.168.1.106:8080/video'
+                    setStreamCheckResult(null)
+                  }}
+                >
+                  HTTP MJPEG (:8080/video)
+                </button>
                 <button
                   type="button"
                   className="button"
@@ -1968,25 +2194,15 @@ export default function App() {
                   onClick={() => {
                     const el = document.getElementById('cam_stream_input') as HTMLInputElement
                     if (el) el.value = 'rtsp://192.168.1.120:554/live/crane_cam'
+                    setStreamCheckResult(null)
                   }}
                 >
                   RTSP: Кран (Секция 1)
                 </button>
-                <button
-                  type="button"
-                  className="button"
-                  style={{ fontSize: '10px', padding: '2px 8px' }}
-                  onClick={() => {
-                    const el = document.getElementById('cam_stream_input') as HTMLInputElement
-                    if (el) el.value = 'rtsp://192.168.1.125:554/live/gate_cam'
-                  }}
-                >
-                  RTSP: Въезд (КПП)
-                </button>
               </div>
               <label>
                 Стройплощадка / Зона
-                <select name="cam_zone">
+                <select name="cam_zone" defaultValue={editingCamera?.zone_id || ''}>
                   <option value="">Без привязки к зоне</option>
                   {activeZones.map((z) => (
                     <option key={z.id} value={z.id}>
@@ -1997,9 +2213,12 @@ export default function App() {
               </label>
               <div className="dialog-actions">
                 <button type="submit" className="button primary">
-                  Подключить камеру
+                  {editingCamera ? 'Сохранить изменения' : 'Подключить камеру'}
                 </button>
-                <button type="button" className="button" onClick={() => setIsCameraModalOpen(false)}>
+                <button type="button" className="button" onClick={() => {
+                  setEditingCamera(null)
+                  setIsCameraModalOpen(false)
+                }}>
                   Отмена
                 </button>
               </div>

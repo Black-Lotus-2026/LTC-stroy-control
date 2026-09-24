@@ -90,6 +90,7 @@ export interface VlmVerificationResult {
   compact_alert_text: string
   fallback_used: boolean
   latency_ms: number
+  status: string
 }
 
 export interface ZoneItem {
@@ -215,6 +216,41 @@ export async function createCamera(
     throw new Error(err.detail || 'Ошибка добавления камеры')
   }
   return await res.json()
+}
+
+export async function updateCamera(
+  projectId: string,
+  cameraId: string,
+  data: { name?: string; code?: string; stream_url?: string; zone_id?: string | null }
+): Promise<CameraItem> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/cameras/${cameraId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка обновления камеры' }))
+    throw new Error(err.detail || 'Ошибка обновления камеры')
+  }
+  return await res.json()
+}
+
+export async function deleteCamera(projectId: string, cameraId: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/cameras/${cameraId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка удаления камеры' }))
+    throw new Error(err.detail || 'Ошибка удаления камеры')
+  }
+}
+
+/**
+ * HTTP(S)/MJPEG cameras are loaded through the backend. This avoids browser
+ * CORS restrictions, mixed camera certificates, and untrusted self-signed TLS.
+ */
+export function getCameraStreamProxyUrl(streamUrl: string): string {
+  return `${API_PREFIX}/videos/proxy-stream?url=${encodeURIComponent(streamUrl)}`
 }
 
 // ----------------------------------------------------------------------------
@@ -418,25 +454,13 @@ export async function fetchIncidents(): Promise<IncidentAlertItem[]> {
 }
 
 export async function verifyIncidentVlm(incidentId: string): Promise<VlmVerificationResult> {
-  try {
-    const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/verify-vlm`, {
-      method: 'POST',
-    })
-    if (res.ok) return await res.json()
-  } catch {
-    // Fallback simulation
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/verify-vlm`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    throw new Error(`Сервис VLM недоступен: HTTP ${res.status}`)
   }
-
-  return {
-    incident_id: incidentId,
-    is_violation_confirmed: true,
-    is_occluded: false,
-    confidence: 0.94,
-    reasoning: 'На камере в рабочей зоне котлована спецтехника отсутствует. Видимость ясная, перекрытий объектов нет.',
-    compact_alert_text: 'На этапе выемки грунта отсутствует обязательный экскаватор. На камере техника не обнаружена.',
-    fallback_used: false,
-    latency_ms: 1250,
-  }
+  return await res.json()
 }
 
 // ----------------------------------------------------------------------------
@@ -582,6 +606,9 @@ export interface DetectionBoxItem {
 export interface FrameDetectionResponse {
   timestamp: string
   active_stage?: string | null
+  model_ready: boolean
+  detector_status: string
+  message?: string | null
   count: number
   detections: DetectionBoxItem[]
 }
@@ -590,78 +617,22 @@ export async function detectFrameImage(
   imageBlob: Blob,
   stageName?: string
 ): Promise<FrameDetectionResponse> {
-  try {
-    const formData = new FormData()
-    formData.append('file', imageBlob, 'frame.jpg')
-    if (stageName) {
-      formData.append('stage_name', stageName)
-    }
-
-    const response = await fetch(`${API_BASE_URL}/videos/detect-frame`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}`)
-    }
-
-    return await response.json()
-  } catch (err) {
-    console.warn('API detect-frame unavailable or failed, using client fallback:', err)
-    return {
-      timestamp: new Date().toISOString(),
-      active_stage: stageName,
-      count: 3,
-      detections: [
-        {
-          class_id: 4,
-          raw_label: 'tower_crane',
-          label_ru: 'Башенный кран',
-          canonical_code: 'MACHINERY_TOWER_CRANE',
-          confidence: 0.95,
-          x1: 0.35,
-          y1: 0.12,
-          x2: 0.55,
-          y2: 0.44,
-          top: 12.0,
-          left: 35.0,
-          width: 20.0,
-          height: 32.0,
-        },
-        {
-          class_id: 5,
-          raw_label: 'concrete_mixer',
-          label_ru: 'Автобетоносмеситель',
-          canonical_code: 'MACHINERY_CONCRETE_MIXER',
-          confidence: 0.91,
-          x1: 0.48,
-          y1: 0.46,
-          x2: 0.70,
-          y2: 0.70,
-          top: 46.0,
-          left: 48.0,
-          width: 22.0,
-          height: 24.0,
-        },
-        {
-          class_id: 6,
-          raw_label: 'loader',
-          label_ru: 'Погрузчик',
-          canonical_code: 'MACHINERY_LOADER',
-          confidence: 0.88,
-          x1: 0.20,
-          y1: 0.52,
-          x2: 0.38,
-          y2: 0.74,
-          top: 52.0,
-          left: 20.0,
-          width: 18.0,
-          height: 22.0,
-        },
-      ],
-    }
+  const formData = new FormData()
+  formData.append('file', imageBlob, 'frame.jpg')
+  if (stageName) {
+    formData.append('stage_name', stageName)
   }
+
+  const response = await fetch(`${API_PREFIX}/videos/detect-frame`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Сервис YOLO недоступен: HTTP ${response.status}`)
+  }
+
+  return await response.json()
 }
 
 /**
@@ -707,5 +678,3 @@ export function getCurrentStageByDate(
   // 4. Первый этап
   return stages[0]
 }
-
-

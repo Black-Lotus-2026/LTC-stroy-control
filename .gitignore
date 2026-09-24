@@ -35,3 +35,9 @@ vite.config.d.ts
 .agents
 .specify
 specs
+# Media & Large Datasets
+*.MOV
+*.mov
+*.mp4
+*.zip
+*.pt

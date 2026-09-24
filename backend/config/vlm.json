@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "provider": "gemini",
+  "model": "gemini-1.5-flash",
+  "min_request_interval_seconds": 60,
+  "request_timeout_seconds": 10
+}

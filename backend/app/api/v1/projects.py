@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
@@ -299,8 +298,6 @@ def update_camera(
         select(Camera).where(Camera.id == camera_id, Camera.project_id == project_id)
     ).first()
     if not camera:
-        camera = db.scalars(select(Camera).where(Camera.id == camera_id)).first()
-    if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     if data.name is not None:
@@ -311,7 +308,7 @@ def update_camera(
         clean_url = data.stream_url.strip()
         camera.stream_url = clean_url if clean_url else None
         camera.status = CameraStatus.ONLINE if camera.stream_url else CameraStatus.OFFLINE
-    if data.zone_id is not None:
+    if "zone_id" in data.model_fields_set:
         camera.zone_id = data.zone_id
     if data.status is not None:
         camera.status = CameraStatus.ONLINE if data.status.lower() == "online" else CameraStatus.OFFLINE
@@ -340,8 +337,6 @@ def delete_camera(
     camera = db.scalars(
         select(Camera).where(Camera.id == camera_id, Camera.project_id == project_id)
     ).first()
-    if not camera:
-        camera = db.scalars(select(Camera).where(Camera.id == camera_id)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 

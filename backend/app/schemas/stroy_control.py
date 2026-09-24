@@ -172,6 +172,7 @@ class VlmVerificationResponse(BaseModel):
     compact_alert_text: str
     fallback_used: bool = False
     latency_ms: int = 0
+    status: str = "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +264,8 @@ class DetectionBoxItem(BaseModel):
 class FrameDetectionResponse(BaseModel):
     timestamp: str
     active_stage: str | None = None
+    model_ready: bool = True
+    detector_status: str = "ready"
+    message: str | None = None
     count: int
     detections: list[DetectionBoxItem]
-

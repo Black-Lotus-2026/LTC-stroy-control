@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from functools import lru_cache
+from typing import Any
+
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.api.deps import DbSession
@@ -18,10 +21,29 @@ from app.schemas.stroy_control import (
     VideoSyncStatusResponse,
     VideoUploadResponse,
 )
-from app.services.detector import MachineryDetector
+from app.services.detector import MACHINERY_CLASSES, MachineryDetector
 from app.services.video_service import VideoService
 
 router = APIRouter(prefix="/videos", tags=["Видеоконтроль и камеры"])
+
+
+@lru_cache(maxsize=1)
+def get_machinery_detector() -> MachineryDetector:
+    """Load the detector once and reuse it for periodic live-frame inference."""
+    return MachineryDetector()
+
+
+@router.get("/detector-status")
+def detector_status() -> dict[str, Any]:
+    """Return the real YOLO runtime/weights state without running inference."""
+    detector = get_machinery_detector()
+    return {
+        "ready": detector.is_ready,
+        "status": detector.status,
+        "message": detector.status_message,
+        "weights_path": str(detector.weights_path),
+        "supported_classes": [value[0] for value in MACHINERY_CLASSES.values()],
+    }
 
 
 @router.post("/upload", response_model=VideoUploadResponse)
@@ -116,7 +138,7 @@ async def detect_video_frame(
 ) -> FrameDetectionResponse:
     """Детектировать строительную технику на кадре видео с помощью AI / Computer Vision."""
     contents = await file.read()
-    detector = MachineryDetector()
+    detector = get_machinery_detector()
     results = detector.detect_frame(contents, stage_name=stage_name)
 
     items = [
@@ -141,6 +163,9 @@ async def detect_video_frame(
     return FrameDetectionResponse(
         timestamp=datetime.now(UTC).isoformat(),
         active_stage=stage_name,
+        model_ready=detector.is_ready,
+        detector_status=detector.status,
+        message=detector.status_message,
         count=len(items),
         detections=items,
     )
@@ -158,11 +183,16 @@ async def proxy_camera_stream(
             detail="Поддерживаются только HTTP и HTTPS потоки (для RTSP используется нативное RTSP подключение)",
         )
 
-    client = httpx.AsyncClient(verify=False, timeout=httpx.Timeout(15.0, read=None))
+    client = httpx.AsyncClient(
+        verify=False,
+        timeout=httpx.Timeout(15.0, read=None),
+        trust_env=False,
+    )
 
     try:
         req = client.build_request("GET", clean_url)
         r = await client.send(req, stream=True)
+        r.raise_for_status()
 
         async def stream_generator():
             try:
@@ -184,7 +214,7 @@ async def proxy_camera_stream(
         raise HTTPException(
             status_code=502,
             detail=f"Не удалось подключиться к камере по адресу {clean_url}: {e}",
-        )
+        ) from e
 
 
 @router.get("/check-stream")
@@ -226,7 +256,9 @@ async def check_camera_stream(
     elif clean_url.startswith(("http://", "https://")):
         port = p.port or (443 if clean_url.startswith("https") else 80)
         try:
-            async with httpx.AsyncClient(verify=False, timeout=3.0) as client:
+            async with httpx.AsyncClient(
+                verify=False, timeout=3.0, trust_env=False
+            ) as client:
                 resp = await client.get(clean_url)
                 return {
                     "status": "online" if resp.status_code < 400 else "warning",

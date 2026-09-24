@@ -135,7 +135,7 @@ async def verify_incident_vlm(
     )
 
     if incident:
-        incident.is_vlm_verified = True
+        incident.is_vlm_verified = not outcome.fallback_used
         incident.vlm_summary = outcome.compact_alert_text
         record = VlmVerification(
             incident_id=incident.id,
@@ -147,7 +147,7 @@ async def verify_incident_vlm(
             reasoning=outcome.reasoning,
             compact_alert_text=outcome.compact_alert_text,
             latency_ms=outcome.latency_ms,
-            status="FALLBACK" if outcome.fallback_used else "COMPLETED",
+            status=outcome.status.upper(),
         )
         db.add(record)
         db.commit()
@@ -161,4 +161,5 @@ async def verify_incident_vlm(
         compact_alert_text=outcome.compact_alert_text,
         fallback_used=outcome.fallback_used,
         latency_ms=outcome.latency_ms,
+        status=outcome.status,
     )

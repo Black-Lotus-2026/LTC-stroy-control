@@ -46,6 +46,8 @@ services:
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
       STORAGE_PUBLIC_URL: http://localhost:8000/media
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/var/storage/weights/construction_machinery.pt}
+      VLM_CONFIG_PATH: /app/config/vlm.json
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
     volumes:
@@ -73,6 +75,8 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/var/storage/weights/construction_machinery.pt}
+      VLM_CONFIG_PATH: /app/config/vlm.json
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
     volumes:
