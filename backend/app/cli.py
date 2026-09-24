@@ -36,8 +36,12 @@ def cmd_import_catalog(args: argparse.Namespace) -> int:
     with session_scope() as db:
         stats = import_work_catalog(db, args.path, replace=args.replace)
 
-    logger.info("Создано: %s, обновлено: %s, удалено: %s",
-                stats.created, stats.updated, stats.deleted)
+    logger.info(
+        "Создано: %s, обновлено: %s, удалено: %s",
+        stats.created,
+        stats.updated,
+        stats.deleted,
+    )
     logger.info("Кодов восстановлено из дат: %s", stats.recovered_codes)
     logger.info("Строк без кода в файле: %s", stats.rows_without_code)
     logger.info("Распределение по уровням: %s", stats.by_level)

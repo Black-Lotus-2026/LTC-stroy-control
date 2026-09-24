@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -84,6 +85,15 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Ожидаемая форма: {"summary": str, "factors": [...], "limitations": [...]}
     explanation: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
 
+    # Специфичные поля контроля техники СМР и порогов
+    discrepancy_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    machinery_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    stage_probability: Mapped[float | None] = mapped_column(Float, default=None)
+    is_vlm_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    vlm_summary: Mapped[str | None] = mapped_column(String(512), default=None)
+
     status: Mapped[IncidentStatus] = mapped_column(
         enum_column(IncidentStatus), default=IncidentStatus.PENDING, index=True
     )
@@ -102,9 +112,7 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    observation_count: Mapped[int] = mapped_column(
-        Integer, default=1, server_default="1"
-    )
+    observation_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
@@ -161,9 +169,7 @@ class IncidentEvent(UUIDPrimaryKeyMixin, Base):
     incident_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("incidents.id", ondelete="CASCADE"), index=True
     )
-    event_type: Mapped[IncidentEventType] = mapped_column(
-        enum_column(IncidentEventType)
-    )
+    event_type: Mapped[IncidentEventType] = mapped_column(enum_column(IncidentEventType))
 
     old_status: Mapped[IncidentStatus | None] = mapped_column(
         enum_column(IncidentStatus), default=None
@@ -178,9 +184,7 @@ class IncidentEvent(UUIDPrimaryKeyMixin, Base):
     )
 
     comment: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     incident: Mapped[Incident] = relationship(back_populates="events")
     user: Mapped[User | None] = relationship()
@@ -212,9 +216,36 @@ class IncidentEvidence(UUIDPrimaryKeyMixin, Base):
         JSONB, default=list, server_default="[]"
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     incident: Mapped[Incident] = relationship(back_populates="evidence")
     frame: Mapped[Frame] = relationship()
+
+
+class VlmVerification(UUIDPrimaryKeyMixin, Base):
+    """Результат вторичной проверки инцидента через Google Gemini Vision."""
+
+    __tablename__ = "vlm_verifications"
+
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("incidents.id", ondelete="CASCADE"), index=True
+    )
+    frame_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("frames.id", ondelete="SET NULL"), default=None
+    )
+
+    prompt_sent: Mapped[str] = mapped_column(Text, default="")
+    is_violation_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_occluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reasoning: Mapped[str] = mapped_column(Text, default="")
+    compact_alert_text: Mapped[str] = mapped_column(String(512), default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(
+        String(32), default="COMPLETED", server_default="COMPLETED"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    incident: Mapped[Incident] = relationship()
+    frame: Mapped[Frame | None] = relationship()

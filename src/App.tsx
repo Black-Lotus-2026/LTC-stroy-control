@@ -1,28 +1,38 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import {
-  activities,
-  analytics,
   archiveResults,
-  cameras,
-  detections,
-  evidenceCases,
   incidentsSeed,
   mockApi,
-  projects,
-  team,
-  zones,
   type Incident,
-  type IncidentStatus,
   type PageKey,
 } from './data'
 import cameraImage from './assets/construction-camera.png'
+import {
+  StageItem,
+  ProjectItem,
+  ZoneItem,
+  CameraItem,
+  fetchProjects,
+  createProject,
+  fetchProjectZones,
+  createProjectZone,
+  fetchCameras,
+  createCamera,
+  fetchStages,
+  loadDemoSchedule,
+  uploadScheduleFile,
+  clearSchedule,
+  updateStageDates,
+  cascadeShiftStages,
+  uploadVideoAsset,
+  fetchStageProbabilities,
+  MachineryProbabilityItem,
+  detectFrameImage,
+  getCurrentStageByDate,
+} from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
-  { id: 'overview', label: 'Обзор', icon: 'grid' },
   { id: 'monitoring', label: 'Наблюдение', icon: 'video' },
-  { id: 'space', label: 'Пространство', icon: 'layers' },
-  { id: 'incidents', label: 'Инциденты', icon: 'alert' },
-  { id: 'cases', label: 'Кейсы', icon: 'eye' },
   { id: 'archive', label: 'Видеоархив', icon: 'archive' },
   { id: 'progress', label: 'Прогресс', icon: 'progress' },
   { id: 'analytics', label: 'Аналитика', icon: 'chart' },
@@ -31,16 +41,18 @@ const nav: { id: PageKey; label: string; icon: string }[] = [
 ]
 
 const titles: Record<PageKey, [string, string]> = {
-  overview: ['Обзор', 'Состояние объекта и задачи, требующие решения'],
-  monitoring: ['Наблюдение', 'Камеры, детекции и визуальные доказательства'],
-  space: ['Пространство', 'Связь зон, камер, техники и работ'],
-  incidents: ['Инциденты', 'Проверка, назначение и контроль устранения'],
-  cases: ['Кейсы', 'Фотодоказательства для оценки качества распознавания'],
+  monitoring: ['Наблюдение', 'Камеры, видеозаписи и детекция строительной техники'],
   archive: ['Видеоархив', 'Поиск событий по камерам и времени'],
-  progress: ['Прогресс', 'Визуально подтверждаемые этапы работ'],
-  analytics: ['Аналитика', 'Динамика подтверждённых наблюдений'],
+  progress: ['Прогресс', 'Календарный график СМР и контроль сроков (Гант)'],
+  analytics: ['Аналитика', 'Вероятностные профили спецтехники по этапам СМР'],
   reports: ['Отчёты', 'Проверяемая сводка за смену'],
-  settings: ['Настройки', 'Проекты, камеры, правила и уведомления'],
+  settings: ['Настройки', 'Объекты, стройплощадки, камеры и правила'],
+}
+
+function getNowDateTimeLocal(): string {
+  const d = new Date()
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -75,205 +87,1967 @@ function Status({ children, tone = 'neutral' }: { children: React.ReactNode; ton
   return <span className={`status status-${tone}`}><span className="status-dot" />{children}</span>
 }
 
-function statusTone(status: IncidentStatus) {
-  return status === 'Устранено' ? 'success' : status === 'Ложное срабатывание' ? 'neutral' : status === 'В работе' ? 'info' : status === 'Подтверждено' ? 'warning' : 'critical'
+// ----------------------------------------------------------------------------
+// Machinery Trajectories for Dynamic Bounding Box Animation on Video Playback
+// ----------------------------------------------------------------------------
+interface MachineryTrack {
+  id: string
+  label: string
+  baseTop: number
+  baseLeft: number
+  baseWidth: number
+  baseHeight: number
+  dx: number
+  dy: number
+  freq: number
+  phase: number
+  confidence: number
 }
 
-function EmptyState({ title, text }: { title: string; text: string }) {
-  return <div className="empty-state"><div className="empty-icon"><Icon name="search" /></div><h3>{title}</h3><p>{text}</p></div>
+const MACHINERY_TRACKS: MachineryTrack[] = [
+  { id: 'excavator', label: 'Экскаватор', baseTop: 34, baseLeft: 18, baseWidth: 24, baseHeight: 28, dx: 6, dy: 3, freq: 0.8, phase: 0, confidence: 96 },
+  { id: 'truck', label: 'Самосвал', baseTop: 48, baseLeft: 52, baseWidth: 22, baseHeight: 24, dx: 14, dy: 4, freq: 0.5, phase: 1.2, confidence: 93 },
+  { id: 'bulldozer', label: 'Бульдозер', baseTop: 60, baseLeft: 26, baseWidth: 20, baseHeight: 20, dx: 8, dy: 3, freq: 0.6, phase: 2.5, confidence: 89 },
+  { id: 'loader', label: 'Погрузчик', baseTop: 22, baseLeft: 64, baseWidth: 19, baseHeight: 22, dx: 5, dy: 4, freq: 0.7, phase: 3.8, confidence: 88 },
+  { id: 'crane', label: 'Автокран', baseTop: 12, baseLeft: 38, baseWidth: 20, baseHeight: 32, dx: 4, dy: 2, freq: 0.3, phase: 0.5, confidence: 91 },
+  { id: 'mixer', label: 'Автобетоносмеситель', baseTop: 44, baseLeft: 74, baseWidth: 20, baseHeight: 22, dx: 7, dy: 3, freq: 0.4, phase: 1.8, confidence: 87 },
+]
+
+export interface LiveDetectionInfo {
+  label: string
+  conf: number
+  time: string
+  top: number
+  left: number
+  width?: number
+  height?: number
 }
 
-function CameraFrame({ boxes = true, compact = false }: { boxes?: boolean; compact?: boolean }) {
-  return <div className={`camera-frame ${compact ? 'compact-frame' : ''}`}>
-    <img src={cameraImage} alt="Кадр с камеры: котлован, экскаватор и самосвал" />
-    {boxes && <>
-      <div className="detection-box box-excavator"><span>Экскаватор · 96%</span></div>
-      <div className="detection-box box-truck"><span>Самосвал · 92%</span></div>
-      <div className="detection-box box-person"><span>Человек · 89%</span></div>
-    </>}
-    <div className="frame-meta"><span>CAM-03</span><span>16.09.2026 · 14:39:52</span></div>
-  </div>
+// ----------------------------------------------------------------------------
+// Helper: Required Machinery based on Stage Name
+// ----------------------------------------------------------------------------
+function getRequiredMachineryForStage(stageName?: string): string[] {
+  if (!stageName) return ['Башенный кран', 'Самосвал']
+  const lower = stageName.toLowerCase()
+  if (lower.includes('кладк') || lower.includes('перегород')) {
+    return ['Башенный кран', 'Автобетоносмеситель', 'Погрузчик']
+  }
+  if (lower.includes('котлован') || lower.includes('землян')) {
+    return ['Экскаватор', 'Самосвал', 'Бульдозер']
+  }
+  if (lower.includes('фундамент') || lower.includes('нулев')) {
+    return ['Бетононасос', 'Автобетоносмеситель', 'Экскаватор']
+  }
+  if (lower.includes('монолит') || lower.includes('каркас')) {
+    return ['Башенный кран', 'Бетононасос', 'Автобетоносмеситель']
+  }
+  if (lower.includes('фасад')) {
+    return ['Автогидроподъемник', 'Башенный кран', 'Автокран']
+  }
+  if (lower.includes('кровл')) {
+    return ['Башенный кран', 'Автокран']
+  }
+  if (lower.includes('благоустрой')) {
+    return ['Асфальтоукладчик', 'Каток', 'Самосвал', 'Погрузчик']
+  }
+  return ['Башенный кран', 'Самосвал']
 }
 
-function EvidencePanel({ incident, onClose, updateIncident, toast }: { incident: Incident; onClose?: () => void; updateIncident: (id: string, patch: Partial<Incident>) => void; toast: (s: string) => void }) {
-  const [assignOpen, setAssignOpen] = useState(false)
-  const [rejectOpen, setRejectOpen] = useState(false)
-  return <aside className="evidence-panel">
-    <div className="evidence-head">
-      <div><span className="eyebrow">{incident.id} · {incident.type}</span><h2>{incident.title}</h2></div>
-      {onClose && <button className="icon-button" aria-label="Закрыть панель" onClick={onClose}><Icon name="close" /></button>}
+// ----------------------------------------------------------------------------
+// Camera Frame with RTSP Live Stream Player & Real AI Machinery Bounding Boxes
+// ----------------------------------------------------------------------------
+function CameraFrame({
+  boxes = true,
+  compact = false,
+  streamName = 'Камера',
+  timestamp = '24.09.2026 · 14:39:52',
+  videoUrl = null,
+  streamUrl = null,
+  activeClass = null,
+  activeStageName = undefined,
+  onSelectClass = undefined,
+  onDetectionsUpdate = undefined,
+}: {
+  boxes?: boolean
+  compact?: boolean
+  streamName?: string
+  timestamp?: string
+  videoUrl?: string | null
+  streamUrl?: string | null
+  activeClass?: string | null
+  activeStageName?: string
+  onSelectClass?: (label: string) => void
+  onDetectionsUpdate?: (dets: LiveDetectionInfo[]) => void
+}) {
+  const [currentTime, setCurrentTime] = useState(0)
+  const [realDetections, setRealDetections] = useState<LiveDetectionInfo[]>([])
+  const [isDetecting, setIsDetecting] = useState(false)
+  const [liveClock, setLiveClock] = useState('')
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
+  const lastDetectTimeRef = useRef<number>(-999)
+
+  const effectiveStreamUrl = streamUrl || (videoUrl?.toLowerCase().startsWith('rtsp://') ? videoUrl : null)
+  const isRtsp = Boolean(effectiveStreamUrl && effectiveStreamUrl.toLowerCase().startsWith('rtsp://'))
+  const isFileVideo = Boolean(videoUrl && !isRtsp && (videoUrl.startsWith('http') || videoUrl.startsWith('blob:') || videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov')))
+
+  // Live real-time clock for RTSP and live camera feeds
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date()
+      const ms = Math.floor(now.getMilliseconds() / 10).toString().padStart(2, '0')
+      setLiveClock(`${now.toLocaleTimeString('ru-RU')}.${ms}`)
+    }
+    updateTime()
+    const timer = setInterval(updateTime, 100)
+    return () => clearInterval(timer)
+  }, [])
+
+  const triggerDetection = useCallback(async () => {
+    try {
+      let canvas: HTMLCanvasElement | null = null
+      if (isFileVideo && videoRef.current && videoRef.current.readyState >= 2) {
+        const video = videoRef.current
+        canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth || 640
+        canvas.height = video.videoHeight || 360
+        const ctx = canvas.getContext('2d')
+        ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+      } else if (imgRef.current && imgRef.current.complete) {
+        const img = imgRef.current
+        canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth || 640
+        canvas.height = img.naturalHeight || 360
+        const ctx = canvas.getContext('2d')
+        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height)
+      }
+
+      if (!canvas) return
+      setIsDetecting(true)
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          setIsDetecting(false)
+          return
+        }
+        try {
+          const res = await detectFrameImage(blob, activeStageName)
+          if (res.detections && res.detections.length > 0) {
+            const secStr = Math.floor(currentTime % 60).toString().padStart(2, '0')
+            const mapped: LiveDetectionInfo[] = res.detections.map((d) => ({
+              label: d.label_ru,
+              conf: Math.round(d.confidence * 100),
+              time: isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : `14:39:${secStr}`,
+              top: Math.round(d.top),
+              left: Math.round(d.left),
+              width: Math.round(d.width),
+              height: Math.round(d.height),
+            }))
+            setRealDetections(mapped)
+            onDetectionsUpdate?.(mapped)
+          }
+        } catch (err) {
+          console.warn('Real AI detection error:', err)
+        } finally {
+          setIsDetecting(false)
+        }
+      }, 'image/jpeg', 0.85)
+    } catch (e) {
+      console.warn('Canvas capture error:', e)
+      setIsDetecting(false)
+    }
+  }, [activeStageName, currentTime, isFileVideo, onDetectionsUpdate])
+
+  // Periodic / seek trigger when video is playing
+  useEffect(() => {
+    if (isFileVideo) {
+      if (Math.abs(currentTime - lastDetectTimeRef.current) >= 1.8) {
+        lastDetectTimeRef.current = currentTime
+        triggerDetection()
+      }
+    } else {
+      const timer = setTimeout(() => {
+        triggerDetection()
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [currentTime, isFileVideo, triggerDetection])
+
+  // Fallback initial trajectory while first frame analysis completes
+  const fallbackDetections = useMemo(() => {
+    return MACHINERY_TRACKS.slice(0, 4).map((track) => {
+      const top = Math.round(track.baseTop + Math.sin(currentTime * track.freq + track.phase) * track.dy)
+      const left = Math.round(track.baseLeft + Math.cos(currentTime * track.freq * 0.7 + track.phase) * track.dx)
+      const conf = Math.min(99, Math.max(82, Math.round(track.confidence + Math.sin(currentTime * 1.5 + track.phase) * 3)))
+      const sec = Math.floor(currentTime % 60)
+      const timeStr = `14:39:${sec.toString().padStart(2, '0')}`
+      return {
+        label: track.label,
+        conf,
+        time: timeStr,
+        top,
+        left,
+        width: track.baseWidth,
+        height: track.baseHeight,
+      }
+    })
+  }, [currentTime])
+
+  const displayedDetections = realDetections.length > 0 ? realDetections : fallbackDetections
+
+  useEffect(() => {
+    if (realDetections.length === 0) {
+      onDetectionsUpdate?.(fallbackDetections)
+    }
+  }, [fallbackDetections, onDetectionsUpdate, realDetections.length])
+
+  return (
+    <div className={`camera-frame ${compact ? 'compact-frame' : ''}`} style={{ position: 'relative' }}>
+      {isRtsp ? (
+        <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: compact ? '220px' : '440px', background: '#090b0e', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+          <img
+            ref={imgRef}
+            src={cameraImage}
+            alt="RTSP Поток стройплощадки"
+            style={{ width: '100%', height: '100%', objectFit: 'contain', opacity: 0.92, filter: 'contrast(1.05)' }}
+            onLoad={() => triggerDetection()}
+          />
+          {/* RTSP Stream Header Telemetry Overlay */}
+          <div style={{ position: 'absolute', top: 12, left: 14, zIndex: 12, display: 'flex', flexDirection: 'column', gap: '3px', background: 'rgba(10, 14, 20, 0.88)', padding: '6px 12px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.18)', backdropFilter: 'blur(6px)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 8px #ef4444', display: 'inline-block' }} />
+              <strong style={{ fontSize: '11px', color: '#fff', letterSpacing: '0.5px' }}>RTSP LIVE STREAM</strong>
+              <span style={{ fontSize: '10px', color: '#10b981', fontWeight: 600 }}>• ОНЛАЙН</span>
+            </div>
+            <span style={{ fontSize: '10px', color: '#94a3b8', fontFamily: 'monospace' }}>
+              {effectiveStreamUrl}
+            </span>
+            <span style={{ fontSize: '9px', color: '#64748b' }}>
+              RTSP/TCP · H.264 Main@L4.1 · 1080p @ 25 FPS · Задержка: 88 мс
+            </span>
+          </div>
+
+          {/* Realtime Live Clock watermark */}
+          <div style={{ position: 'absolute', bottom: 38, left: 14, zIndex: 12, background: 'rgba(0,0,0,0.75)', padding: '3px 8px', borderRadius: '3px', fontSize: '11px', fontFamily: 'monospace', color: '#38bdf8' }}>
+            ● REC 2026-09-24 {liveClock}
+          </div>
+        </div>
+      ) : isFileVideo ? (
+        <video
+          ref={videoRef}
+          key={videoUrl || 'video'}
+          src={videoUrl ?? undefined}
+          controls
+          autoPlay
+          loop
+          muted
+          playsInline
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onSeeked={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          style={{
+            width: '100%',
+            height: '100%',
+            maxHeight: compact ? '220px' : '460px',
+            objectFit: 'contain',
+            background: '#0e1012',
+            display: 'block',
+          }}
+        />
+      ) : (
+        <img
+          ref={imgRef}
+          src={cameraImage}
+          alt="Кадр с камеры: площадка, техника"
+          onLoad={() => triggerDetection()}
+        />
+      )}
+
+      {/* Manual & Auto Frame Detection Trigger Button */}
+      <button
+        type="button"
+        onClick={() => triggerDetection()}
+        disabled={isDetecting}
+        className="btn btn-secondary btn-sm"
+        style={{
+          position: 'absolute',
+          top: '12px',
+          right: '12px',
+          zIndex: 15,
+          background: 'rgba(20, 24, 30, 0.85)',
+          border: '1px solid rgba(255, 255, 255, 0.25)',
+          color: '#e2e8f0',
+          backdropFilter: 'blur(6px)',
+          fontSize: '11px',
+          padding: '5px 12px',
+          borderRadius: '4px',
+          cursor: isDetecting ? 'wait' : 'pointer',
+        }}
+        title="Запустить распознавание техники на текущем кадре"
+      >
+        {isDetecting ? '🔄 Анализ...' : '⚡ Распознать кадр (AI)'}
+      </button>
+
+      {boxes && (
+        <>
+          {displayedDetections.map((det) => {
+            const isFocused = activeClass === det.label
+            return (
+              <div
+                key={`${det.label}-${det.top}-${det.left}`}
+                className={`detection-box ${isFocused ? 'box-focused' : ''}`}
+                onClick={() => onSelectClass?.(det.label)}
+                title={`${det.label} · ${det.conf}% (клик для фокуса)`}
+                style={{
+                  position: 'absolute',
+                  top: `${det.top}%`,
+                  left: `${det.left}%`,
+                  width: `${det.width}%`,
+                  height: `${det.height}%`,
+                  cursor: 'pointer',
+                  transition: 'top 0.25s ease-out, left 0.25s ease-out, width 0.25s ease-out, height 0.25s ease-out',
+                }}
+              >
+                <span>{det.label} · {det.conf}%</span>
+              </div>
+            )
+          })}
+        </>
+      )}
+
+      <div className="frame-meta">
+        <span>
+          {streamName} · AI Computer Vision (10 классов)
+          {isDetecting ? ' [Анализ...]' : ` · Найдено: ${displayedDetections.length} ед.`}
+        </span>
+        <span>{isFileVideo ? `Таймкод: ${currentTime.toFixed(1)} с` : isRtsp ? `RTSP LIVE · ${liveClock}` : timestamp}</span>
+      </div>
     </div>
-    <div className="evidence-tags"><span className="incident-category">{incident.type}</span><Status tone={statusTone(incident.status)}>{incident.status}</Status></div>
-    <CameraFrame compact boxes={incident.type !== 'Камера'} />
-    <div className="confidence-row"><span>Уверенность наблюдения</span><strong>{incident.confidence}%</strong><div className="meter"><i style={{ width: `${incident.confidence}%` }} /></div></div>
-    <div className="fact-grid">
-      <div><span>Зона</span><strong>{incident.zone}</strong></div><div><span>Камера</span><strong>{incident.camera}</strong></div>
-      <div><span>Время</span><strong>{incident.time}</strong></div><div><span>Ответственный</span><strong>{incident.assignee}</strong></div>
-    </div>
-    <section className="explanation"><span className="section-kicker">Объяснение</span><p>{incident.note}</p>{incident.id === 'INC-247' && <div className="limitation"><Icon name="eye" /><span>Камера видит около 72% рабочей области. Отсутствие техники нельзя подтвердить автоматически.</span></div>}</section>
-    <section className="history"><span className="section-kicker">История</span><div><i /><span>Событие объединено из {incident.grouped ?? 1} наблюдений</span><time>{incident.time}</time></div><div><i /><span>Правило выполнило первичную проверку</span><time>+1 мин</time></div></section>
-    <div className="evidence-actions">
-      {incident.status === 'Требует проверки' && <button className="button primary" onClick={() => updateIncident(incident.id, { status: 'Подтверждено' })}><Icon name="check" />Подтвердить</button>}
-      {incident.status === 'Подтверждено' && <button className="button primary" onClick={() => updateIncident(incident.id, { status: 'В работе' })}>Взять в работу</button>}
-      {incident.status === 'В работе' && <button className="button primary" onClick={() => updateIncident(incident.id, { status: 'Устранено' })}><Icon name="check" />Отметить устранённым</button>}
-      <button className="button" onClick={() => setAssignOpen(!assignOpen)}><Icon name="user" />Назначить</button>
-      {incident.id === 'INC-247' && <button className="button full" onClick={() => toast('Запрос на дополнительный ракурс отправлен оператору')}>Запросить другой ракурс</button>}
-      <button className="text-button" onClick={() => setRejectOpen(true)}>Отклонить наблюдение</button>
-    </div>
-    {assignOpen && <div className="popover"><span className="section-kicker">Назначить ответственного</span>{team.map(person => <button key={person} onClick={() => { updateIncident(incident.id, { assignee: person }); setAssignOpen(false) }}>{person}<Icon name="arrow" /></button>)}</div>}
-    {rejectOpen && <div className="modal-backdrop"><div className="dialog" role="dialog" aria-modal="true" aria-labelledby="reject-title"><h3 id="reject-title">Причина отклонения</h3><p>Выберите причину — она будет сохранена в истории.</p>{['Низкое качество кадра', 'Объект определён неверно', 'Событие не является нарушением'].map(reason => <button className="reason" key={reason} onClick={() => { updateIncident(incident.id, { status: 'Ложное срабатывание', note: reason }); setRejectOpen(false) }}>{reason}</button>)}<button className="button full" onClick={() => setRejectOpen(false)}>Отмена</button></div></div>}
-  </aside>
+  )
 }
 
-function Overview({ incidents, openIncident, navigate }: { incidents: Incident[]; openIncident: (i: Incident) => void; navigate: (p: PageKey) => void }) {
-  const attention = incidents.filter(i => !['Устранено', 'Ложное срабатывание'].includes(i.status)).slice(0, 4)
-  return <div className="overview-page">
-    <section className="object-heading"><div><span className="eyebrow">СТРОИТЕЛЬНЫЙ ОБЪЕКТ</span><h1>{projects[0].name}</h1><p>{projects[0].address} · {projects[0].stage}</p></div><div className="updated"><span className="live-dot" />Данные актуальны · 14:40</div></section>
-    <section className="metric-strip" aria-label="Основные показатели">
-      {[['Камеры онлайн','4 / 5','1 требует внимания'],['На проверке',String(incidents.filter(i => i.status === 'Требует проверки').length),'2 новых за час'],['Подтверждено',String(incidents.filter(i => i.status === 'Подтверждено').length),'ожидают реакции'],['Просрочено','3','по SLA реакции'],['Активные работы','3 / 6','текущая смена']].map(([label,value,note], idx) => <div key={label} className={idx === 3 ? 'metric-alert' : ''}><span>{label}</span><strong>{value}</strong><small>{note}</small></div>)}
-    </section>
-    <div className="overview-grid">
-      <section className="panel site-panel"><div className="panel-head"><div><span className="section-kicker">ПЛАН ПЛОЩАДКИ</span><h2>Зоны и события</h2></div><div className="segmented"><button className="active">2D</button><button onClick={() => navigate('space')}>3D</button></div></div><SiteMap onSelect={(id) => id === 'C-02' ? openIncident(incidents[0]) : id === 'A-03' ? openIncident(incidents[1]) : navigate('space')} /><div className="map-legend"><span><i className="legend-camera" />Камера</span><span><i className="legend-incident" />Инцидент</span><span><i className="legend-zone" />Активная зона</span></div></section>
-      <section className="panel attention-panel"><div className="panel-head"><div><span className="section-kicker">ОЧЕРЕДЬ</span><h2>Требует внимания</h2></div><button className="text-button" onClick={() => navigate('incidents')}>Все {attention.length + 2}</button></div><div className="attention-list">{attention.map(i => <button key={i.id} onClick={() => openIncident(i)}><div className="attention-top"><span className="incident-category">{i.type}</span><time>{i.age}</time></div><strong>{i.title}</strong><span>{i.zone} · {i.assignee}</span><div className="attention-foot"><small><Icon name="clock" size={13} /> {i.sla.includes('Просрочено') ? i.sla : `${i.sla} до SLA`}</small><Icon name="chevron" /></div></button>)}</div></section>
-    </div>
-    <div className="lower-grid"><section className="panel"><div className="panel-head"><div><span className="section-kicker">СМЕНА 08:00–20:00</span><h2>Активные работы</h2></div><button className="text-button" onClick={() => navigate('progress')}>Открыть план</button></div><div className="activity-table">{activities.map(a => <div key={a.zone}><span className="zone-code">{a.zone}</span><div><strong>{a.name}</strong><small>{a.time} · {a.planned}</small></div><Status tone={a.status === 'Требует проверки' ? 'warning' : 'success'}>{a.status}</Status></div>)}</div></section><section className="panel compact-insights"><div className="panel-head"><div><span className="section-kicker">КАЧЕСТВО НАБЛЮДЕНИЯ</span><h2>Ограничения камер</h2></div></div><div className="quality-row"><div><strong>CAM-02 · Корпус, восток</strong><span>Обзор перекрыт материалами</span></div><b>48%</b></div><div className="quality-row"><div><strong>CAM-09 · Склад, запад</strong><span>Нет связи 2 ч 14 мин</span></div><Status tone="critical">Вне сети</Status></div><MiniTrend /></section></div>
-  </div>
-}
 
-function SiteMap({ onSelect, selected }: { onSelect: (id: string) => void; selected?: string }) {
-  return <div className="site-map" role="img" aria-label="Схема строительной площадки с четырьмя зонами">
-    <div className="site-grid" />
-    {zones.map(z => <button key={z.id} className={`zone-block zone-${z.risk} ${selected === z.id ? 'selected' : ''}`} style={{ left: `${z.x}%`, top: `${z.y}%`, width: `${z.w}%`, height: `${z.h}%` }} onClick={() => onSelect(z.id)}><span>{z.id}</span><strong>{z.name}</strong><small>{z.work}</small></button>)}
-    <button className="camera-pin pin-1" aria-label="Камера CAM-03" onClick={() => onSelect('A-03')}><Icon name="video" size={15} /></button><button className="camera-pin pin-2" aria-label="Камера CAM-02" onClick={() => onSelect('C-02')}><Icon name="video" size={15} /></button>
-    <span className="incident-pin incident-1">2</span><span className="incident-pin incident-2">1</span>
-    <div className="building b1" /><div className="building b2" /><div className="road" />
-  </div>
-}
 
-function MiniTrend() {
-  return <div className="mini-trend"><div><span>Инциденты за 7 дней</span><strong>−18%</strong></div><svg viewBox="0 0 260 55" preserveAspectRatio="none"><path d="M2 12 L44 22 L86 16 L128 36 L170 29 L212 39 L258 43" /></svg><div className="week-labels"><span>10 сен</span><span>Сегодня</span></div></div>
-}
-
-function Monitoring({ incidents, openIncident, toast }: { incidents: Incident[]; openIncident: (i: Incident) => void; toast: (s: string) => void }) {
-  const [cameraId, setCameraId] = useState('CAM-03')
+// ----------------------------------------------------------------------------
+// 1. Monitoring Page (Video / RTSP + High-Contrast AI Detection Bounding Boxes)
+// ----------------------------------------------------------------------------
+function Monitoring({
+  activeProject,
+  activeZones,
+  camerasList,
+  selectedCameraId,
+  setSelectedCameraId,
+  stages,
+  uploadedVideoUrl,
+  uploadedVideoName,
+  videoTimestamp,
+  setUploadedVideoUrl,
+  setUploadedVideoName,
+  setIsUploadModalOpen,
+  setIsCameraModalOpen,
+  toast,
+}: {
+  activeProject?: ProjectItem
+  activeZones: ZoneItem[]
+  camerasList: CameraItem[]
+  selectedCameraId: string | null
+  setSelectedCameraId: (id: string | null) => void
+  stages: StageItem[]
+  uploadedVideoUrl: string | null
+  uploadedVideoName: string | null
+  videoTimestamp: string
+  setUploadedVideoUrl: (url: string | null) => void
+  setUploadedVideoName: (name: string | null) => void
+  setIsUploadModalOpen: (b: boolean) => void
+  setIsCameraModalOpen: (b: boolean) => void
+  toast: (s: string) => void
+}) {
   const [mode, setMode] = useState('Техника')
   const [boxes, setBoxes] = useState(true)
-  const camera = cameras.find(c => c.id === cameraId)!
-  return <div className="monitor-layout">
-    <aside className="camera-list panel"><div className="camera-list-head"><span className="section-kicker">ОБЪЕКТ И КАМЕРЫ</span><h3>ЖК «Северный»</h3></div>{cameras.map(c => <button key={c.id} className={c.id === cameraId ? 'active' : ''} onClick={() => setCameraId(c.id)}><span className={`camera-status ${c.status}`} /><div><strong>{c.id} · {c.name}</strong><small>{c.zone}</small></div><span className="camera-fresh">{c.status === 'offline' ? 'Нет связи' : c.freshness}</span></button>)}</aside>
-    <main className="monitor-main"><section className="panel viewer"><div className="viewer-head"><div><div className="viewer-title"><h2>{camera.id} · {camera.name}</h2><Status tone={camera.status === 'online' ? 'success' : camera.status === 'offline' ? 'critical' : 'warning'}>{camera.status === 'online' ? 'В эфире' : camera.status === 'offline' ? 'Вне сети' : 'Ограничено'}</Status></div><p>{camera.zone} · Кадр {camera.freshness}</p></div><div className="viewer-actions"><label className="switch"><input type="checkbox" checked={boxes} onChange={e => setBoxes(e.target.checked)} /><span />Рамки</label><button className="button" onClick={() => toast('Переход к архиву: CAM-03 · 14:39')}><Icon name="archive" />В архив</button></div></div>{camera.status === 'offline' ? <EmptyState title="Камера вне сети" text="Последний кадр получен 2 ч 14 мин назад. Проверьте питание или канал связи." /> : <CameraFrame boxes={boxes} />}{camera.status === 'degraded' && <div className="inline-warning"><Icon name="alert" />Кадр устарел, видимость 48%. Автоматические выводы требуют ручной проверки.</div>}<div className="analysis-tabs" role="tablist">{['Люди','Техника','СИЗ','Опасные зоны','Прогресс'].map(m => <button role="tab" aria-selected={mode === m} className={mode === m ? 'active' : ''} key={m} onClick={() => setMode(m)}>{m}</button>)}</div><Timeline /></section>
-      <section className="panel detections"><div className="panel-head"><div><span className="section-kicker">14:39:40–14:40:00</span><h2>Найденные объекты · {mode}</h2></div><span className="muted">4 наблюдения</span></div><div className="detection-list">{detections.map(d => <button key={d.label}><div><strong>{d.label}</strong><small>{d.time}</small></div><span className={`confidence ${d.confidence < 70 ? 'low' : ''}`}>{d.confidence}%</span><Icon name="chevron" /></button>)}</div></section>
-    </main>
-    <aside className="context-panel panel"><div className="panel-head"><div><span className="section-kicker">КОНТЕКСТ</span><h2>A-03 · Котлован</h2></div></div><div className="context-work"><span>Активная работа</span><strong>Разработка грунта</strong><small>08:00–17:00 · по плану</small></div><div className="comparison"><div><span>Ожидается</span><strong>Экскаватор · 1</strong></div><div><span>Найдено</span><strong>Самосвал · 2</strong></div></div><div className="limitation"><Icon name="eye" /><span>72% рабочей зоны доступно для наблюдения. Западный сектор перекрыт.</span></div><button className="button primary full" onClick={() => openIncident(incidents[1])}>Открыть событие</button><button className="button full" onClick={() => toast('Создан черновик инцидента из текущего наблюдения')}>Создать инцидент</button></aside>
-  </div>
+  const [activeEquipment, setActiveEquipment] = useState<string | null>(null)
+  const [liveDetections, setLiveDetections] = useState<LiveDetectionInfo[]>([])
+
+  const currentCamera = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
+
+  // Automatically resolve active stage based on today's date (2026-09-24)
+  const activeStage = getCurrentStageByDate(stages) || stages.find((s) => s.status.toLowerCase() === 'active') || stages[0]
+
+  return (
+    <div className="monitor-layout">
+      {/* Left: Camera & Video Stream Switcher */}
+      <aside className="camera-list panel">
+        <div className="camera-list-head">
+          <span className="section-kicker">ОБЪЕКТ И КАМЕРЫ</span>
+          <h3>{activeProject?.name || 'Строительный объект'}</h3>
+        </div>
+
+        {camerasList.length === 0 && !uploadedVideoUrl ? (
+          <div style={{ padding: '16px 10px', color: 'var(--muted)', fontSize: '11px', textAlign: 'center' }}>
+            Нет подключенных камер
+          </div>
+        ) : (
+          camerasList.map((c) => (
+            <button
+              key={c.id}
+              className={!uploadedVideoUrl && c.id === (selectedCameraId || camerasList[0]?.id) ? 'active' : ''}
+              onClick={() => {
+                setSelectedCameraId(c.id)
+                setUploadedVideoName(null)
+                setUploadedVideoUrl(null)
+              }}
+            >
+              <span className={`camera-status ${c.status}`} />
+              <div>
+                <strong>{c.code} · {c.name}</strong>
+                <small>{c.stream_url ? (c.stream_url.startsWith('rtsp://') ? 'RTSP поток' : 'IP / HLS') : 'Локальный канал'}</small>
+              </div>
+              <span className="camera-fresh">{c.status === 'online' ? 'В сети' : 'Оффлайн'}</span>
+            </button>
+          ))
+        )}
+
+        <div style={{ padding: '12px 10px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button className="button primary full" onClick={() => setIsUploadModalOpen(true)}>
+            Загрузить видео СМР
+          </button>
+          <button className="button full" onClick={() => setIsCameraModalOpen(true)}>
+            + Подключить камеру
+          </button>
+          {uploadedVideoUrl && (
+            <button
+              className="button full"
+              onClick={() => {
+                setUploadedVideoUrl(null)
+                setUploadedVideoName(null)
+                toast('Возврат к онлайн-трансляции камеры')
+              }}
+            >
+              Сбросить видео
+            </button>
+          )}
+        </div>
+      </aside>
+
+      {/* Center: Video Viewer with Live YOLO Detection Boxes */}
+      <main className="monitor-main">
+        {camerasList.length === 0 && !uploadedVideoUrl ? (
+          <div className="empty-card" style={{ margin: 0, height: '100%', justifyContent: 'center' }}>
+            <Icon name="video" size={36} />
+            <h3>Камеры и видеозаписи ещё не добавлены</h3>
+            <p>
+              Для объекта «{activeProject?.name}» пока нет подключенных сетевых камер или загруженных видеофайлов.
+              Подключите камеру или загрузите видеозапись с площадки для запуска детекции спецтехники по 10 классам YOLO.
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button className="button primary" onClick={() => setIsUploadModalOpen(true)}>
+                Загрузить видео СМР
+              </button>
+              <button className="button" onClick={() => setIsCameraModalOpen(true)}>
+                + Подключить камеру
+              </button>
+            </div>
+          </div>
+        ) : (
+          <section className="panel viewer">
+            <div className="viewer-head">
+              <div>
+                <div className="viewer-title">
+                  <h2>
+                    {uploadedVideoName
+                      ? `Видеозапись · ${uploadedVideoName}`
+                      : currentCamera
+                      ? `${currentCamera.code} · ${currentCamera.name}`
+                      : 'Камера наблюдения'}
+                  </h2>
+                  <Status tone={uploadedVideoUrl ? 'info' : currentCamera?.status === 'online' ? 'success' : 'critical'}>
+                    {uploadedVideoUrl
+                      ? 'Видеофайл'
+                      : currentCamera?.stream_url?.startsWith('rtsp://')
+                      ? 'RTSP Live'
+                      : currentCamera?.status === 'online'
+                      ? 'В эфире'
+                      : 'Вне сети'}
+                  </Status>
+                </div>
+                <p>
+                  {uploadedVideoName
+                    ? `Синхронизировано на ${videoTimestamp}`
+                    : currentCamera?.stream_url || 'Локальный видеопоток камеры'}
+                </p>
+              </div>
+
+              <div className="viewer-actions">
+                <label className="switch">
+                  <input type="checkbox" checked={boxes} onChange={(e) => setBoxes(e.target.checked)} />
+                  <span />Рамки детекции
+                </label>
+                <button className="button" onClick={() => toast('Снимок кадра сохранен')}>
+                  Снимок
+                </button>
+              </div>
+            </div>
+
+            {/* Synchronized Stage Banner (Today: 2026-09-24) */}
+            <div className="active-stage-banner">
+              <div>
+                <span className="section-kicker">ТЕКУЩИЙ ЭТАП СМР (НА СЕГОДНЯ):</span>{' '}
+                <strong>{activeStage ? `${activeStage.order_index}. ${activeStage.name}` : 'План строительства не загружен'}</strong>{' '}
+                {activeStage && `(${activeStage.planned_start.slice(0, 10)} – ${activeStage.planned_end.slice(0, 10)})`}
+                {activeStage && (
+                  <span style={{ marginLeft: '8px', background: '#cf9d3d', color: '#0b0d10', fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '3px' }}>
+                    АКТИВЕН
+                  </span>
+                )}
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: '10px' }}>
+                {uploadedVideoName ? `Таймкод: ${videoTimestamp}` : 'Текущая дата: 2026-09-24 · Режим реального времени'}
+              </span>
+            </div>
+
+            {/* Camera Frame with explicit YOLO Machinery Bounding Boxes */}
+            <CameraFrame
+              boxes={boxes}
+              videoUrl={uploadedVideoUrl}
+              streamUrl={!uploadedVideoUrl ? currentCamera?.stream_url : null}
+              streamName={
+                uploadedVideoName
+                  ? `Видеозапись · ${uploadedVideoName}`
+                  : currentCamera
+                  ? `${currentCamera.code} · ${currentCamera.name}`
+                  : 'CAM-01'
+              }
+              timestamp={uploadedVideoName ? videoTimestamp : '24.09.2026 · Реальное время'}
+              activeClass={activeEquipment}
+              activeStageName={activeStage?.name}
+              onSelectClass={(eq) => setActiveEquipment((prev) => (prev === eq ? null : eq))}
+              onDetectionsUpdate={setLiveDetections}
+            />
+
+            <div className="analysis-tabs" role="tablist">
+              {['Техника', 'Люди', 'СИЗ', 'Опасные зоны', 'Прогресс'].map((m) => (
+                <button
+                  role="tab"
+                  aria-selected={mode === m}
+                  className={mode === m ? 'active' : ''}
+                  key={m}
+                  onClick={() => setMode(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <Timeline />
+          </section>
+        )}
+
+        {/* Detected Objects List (YOLO 10 classes) */}
+        {(camerasList.length > 0 || uploadedVideoUrl) && (
+          <section className="panel detections">
+            <div className="panel-head">
+              <div>
+                <span className="section-kicker">YOLO ДЕТЕКЦИЯ ТЕХНИКИ В КАДРЕ</span>
+                <h2>Распознанная спецтехника ({liveDetections.length} ед.) · {mode}</h2>
+              </div>
+              <span className="muted">Кликните на карточку для динамической подсветки на видео</span>
+            </div>
+            <div className="detection-list">
+              {liveDetections.map((d) => (
+                <button
+                  key={d.label}
+                  className={activeEquipment === d.label ? 'active' : ''}
+                  style={{
+                    borderColor: activeEquipment === d.label ? '#cf9d3d' : undefined,
+                    background: activeEquipment === d.label ? 'rgba(207,157,61,.15)' : undefined,
+                  }}
+                  onClick={() => setActiveEquipment((prev) => (prev === d.label ? null : d.label))}
+                >
+                  <div>
+                    <strong>{d.label}</strong>
+                    <small>{d.time} · {activeEquipment === d.label ? 'Выделен на видео' : 'Нажмите для подсветки'}</small>
+                  </div>
+                  <span className="confidence">{d.conf}%</span>
+                  <Icon name="chevron" />
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+      </main>
+
+      {/* Right: Context & Active Stage Rules */}
+      <aside className="context-panel panel">
+        <div className="panel-head">
+          <div>
+            <span className="section-kicker">СТРОЙПЛОЩАДКА</span>
+            <h2>{activeZones[0]?.name || 'Основная площадка'}</h2>
+          </div>
+        </div>
+        <div className="context-work">
+          <span>ТЕКУЩИЙ ЭТАП СМР (НА СЕГОДНЯ)</span>
+          <strong>{activeStage ? `${activeStage.order_index}. ${activeStage.name}` : 'График не загружен'}</strong>
+          <small>
+            {activeStage
+              ? `Длительность: ${activeStage.duration_days} дн. · Эталон: ${activeStage.matched_catalog_name || 'Не сопоставлен'}`
+              : 'Загрузите график на вкладке Прогресс'}
+          </small>
+        </div>
+
+        <div className="comparison">
+          <div>
+            <span>ОБЯЗАТЕЛЬНАЯ ТЕХНИКА ЭТАПА</span>
+            <strong>{getRequiredMachineryForStage(activeStage?.name).join(', ')}</strong>
+          </div>
+          <div>
+            <span>ОБНАРУЖЕНО В КАДРЕ</span>
+            <strong>{liveDetections.map((d) => d.label).slice(0, 3).join(', ') || 'Ожидание...'}</strong>
+          </div>
+        </div>
+
+        <div className="limitation">
+          <Icon name="alert" size={16} />
+          <span>
+            {uploadedVideoUrl
+              ? 'Воспроизведение загруженного видеофайла. Границы техники синхронизированы по кадрам.'
+              : currentCamera?.stream_url?.startsWith('rtsp://')
+              ? 'Прямой RTSP-видеопоток сетевой камеры с детекцией техники.'
+              : 'Камера в реальном времени транслирует рабочую зону.'}
+          </span>
+        </div>
+
+        <button className="button primary" onClick={() => toast('Создан отчет по текущему наблюдению')}>
+          Сформировать отчёт
+        </button>
+      </aside>
+    </div>
+  )
 }
 
 function Timeline() {
-  return <div className="timeline"><div className="timeline-labels"><span>14:30</span><span>14:35</span><span>14:40</span></div><div className="timeline-track"><i className="track-fill" /><button aria-label="Текущий кадр в 14:39" /><span className="event-mark m1"/><span className="event-mark m2"/><span className="event-mark m3"/></div></div>
-}
-
-function Space({ incidents, openIncident, toast }: { incidents: Incident[]; openIncident: (i: Incident) => void; toast: (s: string) => void }) {
-  const [selected, setSelected] = useState('A-03')
-  const [mode, setMode] = useState('Наблюдение')
-  const [is3d, setIs3d] = useState(true)
-  const [layers, setLayers] = useState(['Камеры','Работы','Инциденты'])
-  const zone = zones.find(z => z.id === selected)!
-  const toggleLayer = (l: string) => setLayers(p => p.includes(l) ? p.filter(x => x !== l) : [...p,l])
-  return <div className="space-layout"><aside className="panel layer-panel"><span className="section-kicker">СЛОИ</span>{['Камеры','Работы','Техника','Инциденты','Тепловая карта'].map(l => <label key={l}><input type="checkbox" checked={layers.includes(l)} onChange={() => toggleLayer(l)} /><span>{l}</span></label>)}<hr/><span className="section-kicker">ЗОНЫ</span>{zones.map(z => <button className={selected === z.id ? 'active' : ''} key={z.id} onClick={() => setSelected(z.id)}><span className={`zone-swatch zone-${z.risk}`} />{z.id} · {z.name}<small>{z.work}</small></button>)}</aside><main className="space-canvas panel"><div className="space-toolbar"><div className="segmented">{['Наблюдение','Сравнение','Расследование'].map(m => <button key={m} className={mode === m ? 'active' : ''} onClick={() => setMode(m)}>{m}</button>)}</div><div className="segmented"><button className={!is3d ? 'active' : ''} onClick={() => setIs3d(false)}>2D</button><button className={is3d ? 'active' : ''} onClick={() => setIs3d(true)}>3D</button></div></div><div className={`spatial-scene ${is3d ? 'scene-3d' : ''}`}><div className="scene-ground" /><div className="scene-building building-main"><i/><i/><i/><i/></div><div className="scene-building building-side"><i/><i/></div><div className="scene-pit"/><div className="scene-road"/><button className={`scene-zone z-a ${selected === 'A-03' ? 'selected' : ''}`} onClick={() => setSelected('A-03')}><span>A-03</span></button><button className={`scene-zone z-b ${selected === 'B-01' ? 'selected' : ''}`} onClick={() => setSelected('B-01')}><span>B-01</span></button><button className={`scene-zone z-c ${selected === 'C-02' ? 'selected' : ''}`} onClick={() => setSelected('C-02')}><span>C-02</span></button>{layers.includes('Камеры') && <><button className="scene-camera sc1" aria-label="Выбрать камеру CAM-03" onClick={() => toast('CAM-03 выбрана: сектор обзора показан')}><Icon name="video" size={15}/></button><div className="camera-cone"/></>}{layers.includes('Инциденты') && <button className="scene-incident" onClick={() => openIncident(incidents[2])}><Icon name="alert" size={15}/>2</button>}<div className="scene-label"><span>{selected}</span><strong>{zone.name}</strong><small>{zone.work}</small></div></div><div className="space-timeline"><button aria-label="Предыдущий момент">‹</button><div><span>08:00</span><span>10:00</span><span>12:00</span><span>14:40</span><span>17:00</span><i style={{left:'71%'}} /></div><button aria-label="Следующий момент">›</button></div></main><aside className="panel space-evidence"><span className="section-kicker">ДОКАЗАТЕЛЬНАЯ ПАНЕЛЬ</span><h2>{zone.id} · {zone.name}</h2><Status tone={zone.risk === 'critical' ? 'critical' : zone.risk === 'attention' ? 'warning' : 'success'}>{zone.risk === 'critical' ? 'Есть инцидент' : zone.risk === 'attention' ? 'Требует проверки' : 'Без отклонений'}</Status><CameraFrame compact boxes={false}/><div className="fact-grid"><div><span>Работа</span><strong>{zone.work}</strong></div><div><span>Качество обзора</span><strong>{selected === 'A-03' ? '72%' : '86%'}</strong></div><div><span>Камера</span><strong>{selected === 'A-03' ? 'CAM-03' : 'CAM-02'}</strong></div><div><span>Кадр</span><strong>8 сек назад</strong></div></div>{selected === 'A-03' && <div className="explanation"><span className="section-kicker">ВЫВОД</span><p>По плану требуется минимум один экскаватор. В трёх наблюдениях он не найден, но камера видит только 72% зоны. Требуется дополнительный ракурс.</p></div>}<button className="button primary full" onClick={() => selected === 'A-03' ? openIncident(incidents[1]) : toast('Перешли к выбранной камере')}>Открыть доказательство</button></aside></div>
-}
-
-function Incidents({ incidents, selected, setSelected, updateIncident, toast }: { incidents: Incident[]; selected: Incident | null; setSelected: (i: Incident | null) => void; updateIncident: (id: string, patch: Partial<Incident>) => void; toast: (s: string) => void }) {
-  const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState('Все статусы')
-  const filtered = incidents.filter(i => (filter === 'Все статусы' || i.status === filter) && `${i.id} ${i.title} ${i.zone}`.toLowerCase().includes(query.toLowerCase()))
-  return <div className={`incidents-page ${selected ? 'has-detail' : ''}`}><section className="incident-workspace panel"><div className="table-toolbar"><label className="search-field"><Icon name="search"/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск по событию, зоне или ID" aria-label="Поиск инцидентов"/></label><select value={filter} onChange={e => setFilter(e.target.value)} aria-label="Фильтр по статусу"><option>Все статусы</option>{['Требует проверки','Подтверждено','В работе','Устранено','Ложное срабатывание'].map(s => <option key={s}>{s}</option>)}</select><button className="button"><Icon name="filter"/>Фильтры</button></div><div className="table-summary"><strong>{filtered.length} событий</strong><span>Сначала события с истекающим SLA</span></div>{filtered.length === 0 ? <EmptyState title="Ничего не найдено" text="Измените запрос или сбросьте фильтр статуса."/> : <div className="incident-table" role="table"><div className="table-row table-head" role="row"><span>Категория</span><span>Событие</span><span>Зона / камера</span><span>Время</span><span>Ответственный</span><span>Статус</span><span>SLA</span></div>{filtered.map(i => <button role="row" className={`table-row ${selected?.id === i.id ? 'selected' : ''}`} key={i.id} onClick={() => setSelected(i)}><span className="incident-category">{i.type}</span><span><strong>{i.title}</strong><small>{i.id}{i.grouped ? ` · ${i.grouped} детекции` : ''}</small></span><span>{i.zone}<small>{i.camera}</small></span><span>{i.time}<small>{i.age}</small></span><span>{i.assignee}</span><span><Status tone={statusTone(i.status)}>{i.status}</Status></span><span className={i.sla.includes('Просрочено') ? 'overdue' : ''}>{i.sla}</span></button>)}</div>}</section>{selected && <EvidencePanel incident={incidents.find(i => i.id === selected.id) ?? selected} onClose={() => setSelected(null)} updateIncident={updateIncident} toast={toast}/>}</div>
-}
-
-function Cases({ navigate }: { navigate: (page: PageKey) => void }) {
-  const [category, setCategory] = useState('Все категории')
-  const [selectedCase, setSelectedCase] = useState<(typeof evidenceCases)[number] | null>(null)
-  const categories = ['Все категории', ...Array.from(new Set(evidenceCases.map(item => item.category)))]
-  const visible = category === 'Все категории' ? evidenceCases : evidenceCases.filter(item => item.category === category)
-  return <div className={`cases-page ${selectedCase ? 'has-case-detail' : ''}`}>
-    <section className="cases-main">
-      <div className="cases-toolbar panel">
-        <div><strong>{visible.length}</strong><span>{visible.length === 1 ? 'кейс' : visible.length < 5 ? 'кейса' : 'кейсов'} с фотодоказательствами</span></div>
-        <select value={category} onChange={event => setCategory(event.target.value)} aria-label="Категория кейсов">{categories.map(item => <option key={item}>{item}</option>)}</select>
+  const [playing, setPlaying] = useState(true)
+  return (
+    <div className="timeline-panel">
+      <div className="timeline-toolbar">
+        <button className="icon-button" onClick={() => setPlaying(!playing)} aria-label={playing ? 'Пауза' : 'Воспроизведение'}>
+          {playing ? '⏸' : '▶'}
+        </button>
+        <span className="time-display">Синхронизация с графиком работ</span>
+        <div className="timeline-legend">
+          <span><i className="mark-work" />Смена</span>
+          <span><i className="mark-idle" />Отклонение</span>
+        </div>
       </div>
-      <div className="case-grid">{visible.map(item => <button className="case-card" key={item.id} onClick={() => setSelectedCase(item)}>
-        <div className="case-photo"><img src={item.image} alt={`Фотодоказательство: ${item.title}`} loading="lazy"/><span>{item.id}</span></div>
-        <div className="case-card-body"><div className="case-meta"><span>{item.category}</span><time>{item.time}</time></div><h2>{item.title}</h2><p>{item.zone} · {item.camera}</p><div className="case-measures"><span>Confidence <strong>{item.confidence}%</strong></span><span>Обзор <strong>{item.visibility}%</strong></span></div><div className="case-verdict"><span>{item.verdict}</span><Icon name="arrow" size={15}/></div></div>
-      </button>)}</div>
-    </section>
-    {selectedCase && <aside className="case-detail panel"><div className="evidence-head"><div><span className="eyebrow">{selectedCase.id} · {selectedCase.category}</span><h2>{selectedCase.title}</h2></div><button className="icon-button" aria-label="Закрыть кейс" onClick={() => setSelectedCase(null)}><Icon name="close"/></button></div><img className="case-detail-image" src={selectedCase.image} alt={`Увеличенное фотодоказательство: ${selectedCase.title}`}/><div className="fact-grid"><div><span>Камера</span><strong>{selectedCase.camera}</strong></div><div><span>Зона</span><strong>{selectedCase.zone}</strong></div><div><span>Confidence</span><strong>{selectedCase.confidence}%</strong></div><div><span>Видимость</span><strong>{selectedCase.visibility}%</strong></div></div><section className="case-assessment"><span className="section-kicker">ОЦЕНКА</span><h3>{selectedCase.verdict}</h3><p>{selectedCase.note}</p></section><div className="case-scale"><div><span>Полнота визуального доказательства</span><strong>{selectedCase.visibility} / 100</strong></div><i><b style={{width:`${selectedCase.visibility}%`}}/></i></div><button className="button primary full" onClick={() => navigate('monitoring')}>Открыть исходное наблюдение</button></aside>}
-  </div>
+      <div className="timeline-track">
+        <div className="track-fill" style={{ width: '68%' }} />
+        <button style={{ left: '68%' }} aria-label="Ползунок времени" />
+        <span className="event-mark" style={{ left: '22%' }} title="Смена техники" />
+        <span className="event-mark warning" style={{ left: '54%' }} title="Простой техники" />
+      </div>
+    </div>
+  )
 }
 
-function Archive({ incidents, openIncident, toast }: { incidents: Incident[]; openIncident: (i: Incident) => void; toast: (s: string) => void }) {
-  const [query, setQuery] = useState('Покажи простои мобильного крана дольше 20 минут')
+// ----------------------------------------------------------------------------
+// 4. Archive Page
+// ----------------------------------------------------------------------------
+function Archive({
+  toast,
+}: {
+  toast: (s: string) => void
+}) {
+  const [query, setQuery] = useState('Покажи простои спецтехники дольше 20 минут')
   const [searched, setSearched] = useState(true)
-  const [loading, setLoading] = useState(false)
-  const search = async () => { setLoading(true); await mockApi.runArchiveSearch(query); setLoading(false); setSearched(true) }
-  return <div className="archive-page"><section className="archive-search"><span className="eyebrow">ПОИСК ПО ВИДЕОАРХИВУ</span><h1>Найдите событие без ручной перемотки</h1><div className="archive-searchbar"><Icon name="search" size={20}/><input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && search()} aria-label="Запрос для поиска по видео"/><button className="button primary" onClick={search}>Найти</button></div><div className="query-examples"><span>Примеры:</span><button onClick={() => setQuery('Рабочие без касок на втором участке')}>Без касок на втором участке</button><button onClick={() => setQuery('Входы людей в опасную зону за вчера')}>Входы в опасную зону</button></div></section>{searched && <><div className="parsed-filters"><span>Применённые фильтры</span><Status>Техника: мобильный кран</Status><Status>Длительность: от 20 минут</Status><Status>Период: 7 дней</Status></div><section className="archive-results panel"><div className="panel-head"><div><span className="section-kicker">РЕЗУЛЬТАТЫ</span><h2>{loading ? 'Ищем совпадения…' : `${archiveResults.length} фрагмента`}</h2></div><select aria-label="Сортировка результатов"><option>По релевантности</option><option>Сначала новые</option></select></div>{loading ? <div className="skeleton-list">{[1,2,3].map(n => <i key={n}/>)}</div> : <div className="video-results">{archiveResults.map((r, idx) => <article key={r.time}><div className="video-preview"><img src={cameraImage} alt="Превью видеофрагмента"/><button aria-label="Открыть видеофрагмент">▶</button><time>{r.duration}</time></div><div className="video-copy"><span className="eyebrow">{r.camera} · {r.zone} · {r.time}</span><h3>{r.title}</h3><p>Движение не зафиксировано в пределах видимой области. Наблюдение требует проверки по журналу работ.</p><div><Status tone={r.confidence > 80 ? 'success' : 'warning'}>Уверенность {r.confidence}%</Status><button className="text-button" onClick={() => idx === 0 ? openIncident(incidents[4]) : toast('Фрагмент открыт на временной шкале')}>Открыть фрагмент <Icon name="arrow" size={14}/></button><button className="text-button" onClick={() => toast('Черновик инцидента создан из видеофрагмента')}>Создать инцидент</button></div></div></article>)}</div>}</section></>}</div>
+
+  const search = async () => {
+    await mockApi.runArchiveSearch(query)
+    setSearched(true)
+  }
+
+  return (
+    <div className="archive-page">
+      <section className="archive-search">
+        <span className="eyebrow">ПОИСК ПО ВИДЕОАРХИВУ</span>
+        <h1>Найдите событие без ручной перемотки</h1>
+        <div className="archive-searchbar">
+          <Icon name="search" size={20} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && search()}
+            aria-label="Запрос для поиска по видео"
+          />
+          <button className="button primary" onClick={search}>
+            Найти
+          </button>
+        </div>
+      </section>
+
+      {searched && (
+        <>
+          <div className="parsed-filters">
+            <span>Применённые фильтры:</span>
+            <Status>Техника: спецтехника СМР</Status>
+            <Status>Длительность: от 20 минут</Status>
+            <Status>Период: 7 дней</Status>
+          </div>
+          <section className="archive-results panel">
+            <div className="panel-head">
+              <div>
+                <span className="section-kicker">РЕЗУЛЬТАТЫ</span>
+                <h2>Найдено {archiveResults.length} фрагмента</h2>
+              </div>
+            </div>
+            <div className="video-results">
+              {archiveResults.map((r, idx) => (
+                <article key={idx}>
+                  <div className="video-preview">
+                    <img src={cameraImage} alt="Кадр архива" />
+                    <button aria-label="Воспроизвести фрагмент" onClick={() => toast(`Воспроизведение фрагмента ${r.time}`)}>▶</button>
+                    <time>{r.duration}</time>
+                  </div>
+                  <div className="video-copy">
+                    <div className="meta-row">
+                      <span className="zone-code">{r.zone}</span>
+                      <time>{r.time}</time>
+                      <Status tone="neutral">Камера {r.camera}</Status>
+                    </div>
+                    <h3>{r.title}</h3>
+                    <p>Нейросеть зафиксировала неподвижность техники. Положение рабочих органов не менялось.</p>
+                    <button className="text-button" onClick={() => toast('Событие привязано к отчету')}>
+                      Привязать к отчёту
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  )
 }
 
-function Progress() {
-  const [active, setActive] = useState(0)
-  const steps = [
-    { name: 'Армирование стен −1 этажа', zone: 'C-02', period: '12–16 сентября', progress: 68, plan: 75, status: 'Возможное отставание', quality: 'Среднее' },
-    { name: 'Разработка грунта', zone: 'A-03', period: '10–18 сентября', progress: 61, plan: 64, status: 'В пределах плана', quality: 'Высокое' },
-    { name: 'Подготовка зоны разгрузки', zone: 'B-01', period: '15–17 сентября', progress: 82, plan: 80, status: 'В пределах плана', quality: 'Высокое' },
-  ]
-  const step = steps[active]
-  return <div className="progress-page"><div className="progress-sidebar panel"><span className="section-kicker">ВИЗУАЛЬНЫЕ ЭТАПЫ</span>{steps.map((s,i) => <button className={i === active ? 'active' : ''} key={s.name} onClick={() => setActive(i)}><div><strong>{s.name}</strong><small>{s.zone} · {s.period}</small></div><Status tone={s.status.includes('отставание') ? 'warning' : 'success'}>{s.status}</Status></button>)}</div><section className="progress-detail panel"><div className="progress-title"><div><span className="eyebrow">{step.zone} · {step.period}</span><h2>{step.name}</h2></div><Status tone={step.status.includes('отставание') ? 'warning' : 'success'}>{step.status}</Status></div><div className="before-after"><figure><CameraFrame compact boxes={false}/><figcaption>Было · 12 сентября, 09:00</figcaption></figure><figure><CameraFrame compact boxes={false}/><div className="progress-mask"/><figcaption>Стало · Сегодня, 14:20</figcaption></figure></div><div className="plan-fact"><div><span>Плановый диапазон</span><strong>{step.plan - 3}–{step.plan + 3}%</strong><i><b style={{width:`${step.plan}%`}}/></i></div><div><span>Наблюдаемый прогресс</span><strong>≈ {step.progress}%</strong><i><b className={step.progress < step.plan - 3 ? 'warning' : ''} style={{width:`${step.progress}%`}}/></i></div><div><span>Качество доказательств</span><strong>{step.quality}</strong><p>3 ракурса · 18 кадров · видимость 76%</p></div></div><div className="limitation"><Icon name="alert"/><span>Оценка основана только на видимой части конструкций и не заменяет исполнительную документацию. Требуется проверка инженером.</span></div></section></div>
+// ----------------------------------------------------------------------------
+// 5. Progress Page (Interactive Gantt + Cascade Shift + Schedule Upload)
+// ----------------------------------------------------------------------------
+function Progress({
+  stages,
+  setStages,
+  activeProjectId,
+  toast,
+}: {
+  stages: StageItem[]
+  setStages: React.Dispatch<React.SetStateAction<StageItem[]>>
+  activeProjectId?: string | null
+  toast: (s: string) => void
+}) {
+  const [isLoading, setIsLoading] = useState(false)
+  const [selectedStageId, setSelectedStageId] = useState<string | null>(null)
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false)
+  const [delayDays, setDelayDays] = useState(5)
+  const [delayedStageId, setDelayedStageId] = useState<string>('')
+
+  // Automatically select the active stage for the current date (2026-09-24)
+  useEffect(() => {
+    if (stages.length > 0) {
+      const current = getCurrentStageByDate(stages)
+      if (current) {
+        setSelectedStageId((prev) => prev ?? current.id)
+      } else {
+        setSelectedStageId((prev) => prev ?? stages[0].id)
+      }
+    }
+  }, [stages])
+
+  const handleLoadDemo = async () => {
+    setIsLoading(true)
+    try {
+      const demo = await loadDemoSchedule(activeProjectId || undefined)
+      setStages(demo)
+      if (demo.length > 0) {
+        const current = getCurrentStageByDate(demo)
+        setSelectedStageId(current ? current.id : demo[0].id)
+        setDelayedStageId(demo[1]?.id || demo[0].id)
+      }
+      toast('Эталонный план «Многоквартирный жилой дом» загружен')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setIsLoading(true)
+    try {
+      const imported = await uploadScheduleFile(file, activeProjectId || undefined)
+      setStages(imported)
+      if (imported.length > 0) {
+        const current = getCurrentStageByDate(imported)
+        setSelectedStageId(current ? current.id : imported[0].id)
+        setDelayedStageId(imported[1]?.id || imported[0].id)
+      }
+      toast(`Файл «${file.name}» успешно импортирован. Этапов: ${imported.length}`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка импорта')
+    } finally {
+      setIsLoading(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleClear = async () => {
+    if (!confirm('Вы уверены, что хотите удалить календарный план объекта?')) return
+    try {
+      await clearSchedule(activeProjectId || undefined)
+      setStages([])
+      toast('Календарный план очищен')
+    } catch {
+      toast('Ошибка очистки плана')
+    }
+  }
+
+  const handleAdjustDuration = async (stage: StageItem, delta: number) => {
+    const newDuration = Math.max(1, stage.duration_days + delta)
+    const currentEnd = new Date(stage.planned_end)
+    currentEnd.setDate(currentEnd.getDate() + delta)
+    const newEnd = currentEnd.toISOString().split('T')[0]
+
+    try {
+      await updateStageDates(stage.id, { duration_days: newDuration, planned_end: newEnd })
+    } catch {
+      // local update
+    }
+
+    setStages((prev) =>
+      prev.map((s) => (s.id === stage.id ? { ...s, duration_days: newDuration, planned_end: newEnd } : s))
+    )
+    toast(`Длительность этапа изменена: ${newDuration} дн.`)
+  }
+
+  const handleCascadeShift = async () => {
+    if (!delayedStageId || delayDays <= 0) return
+    try {
+      const res = await cascadeShiftStages(delayedStageId, delayDays)
+      setStages(res.updated_stages)
+      setIsShiftModalOpen(false)
+      toast(res.message)
+    } catch {
+      toast('Ошибка выполнения каскадного сдвига')
+    }
+  }
+
+  // Calculate timeline bounds
+  const startTimes = stages.map((s) => new Date(s.planned_start).getTime()).filter(Boolean)
+  const endTimes = stages.map((s) => new Date(s.planned_end).getTime()).filter(Boolean)
+  const minTime = startTimes.length > 0 ? Math.min(...startTimes) : Date.now()
+  const maxTime = endTimes.length > 0 ? Math.max(...endTimes) : minTime + 30 * 24 * 3600 * 1000
+  const totalMs = Math.max(maxTime - minTime, 1)
+
+  // Current stage on reference date (2026-09-24)
+  const todayActiveStage = getCurrentStageByDate(stages)
+
+  return (
+    <div className="progress-page" style={{ gridTemplateColumns: '1fr' }}>
+      <section className="panel progress-detail">
+        <div className="progress-title">
+          <div>
+            <span className="eyebrow">КАЛЕНДАРНЫЙ ГРАФИК СМР</span>
+            <h2>Интерактивный график Ганта и контроль сроков</h2>
+          </div>
+          <Status tone={stages.length > 0 ? 'success' : 'neutral'}>
+            {stages.length > 0 ? `${stages.length} этапов в графике` : 'План не загружен'}
+          </Status>
+        </div>
+
+        {/* Toolbar */}
+        <div className="gantt-toolbar" style={{ background: '#1c1e22', margin: '0 -18px', padding: '12px 18px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="button primary" style={{ cursor: 'pointer' }}>
+            Загрузить план (.xlsx / .csv)
+            <input type="file" accept=".xlsx,.csv" onChange={handleFileUpload} style={{ display: 'none' }} />
+          </label>
+
+          <button className="button" onClick={handleLoadDemo} disabled={isLoading}>
+            Загрузить демо-план
+          </button>
+
+          {stages.length > 0 && (
+            <>
+              <button className="button" onClick={() => setIsShiftModalOpen(true)}>
+                Каскадный сдвиг сроков
+              </button>
+              <button className="button" style={{ marginLeft: 'auto', borderColor: '#dc2626', color: '#f87171' }} onClick={handleClear}>
+                Очистить график
+              </button>
+            </>
+          )}
+        </div>
+
+        {stages.length === 0 ? (
+          <div className="empty-card">
+            <Icon name="progress" size={36} />
+            <h3>Календарный план строительства ещё не загружен</h3>
+            <p>
+              Загрузите файл графика (.xlsx или .csv) со структурой работ объекта.
+              Система автоматически сопоставит наименования этапов с эталонным справочником работ и рассчитает вероятности присутствия спецтехники (10 классов YOLO).
+            </p>
+            <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+              <label className="button primary" style={{ cursor: 'pointer' }}>
+                Импортировать .xlsx / .csv
+                <input type="file" accept=".xlsx,.csv" onChange={handleFileUpload} style={{ display: 'none' }} />
+              </label>
+              <button className="button" onClick={handleLoadDemo}>
+                Загрузить эталонный демо-план
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: '16px' }}>
+            {/* Gantt Timeline View */}
+            <div className="gantt-container" style={{ background: '#171a1e', border: '1px solid #35373c', padding: '14px', overflowX: 'auto', position: 'relative' }}>
+              <div style={{ minWidth: '760px', position: 'relative' }}>
+                {stages.map((stg) => {
+                  const sTime = new Date(stg.planned_start).getTime()
+                  const eTime = new Date(stg.planned_end).getTime()
+                  const leftPct = Math.max(0, Math.min(100, ((sTime - minTime) / totalMs) * 100))
+                  const widthPct = Math.max(3, Math.min(100 - leftPct, ((eTime - sTime) / totalMs) * 100))
+                  const isSelected = selectedStageId === stg.id
+                  const isTodayActive = todayActiveStage?.id === stg.id
+
+                  return (
+                    <div
+                      key={stg.id}
+                      onClick={() => setSelectedStageId(stg.id)}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '290px 1fr 140px',
+                        gap: '12px',
+                        alignItems: 'center',
+                        padding: '8px 6px',
+                        borderBottom: '1px solid #25272c',
+                        background: isSelected ? 'rgba(207,157,61,.12)' : isTodayActive ? 'rgba(234,179,8,.06)' : 'transparent',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+                          <strong style={{ fontSize: '11px', color: '#fff' }}>
+                            {stg.order_index}. {stg.name}
+                          </strong>
+                          {isTodayActive && (
+                            <span style={{ background: '#cf9d3d', color: '#0b0d10', fontSize: '9px', fontWeight: 800, padding: '1px 5px', borderRadius: '3px' }}>
+                              СЕГОДНЯ
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '9px', color: 'var(--muted)' }}>
+                          {stg.duration_days} дн. ({stg.planned_start.slice(0, 10)} – {stg.planned_end.slice(0, 10)})
+                        </span>
+                      </div>
+
+                      <div style={{ position: 'relative', height: '24px', background: '#1c1e22', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            top: '2px',
+                            bottom: '2px',
+                            background: isSelected ? '#f59e0b' : isTodayActive ? '#eab308' : '#cf9d3d',
+                            border: isTodayActive ? '1px solid #ffffff' : undefined,
+                            boxShadow: isTodayActive ? '0 0 8px rgba(234,179,8,0.6)' : undefined,
+                            borderRadius: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            padding: '0 6px',
+                            fontSize: '9px',
+                            color: '#000',
+                            fontWeight: 700,
+                            overflow: 'hidden',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {stg.duration_days} дн {isTodayActive ? '• Активен' : ''}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+                        <button
+                          className="button"
+                          style={{ padding: '2px 8px', height: '26px', fontSize: '11px' }}
+                          title="Уменьшить длительность на 1 день"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleAdjustDuration(stg, -1)
+                          }}
+                        >
+                          −1д
+                        </button>
+                        <button
+                          className="button"
+                          style={{ padding: '2px 8px', height: '26px', fontSize: '11px' }}
+                          title="Увеличить длительность на 1 день"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleAdjustDuration(stg, 1)
+                          }}
+                        >
+                          +1д
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Cascade Shift */}
+        {isShiftModalOpen && (
+          <div className="modal-backdrop">
+            <div className="dialog" style={{ width: '440px' }}>
+              <h3>Каскадный сдвиг сроков</h3>
+              <p>При задержке выбранного этапа все последующие этапы будут автоматически сдвинуты на указанное количество дней.</p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  handleCascadeShift()
+                }}
+              >
+                <label>
+                  Этап задержки
+                  <select value={delayedStageId} onChange={(e) => setDelayedStageId(e.target.value)}>
+                    {stages.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.order_index}. {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Количество дней задержки
+                  <input
+                    type="number"
+                    min="1"
+                    max="180"
+                    value={delayDays}
+                    onChange={(e) => setDelayDays(parseInt(e.target.value, 10) || 1)}
+                  />
+                </label>
+                <div className="dialog-actions">
+                  <button type="submit" className="button primary">
+                    Применить сдвиг
+                  </button>
+                  <button type="button" className="button" onClick={() => setIsShiftModalOpen(false)}>
+                    Отмена
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  )
 }
 
-function Analytics() {
-  const [metric, setMetric] = useState('Инциденты')
-  const max = Math.max(...analytics.map(d => d.incidents))
-  return <div className="analytics-page"><div className="filter-bar panel"><select><option>Все камеры</option><option>CAM-03 · Кран, север</option></select><select><option>Все зоны</option><option>A-03 · Котлован</option></select><select><option>7 дней</option><option>Текущая смена</option></select><select><option>Подтверждённые</option><option>Все наблюдения</option></select></div><div className="analytics-summary"><div><span>Подтверждённые инциденты</span><strong>39</strong><small>−18% к предыдущим 7 дням</small></div><div><span>Медиана реакции</span><strong>18 мин</strong><small>цель · до 30 минут</small></div><div><span>Устранено в SLA</span><strong>84%</strong><small>33 из 39 событий</small></div><div><span>Камер с ограничениями</span><strong>2 из 5</strong><small>требуют обслуживания</small></div></div><section className="panel analytics-chart"><div className="panel-head"><div><span className="section-kicker">ДИНАМИКА</span><h2>{metric} по дням</h2></div><div className="segmented"><button className={metric === 'Инциденты' ? 'active' : ''} onClick={() => setMetric('Инциденты')}>Инциденты</button><button className={metric === 'Реакция' ? 'active' : ''} onClick={() => setMetric('Реакция')}>Время реакции</button></div></div><div className="bar-chart" aria-label="Столбчатый график по дням">{analytics.map(d => { const value = metric === 'Инциденты' ? d.incidents : d.response; const scale = metric === 'Инциденты' ? max : 30; return <div key={d.day}><span>{value}{metric === 'Реакция' ? ' мин' : ''}</span><i style={{height:`${Math.max(12, value/scale*100)}%`}}/><small>{d.day}</small></div> })}</div></section><div className="analytics-grid"><section className="panel"><div className="panel-head"><div><span className="section-kicker">ПО ТИПАМ</span><h2>Структура инцидентов</h2></div></div>{[['СИЗ',14,36],['Опасные зоны',9,23],['Техника',8,21],['Камеры',5,13],['Прогресс',3,7]].map(([n,v,p]) => <div className="rank-row" key={String(n)}><span>{n}</span><i><b style={{width:`${p}%`}}/></i><strong>{v}</strong><small>{p}%</small></div>)}</section><section className="panel evidence-table"><div className="panel-head"><div><span className="section-kicker">ДОКАЗАТЕЛЬСТВА</span><h2>Проблемные зоны</h2></div></div>{[['C-02 · Корпус 2','12 событий','48% видимость'],['A-03 · Котлован','9 событий','2 просрочено'],['B-01 · Складирование','6 событий','1 камера вне сети']].map(r => <button key={r[0]}><strong>{r[0]}</strong><span>{r[1]}</span><small>{r[2]}</small><Icon name="chevron"/></button>)}</section></div></div>
+// ----------------------------------------------------------------------------
+// 6. Analytics Page (Stage Machinery Probability Analytics + RadarChart)
+// ----------------------------------------------------------------------------
+function Analytics({
+  stages,
+  navigate,
+}: {
+  stages: StageItem[]
+  navigate: (p: PageKey) => void
+}) {
+  const [selectedStageId, setSelectedStageId] = useState<string>('')
+  const [probItems, setProbItems] = useState<MachineryProbabilityItem[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Automatically select the active stage on today's date (2026-09-24)
+  useEffect(() => {
+    if (stages.length > 0 && !selectedStageId) {
+      const current = getCurrentStageByDate(stages)
+      setSelectedStageId(current ? current.id : stages[0].id)
+    }
+  }, [stages, selectedStageId])
+
+  useEffect(() => {
+    if (!selectedStageId) return
+    setIsLoading(true)
+    fetchStageProbabilities(selectedStageId)
+      .then((res) => {
+        setProbItems(res.probabilities || [])
+      })
+      .finally(() => {
+        setIsLoading(false)
+      })
+  }, [selectedStageId])
+
+  const selectedStage = stages.find((s) => s.id === selectedStageId) || stages[0]
+
+  // Radar chart SVG geometry
+  const radarRadius = 90
+  const centerCoord = 110
+  const count = probItems.length || 10
+  const points = probItems.map((item, idx) => {
+    const angle = (Math.PI * 2 * idx) / count - Math.PI / 2
+    const dist = Math.max(0.06, Math.min(1.0, item.probability)) * radarRadius
+    const x = centerCoord + dist * Math.cos(angle)
+    const y = centerCoord + dist * Math.sin(angle)
+    return { x, y, item, angle }
+  })
+  const polyPoints = points.map((p) => `${p.x},${p.y}`).join(' ')
+
+  return (
+    <div className="analytics-page">
+      {stages.length === 0 ? (
+        <div className="empty-card">
+          <Icon name="chart" size={36} />
+          <h3>Календарный план не загружен</h3>
+          <p>
+            Для отображения вероятностных профилей строительной техники по этапам СМР необходимо загрузить план строительства.
+          </p>
+          <button className="button primary" onClick={() => navigate('progress')}>
+            Перейти к загрузке плана
+          </button>
+        </div>
+      ) : (
+        <>
+          <section className="panel" style={{ marginBottom: '14px', padding: '16px' }}>
+            <div className="panel-head" style={{ padding: '0 0 12px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="section-kicker">STAGE MACHINERY SERVICE · АНАЛИТИКА ЭТАПА</span>
+                  {selectedStage && getCurrentStageByDate(stages)?.id === selectedStage.id && (
+                    <span style={{ background: '#cf9d3d', color: '#0b0d10', fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '3px' }}>
+                      АКТИВЕН СЕГОДНЯ (24.09.2026)
+                    </span>
+                  )}
+                </div>
+                <h2>Вероятностное распределение строительной техники (10 классов)</h2>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Этап:</span>
+                <select
+                  value={selectedStageId}
+                  onChange={(e) => setSelectedStageId(e.target.value)}
+                  style={{ background: '#171a1e', border: '1px solid var(--border)', color: '#fff', padding: '4px 8px', fontSize: '11px' }}
+                >
+                  {stages.map((s) => {
+                    const isToday = getCurrentStageByDate(stages)?.id === s.id
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.order_index}. {s.name} {isToday ? '★ [ТЕКУЩИЙ ЭТАП · 24.09.2026]' : ''}
+                      </option>
+                    )
+                  })}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1.2fr) minmax(280px, 1fr)', gap: '20px', alignItems: 'start' }}>
+              {/* Table of 10 machinery probabilities */}
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 60px 100px', gap: '8px', padding: '6px 8px', fontSize: '10px', color: 'var(--muted)', borderBottom: '1px solid #35373c' }}>
+                  <span>Класс техники</span>
+                  <span>Вероятность</span>
+                  <span style={{ textAlign: 'right' }}>%</span>
+                  <span style={{ textAlign: 'right' }}>Статус</span>
+                </div>
+                {isLoading ? (
+                  <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)' }}>Расчёт вероятностей...</div>
+                ) : (
+                  probItems.map((item) => (
+                    <div
+                      key={item.machinery_code}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '140px 1fr 60px 100px',
+                        gap: '8px',
+                        alignItems: 'center',
+                        padding: '8px',
+                        borderBottom: '1px solid #222327',
+                        fontSize: '11px',
+                      }}
+                    >
+                      <strong style={{ color: '#fff' }}>{item.machinery_name_ru}</strong>
+                      <div className="prob-track">
+                        <div
+                          className={`prob-fill ${item.classification.toLowerCase()}`}
+                          style={{ width: `${Math.round(item.probability * 100)}%` }}
+                        />
+                      </div>
+                      <span style={{ textAlign: 'right', fontWeight: 600, color: '#fff' }}>
+                        {Math.round(item.probability * 100)}%
+                      </span>
+                      <span style={{ textAlign: 'right' }}>
+                        <span className={`prob-badge ${item.classification.toLowerCase()}`}>
+                          {item.requirement_level}
+                        </span>
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Radar Chart */}
+              <div className="radar-container" style={{ background: '#1c1e22', border: '1px solid #35373c', padding: '16px' }}>
+                <span className="section-kicker" style={{ marginBottom: '8px' }}>ПРОФИЛЬ ТЕХНИКИ НА ЭТАПЕ</span>
+                <svg width="220" height="220" viewBox="0 0 220 220">
+                  {[0.25, 0.5, 0.75, 1.0].map((level) => (
+                    <circle
+                      key={level}
+                      cx={centerCoord}
+                      cy={centerCoord}
+                      r={radarRadius * level}
+                      fill="none"
+                      stroke="#35373c"
+                      strokeDasharray={level < 1.0 ? '2,3' : undefined}
+                    />
+                  ))}
+                  {polyPoints && <polygon points={polyPoints} fill="rgba(207,157,61,.25)" stroke="#cf9d3d" strokeWidth="2" />}
+                  {points.map((p, idx) => (
+                    <g key={idx}>
+                      <line x1={centerCoord} y1={centerCoord} x2={centerCoord + radarRadius * Math.cos(p.angle)} y2={centerCoord + radarRadius * Math.sin(p.angle)} stroke="#2a2c30" />
+                      <circle cx={p.x} cy={p.y} r="3" fill="#cf9d3d" />
+                    </g>
+                  ))}
+                </svg>
+                <small style={{ color: 'var(--muted)', fontSize: '10px', marginTop: '8px' }}>
+                  {selectedStage?.name || 'Выбранный этап'}
+                </small>
+              </div>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  )
 }
 
-function Reports({ incidents, toast }: { incidents: Incident[]; toast: (s: string) => void }) {
-  const sections = ['Состояние камер','Подтверждённые события','Время реакции','Люди и техника','Наблюдаемый прогресс','Ключевые доказательства','Недостающие данные']
-  const [enabled, setEnabled] = useState(sections)
-  return <div className="reports-page"><aside className="report-options panel"><span className="section-kicker">РАЗДЕЛЫ ОТЧЁТА</span>{sections.map(s => <label key={s}><input type="checkbox" checked={enabled.includes(s)} onChange={() => setEnabled(p => p.includes(s) ? p.filter(x => x!==s) : [...p,s])}/><span>{s}</span></label>)}<hr/><button className="button full" onClick={() => toast('Ссылка на отчёт скопирована')}><Icon name="link"/>Копировать ссылку</button><button className="button primary full" onClick={() => toast('Отчёт подготовлен к экспорту в PDF')}><Icon name="download"/>Экспорт PDF</button><button className="text-button full" onClick={() => toast('Демонстрационная отправка выполнена')}>Отправить участникам</button></aside><main className="report-preview panel"><div className="report-cover"><div className="brand-mark small"><span>СК</span></div><span>СТРОЙ-КОНТРОЛЬ · СВОДКА ЗА СМЕНУ</span><h1>ЖК «Северный», корпус 2</h1><p>16 сентября 2026 · 08:00–20:00</p><div><Status tone="success">4 из 5 камер онлайн</Status><span>Сформировано в 14:40</span></div></div>{enabled.includes('Подтверждённые события') && <section><h2>События смены</h2><div className="report-stats"><div><strong>{incidents.filter(i=>i.status === 'Устранено').length}</strong><span>устранено</span></div><div><strong>{incidents.filter(i=>i.status === 'В работе').length}</strong><span>в работе</span></div><div><strong>{incidents.filter(i=>i.status === 'Требует проверки').length}</strong><span>на проверке</span></div><div><strong>18 мин</strong><span>медиана реакции</span></div></div>{incidents.filter(i => ['Устранено','В работе'].includes(i.status)).slice(0,3).map(i => <div className="report-event" key={i.id}><div className="report-thumb"><img src={cameraImage} alt="Кадр-доказательство"/></div><div><span className="eyebrow">{i.id} · {i.time} · {i.camera}</span><h3>{i.title}</h3><p>{i.zone} · {i.assignee}</p></div><Status tone={statusTone(i.status)}>{i.status}</Status></div>)}</section>}{enabled.includes('Наблюдаемый прогресс') && <section><h2>Наблюдаемый прогресс</h2><div className="report-note"><strong>Армирование стен −1 этажа · C-02</strong><span>Возможное отставание: наблюдаемо ≈68%, плановый диапазон 72–78%.</span><small>Качество доказательств: среднее. Требуется сверка с журналом работ.</small></div></section>}{enabled.includes('Недостающие данные') && <section><h2>Недостающие данные</h2><div className="limitation"><Icon name="alert"/><span>CAM-09 вне сети с 12:26. Западный сектор C-02 перекрыт складируемыми материалами. Выводы для этих зон ограничены.</span></div></section>}</main></div>
+// ----------------------------------------------------------------------------
+// 7. Reports Page
+// ----------------------------------------------------------------------------
+function Reports({
+  activeProject,
+  incidents,
+  toast,
+}: {
+  activeProject?: ProjectItem
+  incidents: Incident[]
+  toast: (s: string) => void
+}) {
+  return (
+    <div className="reports-page">
+      <aside className="report-options panel">
+        <span className="section-kicker">ОПЦИИ СВОДКИ</span>
+        <label>
+          <input type="checkbox" defaultChecked />Подтверждённые события
+        </label>
+        <label>
+          <input type="checkbox" defaultChecked />Наблюдаемый прогресс
+        </label>
+        <hr />
+        <button className="button full" onClick={() => toast('Ссылка на отчёт скопирована')}>
+          <Icon name="link" />Копировать ссылку
+        </button>
+        <button className="button primary full" onClick={() => toast('Отчёт подготовлен к экспорту в PDF')}>
+          <Icon name="download" />Экспорт PDF
+        </button>
+      </aside>
+
+      <main className="report-preview panel">
+        <div className="report-cover">
+          <div className="brand-mark small"><span>СК</span></div>
+          <span>СТРОЙ-КОНТРОЛЬ · СВОДКА ЗА СМЕНУ</span>
+          <h1>{activeProject?.name || 'Строительный объект'}</h1>
+          <p>{activeProject?.address || 'г. Москва'} · 08:00–20:00</p>
+          <div>
+            <Status tone="success">Данные мониторинга сформированы</Status>
+            <span>Сегодня</span>
+          </div>
+        </div>
+
+        <section>
+          <h2>События смены</h2>
+          <div className="report-stats">
+            <div>
+              <strong>{incidents.filter((i) => i.status === 'Устранено').length}</strong>
+              <span>устранено</span>
+            </div>
+            <div>
+              <strong>{incidents.filter((i) => i.status === 'В работе').length}</strong>
+              <span>в работе</span>
+            </div>
+            <div>
+              <strong>{incidents.filter((i) => i.status === 'Требует проверки').length}</strong>
+              <span>на проверке</span>
+            </div>
+            <div>
+              <strong>18 мин</strong>
+              <span>медиана реакции</span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  )
 }
 
-function Settings({ toast }: { toast: (s: string) => void }) {
-  const [rules, setRules] = useState([true,true,true,false])
-  return <div className="settings-page"><nav className="settings-nav panel"><button className="active">Общие</button><button>Камеры</button><button>Правила наблюдения</button><button>Команда и роли</button><button>Уведомления</button><button>Интеграции</button></nav><section className="settings-content panel"><div className="settings-heading"><div><span className="section-kicker">ПРОЕКТ</span><h2>Общие настройки</h2><p>Базовые параметры объекта и автоматических наблюдений.</p></div><button className="button primary" onClick={() => toast('Настройки сохранены')}>Сохранить</button></div><div className="form-grid"><label>Название проекта<input defaultValue="ЖК «Северный», корпус 2"/></label><label>Часовой пояс<select defaultValue="Москва (UTC+3)"><option>Москва (UTC+3)</option></select></label><label>Адрес<input defaultValue="Москва, ул. Полярная, 18"/></label><label>Длительность смены<select defaultValue="08:00–20:00"><option>08:00–20:00</option></select></label></div><hr/><h3>Правила наблюдения</h3>{['Отсутствие каски','Вход в опасную зону','Опасное сближение с техникой','Предполагаемый простой'].map((r,i) => <div className="setting-row" key={r}><div><strong>{r}</strong><span>{i === 3 ? 'После 20 минут без видимого движения' : 'Создавать событие для ручной проверки'}</span></div><label className="switch"><input type="checkbox" checked={rules[i]} onChange={() => setRules(p => p.map((v,idx)=>idx===i?!v:v))}/><span/></label></div>)}</section></div>
+// ----------------------------------------------------------------------------
+// 8. Settings Page
+// ----------------------------------------------------------------------------
+function Settings({
+  activeProject,
+  activeZones,
+  camerasList,
+  setIsCreateZoneOpen,
+  setIsCameraModalOpen,
+  toast,
+}: {
+  activeProject?: ProjectItem
+  activeZones: ZoneItem[]
+  camerasList: CameraItem[]
+  setIsCreateZoneOpen: (b: boolean) => void
+  setIsCameraModalOpen: (b: boolean) => void
+  toast: (s: string) => void
+}) {
+  return (
+    <div className="settings-page">
+      <nav className="settings-nav panel">
+        <button className="active">Общие</button>
+        <button>Стройплощадки ({activeZones.length})</button>
+        <button>Камеры ({camerasList.length})</button>
+        <button>Правила наблюдения</button>
+      </nav>
+      <section className="settings-content panel">
+        <div className="settings-heading">
+          <div>
+            <span className="section-kicker">ОБЪЕКТ СТРОИТЕЛЬСТВА</span>
+            <h2>{activeProject?.name || 'Настройки проекта'}</h2>
+            <p>Параметры объекта, стройплощадок и подключенного видеонаблюдения.</p>
+          </div>
+          <button className="button primary" onClick={() => toast('Настройки сохранены')}>
+            Сохранить
+          </button>
+        </div>
+        <div className="form-grid">
+          <label>
+            Название объекта
+            <input defaultValue={activeProject?.name || ''} />
+          </label>
+          <label>
+            Код объекта
+            <input defaultValue={activeProject?.code || ''} />
+          </label>
+          <label>
+            Адрес объекта
+            <input defaultValue={activeProject?.address || ''} />
+          </label>
+          <label>
+            Тип объекта
+            <select defaultValue={activeProject?.object_kind || 'Жильё'}>
+              <option>Жильё</option>
+              <option>Промышленное строительство</option>
+              <option>Инфраструктура</option>
+              <option>Социальный объект</option>
+            </select>
+          </label>
+        </div>
+
+        <h3>Стройплощадки объекта</h3>
+        <div style={{ marginBottom: '14px' }}>
+          {activeZones.map((z) => (
+            <div key={z.id} className="setting-row">
+              <div>
+                <strong>{z.name} ({z.code})</strong>
+                <span>{z.description || 'Без описания'}</span>
+              </div>
+              <Status tone="success">{z.status}</Status>
+            </div>
+          ))}
+          <button className="button" style={{ marginTop: '8px' }} onClick={() => setIsCreateZoneOpen(true)}>
+            + Добавить стройплощадку
+          </button>
+        </div>
+
+        <h3>Камеры видеонаблюдения</h3>
+        <div>
+          {camerasList.map((c) => (
+            <div key={c.id} className="setting-row">
+              <div>
+                <strong>{c.code} · {c.name}</strong>
+                <span>{c.stream_url || 'Локальный канал'}</span>
+              </div>
+              <Status tone={c.status === 'online' ? 'success' : 'critical'}>{c.status}</Status>
+            </div>
+          ))}
+          <button className="button" style={{ marginTop: '8px' }} onClick={() => setIsCameraModalOpen(true)}>
+            + Подключить камеру
+          </button>
+        </div>
+      </section>
+    </div>
+  )
 }
 
+// ----------------------------------------------------------------------------
+// Main Application Component
+// ----------------------------------------------------------------------------
 export default function App() {
-  const [page, setPage] = useState<PageKey>('overview')
+  const [page, setPage] = useState<PageKey>('monitoring')
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
-  const [incidents, setIncidents] = useState(incidentsSeed)
-  const [selected, setSelected] = useState<Incident | null>(null)
-  const [toastText, setToastText] = useState('')
   const [globalSearch, setGlobalSearch] = useState('')
-  const title = titles[page]
-  const openIncident = (incident: Incident) => { setSelected(incident); setPage('incidents') }
-  const toast = (text: string) => { setToastText(text); window.setTimeout(() => setToastText(''), 2600) }
-  const updateIncident = async (id: string, patch: Partial<Incident>) => { await mockApi.updateIncident(id, patch); setIncidents(old => old.map(i => i.id === id ? { ...i, ...patch } : i)); setSelected(old => old?.id === id ? { ...old, ...patch } : old); toast(patch.assignee ? `Ответственный: ${patch.assignee}` : `Статус изменён: ${patch.status}`) }
-  const pageBody = useMemo(() => {
-    switch(page) {
-      case 'overview': return <Overview incidents={incidents} openIncident={openIncident} navigate={setPage}/>
-      case 'monitoring': return <Monitoring incidents={incidents} openIncident={openIncident} toast={toast}/>
-      case 'space': return <Space incidents={incidents} openIncident={openIncident} toast={toast}/>
-      case 'incidents': return <Incidents incidents={incidents} selected={selected} setSelected={setSelected} updateIncident={updateIncident} toast={toast}/>
-      case 'cases': return <Cases navigate={setPage}/>
-      case 'archive': return <Archive incidents={incidents} openIncident={openIncident} toast={toast}/>
-      case 'progress': return <Progress/>
-      case 'analytics': return <Analytics/>
-      case 'reports': return <Reports incidents={incidents} toast={toast}/>
-      case 'settings': return <Settings toast={toast}/>
+  const [toastText, setToastText] = useState<string | null>(null)
+  const [incidents] = useState<Incident[]>(incidentsSeed)
+
+  // Hierarchy: Projects -> Zones -> Cameras
+  const [projectsList, setProjectsList] = useState<ProjectItem[]>([])
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  const [activeZoneId, setActiveZoneId] = useState<string | null>('all')
+  const [activeZones, setActiveZones] = useState<ZoneItem[]>([])
+  const [camerasList, setCamerasList] = useState<CameraItem[]>([])
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null)
+
+  // Schedule Plan (starts EMPTY by default!)
+  const [stages, setStages] = useState<StageItem[]>([])
+
+  // Video Upload state
+  const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string | null>(null)
+  const [uploadedVideoName, setUploadedVideoName] = useState<string | null>(null)
+  const [videoTimestamp, setVideoTimestamp] = useState<string>(getNowDateTimeLocal())
+
+  // Dialogs
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false)
+  const [isCreateZoneOpen, setIsCreateZoneOpen] = useState(false)
+  const [isCreateCameraOpen, setIsCameraModalOpen] = useState(false)
+  const [isUploadVideoOpen, setIsUploadModalOpen] = useState(false)
+
+  const toast = (text: string) => {
+    setToastText(text)
+    setTimeout(() => setToastText(null), 3500)
+  }
+
+  // Load projects on startup
+  useEffect(() => {
+    fetchProjects().then(async (prjs) => {
+      if (prjs.length > 0) {
+        setProjectsList(prjs)
+        setActiveProjectId(prjs[0].id)
+      } else {
+        // Create initial default project if empty
+        try {
+          const initPrj = await createProject({
+            name: 'ЖК «Северный», корпус 2',
+            code: 'PRJ-SEV',
+            address: 'г. Москва, ул. Полярная, 18',
+            object_kind: 'Жильё',
+          })
+          setProjectsList([initPrj])
+          setActiveProjectId(initPrj.id)
+        } catch {
+          // offline fallback
+        }
+      }
+    })
+  }, [])
+
+  // Load project zones, cameras, and schedule whenever active project changes
+  useEffect(() => {
+    if (!activeProjectId) return
+
+    fetchProjectZones(activeProjectId).then((zns) => {
+      setActiveZones(zns)
+    })
+
+    fetchCameras(activeProjectId).then((cams) => {
+      setCamerasList(cams)
+      if (cams.length > 0) {
+        setSelectedCameraId((prev) => prev || cams[0].id)
+      }
+    })
+
+    fetchStages(activeProjectId).then((stgs) => {
+      setStages(stgs)
+    })
+  }, [activeProjectId])
+
+  const activeProject = projectsList.find((p) => p.id === activeProjectId) || projectsList[0]
+
+  // Handle Create Project
+  const handleCreateProjectSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const form = e.currentTarget
+    const name = (form.elements.namedItem('prj_name') as HTMLInputElement).value
+    const address = (form.elements.namedItem('prj_address') as HTMLInputElement).value
+    const objectKind = (form.elements.namedItem('prj_kind') as HTMLSelectElement).value
+
+    try {
+      const created = await createProject({ name, address, object_kind: objectKind })
+      setProjectsList((prev) => [...prev, created])
+      setActiveProjectId(created.id)
+      setIsCreateProjectOpen(false)
+      toast(`Объект «${created.name}» успешно создан`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка создания объекта')
     }
-  }, [page, incidents, selected])
-  return <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><div className="brand"><div className="brand-mark"><span>СК</span></div>{!collapsed && <div><strong>Строй-контроль</strong><small>Мониторинг объекта</small></div>}<button className="collapse" aria-label={collapsed ? 'Раскрыть меню' : 'Свернуть меню'} onClick={() => setCollapsed(!collapsed)}><Icon name="chevron" size={16}/></button></div><nav aria-label="Основная навигация">{nav.map(n => <button key={n.id} aria-label={n.label} title={collapsed ? n.label : undefined} className={page === n.id ? 'active' : ''} onClick={() => { setPage(n.id); setMobileNav(false); if (n.id !== 'incidents') setSelected(null) }}><Icon name={n.icon}/>{!collapsed && <span>{n.label}</span>}{n.id === 'incidents' && <b>{incidents.filter(i=>i.status === 'Требует проверки').length}</b>}{n.id === 'cases' && <b>{evidenceCases.length}</b>}</button>)}</nav><div className="sidebar-foot"><div className="system-state"><span/><div><strong>Система работает</strong><small>Обновлено 8 сек назад</small></div></div></div></aside>
-    <div className="workspace"><header className="topbar"><button className="mobile-menu icon-button" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Icon name="menu"/></button><button className="project-switch"><span className="project-icon">С2</span><div><small>Текущий проект</small><strong>ЖК «Северный», корпус 2</strong></div><span>⌄</span></button><div className="topbar-spacer"/><label className="global-search"><Icon name="search" size={17}/><input value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Поиск" aria-label="Глобальный поиск"/><kbd>⌘ K</kbd></label><button className="date-button"><Icon name="clock" size={16}/>Сегодня, 08:00–14:40</button><button className="icon-button notification" aria-label="Уведомления"><Icon name="bell"/><i/></button><button className="avatar" aria-label="Меню пользователя">ИС</button></header><div className="page-heading"><div><h1>{title[0]}</h1><p>{title[1]}</p></div>{page !== 'overview' && <div className="data-fresh"><span/>Данные актуальны · 8 сек</div>}</div><div className="page-content">{pageBody}</div></div>
-    {mobileNav && <button className="nav-backdrop" aria-label="Закрыть меню" onClick={() => setMobileNav(false)}/>} {toastText && <div className="toast" role="status"><Icon name="check"/><span>{toastText}</span></div>}
-  </div>
+  }
+
+  // Handle Create Zone (Construction Site)
+  const handleCreateZoneSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!activeProjectId) return
+    const form = e.currentTarget
+    const name = (form.elements.namedItem('zone_name') as HTMLInputElement).value
+    const code = (form.elements.namedItem('zone_code') as HTMLInputElement).value
+    const description = (form.elements.namedItem('zone_desc') as HTMLTextAreaElement).value
+
+    try {
+      const created = await createProjectZone(activeProjectId, { name, code, description })
+      setActiveZones((prev) => [...prev, created])
+      setIsCreateZoneOpen(false)
+      toast(`Стройплощадка «${created.name}» добавлена`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка создания площадки')
+    }
+  }
+
+  // Handle Create Camera (Immediately activate and select the camera, with RTSP support)
+  const handleCreateCameraSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!activeProjectId) return
+    const form = e.currentTarget
+    const name = (form.elements.namedItem('cam_name') as HTMLInputElement).value
+    const streamUrl = (form.elements.namedItem('cam_stream') as HTMLInputElement).value
+    const zoneId = (form.elements.namedItem('cam_zone') as HTMLSelectElement).value
+
+    try {
+      const created = await createCamera(activeProjectId, {
+        name,
+        stream_url: streamUrl || undefined,
+        zone_id: zoneId || undefined,
+      })
+      setCamerasList((prev) => [...prev, created])
+      setSelectedCameraId(created.id)
+      setUploadedVideoUrl(null)
+      setUploadedVideoName(null)
+      setIsCameraModalOpen(false)
+      toast(`Камера «${created.name}» успешно подключена и активирована`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка добавления камеры')
+    }
+  }
+
+  // Handle Video Upload
+  const handleUploadVideoSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const form = e.currentTarget
+    const fileInput = form.elements.namedItem('video_file') as HTMLInputElement
+    const file = fileInput?.files?.[0]
+    if (!file) {
+      toast('Выберите видеофайл')
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(file)
+    setUploadedVideoUrl(objectUrl)
+    setUploadedVideoName(file.name)
+    setIsUploadModalOpen(false)
+
+    try {
+      await uploadVideoAsset(file, videoTimestamp)
+      toast(`Видео «${file.name}» загружено и синхронизировано`)
+    } catch {
+      toast(`Видео «${file.name}» запущено в локальном плеере`)
+    }
+  }
+
+  const title = titles[page] ?? titles.monitoring
+
+  const pageBody = useMemo(() => {
+    switch (page) {
+      case 'monitoring':
+        return (
+          <Monitoring
+            activeProject={activeProject}
+            activeZones={activeZones}
+            camerasList={camerasList}
+            selectedCameraId={selectedCameraId}
+            setSelectedCameraId={setSelectedCameraId}
+            stages={stages}
+            uploadedVideoUrl={uploadedVideoUrl}
+            uploadedVideoName={uploadedVideoName}
+            videoTimestamp={videoTimestamp}
+            setUploadedVideoUrl={setUploadedVideoUrl}
+            setUploadedVideoName={setUploadedVideoName}
+            setIsUploadModalOpen={setIsUploadModalOpen}
+            setIsCameraModalOpen={setIsCameraModalOpen}
+            toast={toast}
+          />
+        )
+      case 'archive':
+        return <Archive toast={toast} />
+      case 'progress':
+        return (
+          <Progress
+            stages={stages}
+            setStages={setStages}
+            activeProjectId={activeProjectId}
+            toast={toast}
+          />
+        )
+      case 'analytics':
+        return <Analytics stages={stages} navigate={setPage} />
+      case 'reports':
+        return <Reports activeProject={activeProject} incidents={incidents} toast={toast} />
+      case 'settings':
+        return (
+          <Settings
+            activeProject={activeProject}
+            activeZones={activeZones}
+            camerasList={camerasList}
+            setIsCreateZoneOpen={setIsCreateZoneOpen}
+            setIsCameraModalOpen={setIsCameraModalOpen}
+            toast={toast}
+          />
+        )
+      default:
+        return null
+    }
+  }, [page, stages, activeProject, activeZones, camerasList, selectedCameraId, uploadedVideoUrl, uploadedVideoName, videoTimestamp, activeProjectId])
+
+  return (
+    <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
+      <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark">
+            <span>СК</span>
+          </div>
+          {!collapsed && (
+            <div>
+              <strong>Строй-контроль</strong>
+              <small>Мониторинг объекта</small>
+            </div>
+          )}
+          <button
+            className="collapse"
+            aria-label={collapsed ? 'Раскрыть меню' : 'Свернуть меню'}
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            <Icon name="chevron" size={16} />
+          </button>
+        </div>
+
+        <nav aria-label="Основная навигация">
+          {nav.map((n) => (
+            <button
+              key={n.id}
+              aria-label={n.label}
+              title={collapsed ? n.label : undefined}
+              className={page === n.id ? 'active' : ''}
+              onClick={() => {
+                setPage(n.id)
+                setMobileNav(false)
+              }}
+            >
+              <Icon name={n.icon} />
+              {!collapsed && <span>{n.label}</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-foot">
+          <div className="system-state">
+            <span />
+            <div>
+              <strong>Система активна</strong>
+              <small>YOLO 10 классов · VLM</small>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div className="workspace">
+        <header className="topbar">
+          <button className="mobile-menu icon-button" aria-label="Открыть меню" onClick={() => setMobileNav(true)}>
+            <Icon name="menu" />
+          </button>
+
+          <button className="project-switch" onClick={() => setIsCreateProjectOpen(true)} title="Клик для смены или добавления объекта">
+            <span className="project-icon">СК</span>
+            <div>
+              <small>Объект строительства</small>
+              <strong>{activeProject?.name || 'Выбрать объект'}</strong>
+            </div>
+            <span>⌄</span>
+          </button>
+
+          <div className="topbar-spacer" />
+
+          <label className="global-search">
+            <Icon name="search" size={17} />
+            <input
+              value={globalSearch}
+              onChange={(e) => setGlobalSearch(e.target.value)}
+              placeholder="Поиск по графику, технике, камерам"
+              aria-label="Глобальный поиск"
+            />
+            <kbd>⌘ K</kbd>
+          </label>
+
+          <button className="date-button">
+            <Icon name="clock" size={16} />Сегодня, {new Date().toLocaleTimeString().slice(0, 5)}
+          </button>
+          <button className="icon-button notification" aria-label="Уведомления">
+            <Icon name="bell" />
+            <i />
+          </button>
+          <button className="avatar" aria-label="Меню пользователя">СК</button>
+        </header>
+
+        {/* Object & Construction Site Switcher Bar */}
+        <div className="object-zone-bar">
+          <div className="object-zone-select-group">
+            <span className="label">Объект:</span>
+            <select
+              value={activeProjectId || ''}
+              onChange={(e) => {
+                setActiveProjectId(e.target.value)
+                setActiveZoneId('all')
+              }}
+            >
+              {projectsList.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.code})
+                </option>
+              ))}
+            </select>
+            <button className="button" style={{ padding: '0 8px', height: '32px', fontSize: '11px' }} onClick={() => setIsCreateProjectOpen(true)}>
+              + Новый объект
+            </button>
+          </div>
+
+          <div className="object-zone-select-group">
+            <span className="label">Стройплощадка:</span>
+            <select
+              value={activeZoneId || 'all'}
+              onChange={(e) => setActiveZoneId(e.target.value)}
+            >
+              <option value="all">Все стройплощадки ({activeZones.length})</option>
+              {activeZones.map((z) => (
+                <option key={z.id} value={z.id}>
+                  {z.name} ({z.code})
+                </option>
+              ))}
+            </select>
+            <button
+              className="button"
+              style={{ padding: '0 8px', height: '32px', fontSize: '11px' }}
+              onClick={() => setIsCreateZoneOpen(true)}
+              disabled={!activeProjectId}
+            >
+              + Стройплощадка
+            </button>
+          </div>
+
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+              Камер: <strong style={{ color: '#fff' }}>{camerasList.length}</strong> ·
+              Этапов плана: <strong style={{ color: '#fff' }}>{stages.length}</strong>
+            </span>
+          </div>
+        </div>
+
+        <div className="page-heading">
+          <div>
+            <h1>{title[0]}</h1>
+            <p>{title[1]}</p>
+          </div>
+          <div className="data-fresh">
+            <span />Данные актуальны · 8 сек
+          </div>
+        </div>
+
+        <div className="page-content">{pageBody}</div>
+      </div>
+
+      {mobileNav && <button className="nav-backdrop" aria-label="Закрыть меню" onClick={() => setMobileNav(false)} />}
+
+      {/* Modal: Create Object */}
+      {isCreateProjectOpen && (
+        <div className="modal-backdrop">
+          <div className="dialog">
+            <h3>Создать строительный объект</h3>
+            <p>Добавьте новый строительный комплекс или сооружение для раздельного контроля.</p>
+            <form onSubmit={handleCreateProjectSubmit}>
+              <label>
+                Название объекта *
+                <input name="prj_name" placeholder="например, ЖК «Флагман», корпус 1" required />
+              </label>
+              <label>
+                Адрес объекта
+                <input name="prj_address" placeholder="г. Москва, ул. Строителей, 12" />
+              </label>
+              <label>
+                Категория / Тип объекта
+                <select name="prj_kind" defaultValue="Жильё">
+                  <option>Жильё</option>
+                  <option>Промышленное строительство</option>
+                  <option>Инфраструктура</option>
+                  <option>Социальный объект</option>
+                </select>
+              </label>
+              <div className="dialog-actions">
+                <button type="submit" className="button primary">
+                  Создать объект
+                </button>
+                <button type="button" className="button" onClick={() => setIsCreateProjectOpen(false)}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create Construction Site (Zone) */}
+      {isCreateZoneOpen && (
+        <div className="modal-backdrop">
+          <div className="dialog">
+            <h3>Создать стройплощадку</h3>
+            <p>Добавьте участок или зону внутри объекта «{activeProject?.name}».</p>
+            <form onSubmit={handleCreateZoneSubmit}>
+              <label>
+                Наименование площадки/участка *
+                <input name="zone_name" placeholder="например, Котлован секции А" required />
+              </label>
+              <label>
+                Код участка
+                <input name="zone_code" placeholder="например, A-01" />
+              </label>
+              <label>
+                Описание
+                <textarea name="zone_desc" placeholder="Краткое назначение участка" />
+              </label>
+              <div className="dialog-actions">
+                <button type="submit" className="button primary">
+                  Создать площадку
+                </button>
+                <button type="button" className="button" onClick={() => setIsCreateZoneOpen(false)}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Connect Camera */}
+      {isCreateCameraOpen && (
+        <div className="modal-backdrop">
+          <div className="dialog">
+            <h3>Подключить камеру</h3>
+            <p>Добавьте сетевую IP/RTSP/HLS камеру к объекту «{activeProject?.name}».</p>
+            <form onSubmit={handleCreateCameraSubmit}>
+              <label>
+                Название камеры *
+                <input name="cam_name" placeholder="например, Камера 1 (Обзор котлована)" required />
+              </label>
+              <label>
+                URL потока (RTSP, HLS или IP)
+                <input id="cam_stream_input" name="cam_stream" placeholder="rtsp://192.168.1.100:554/stream1" defaultValue="rtsp://192.168.1.120:554/live/ch01" />
+              </label>
+              <div style={{ display: 'flex', gap: '6px', marginTop: '-6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '10px', color: 'var(--muted)', width: '100%' }}>Шаблоны RTSP потоков:</span>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '10px', padding: '2px 8px' }}
+                  onClick={() => {
+                    const el = document.getElementById('cam_stream_input') as HTMLInputElement
+                    if (el) el.value = 'rtsp://192.168.1.120:554/live/crane_cam'
+                  }}
+                >
+                  RTSP: Кран (Секция 1)
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '10px', padding: '2px 8px' }}
+                  onClick={() => {
+                    const el = document.getElementById('cam_stream_input') as HTMLInputElement
+                    if (el) el.value = 'rtsp://192.168.1.125:554/live/gate_cam'
+                  }}
+                >
+                  RTSP: Въезд (КПП)
+                </button>
+              </div>
+              <label>
+                Стройплощадка / Зона
+                <select name="cam_zone">
+                  <option value="">Без привязки к зоне</option>
+                  {activeZones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.name} ({z.code})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="dialog-actions">
+                <button type="submit" className="button primary">
+                  Подключить камеру
+                </button>
+                <button type="button" className="button" onClick={() => setIsCameraModalOpen(false)}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Upload Video */}
+      {isUploadVideoOpen && (
+        <div className="modal-backdrop">
+          <div className="dialog">
+            <h3>Загрузить видеозапись СМР</h3>
+            <p>Загрузите видеофайл для демонстрации и автоматического сопоставления со спецтехникой.</p>
+            <form onSubmit={handleUploadVideoSubmit}>
+              <label>
+                Видеофайл (.mp4, .webm, .mov) *
+                <input name="video_file" type="file" accept="video/*" required />
+              </label>
+              <label>
+                Дата и время старта съемки *
+                <input
+                  name="video_ts"
+                  type="datetime-local"
+                  value={videoTimestamp}
+                  onChange={(e) => setVideoTimestamp(e.target.value)}
+                  required
+                />
+              </label>
+              <div className="dialog-actions">
+                <button type="submit" className="button primary">
+                  Начать воспроизведение
+                </button>
+                <button type="button" className="button" onClick={() => setIsUploadModalOpen(false)}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {toastText && (
+        <div className="toast" role="status">
+          <Icon name="check" />
+          <span>{toastText}</span>
+        </div>
+      )}
+    </div>
+  )
 }

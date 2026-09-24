@@ -1,17 +1,4 @@
-import case01 from './assets/case-01.webp'
-import case02 from './assets/case-02.webp'
-import case03 from './assets/case-03.webp'
-import case04 from './assets/case-04.webp'
-import case05 from './assets/case-05.webp'
-import case06 from './assets/case-06.webp'
-import case07 from './assets/case-07.webp'
-import case08 from './assets/case-08.webp'
-import case09 from './assets/case-09.webp'
-import case10 from './assets/case-10.webp'
-import case11 from './assets/case-11.webp'
-import case12 from './assets/case-12.webp'
-
-export type PageKey = 'overview' | 'monitoring' | 'space' | 'incidents' | 'cases' | 'archive' | 'progress' | 'analytics' | 'reports' | 'settings'
+export type PageKey = 'monitoring' | 'archive' | 'progress' | 'analytics' | 'reports' | 'settings'
 export type IncidentStatus = 'Требует проверки' | 'Подтверждено' | 'В работе' | 'Устранено' | 'Ложное срабатывание'
 export type Priority = 'Критический' | 'Высокий' | 'Средний' | 'Низкий'
 
@@ -43,16 +30,9 @@ export interface Incident {
 
 export const projects = [
   { id: 'north', name: 'ЖК «Северный», корпус 2', address: 'Москва, ул. Полярная, 18', stage: 'Монолитные работы · 62%' },
-  { id: 'line', name: 'БЦ «Первая линия»', address: 'Москва, Шелепихинская наб., 8', stage: 'Подземный цикл · 34%' },
 ]
 
-export const cameras: Camera[] = [
-  { id: 'CAM-03', name: 'Кран, север', zone: 'A-03 · Котлован', status: 'online', freshness: '8 сек назад', visibility: 72 },
-  { id: 'CAM-07', name: 'Въезд', zone: 'B-01 · Складирование', status: 'online', freshness: '12 сек назад', visibility: 91 },
-  { id: 'CAM-02', name: 'Корпус, восток', zone: 'C-02 · Корпус 2', status: 'degraded', freshness: '6 мин назад', visibility: 48 },
-  { id: 'CAM-05', name: 'Бытовой городок', zone: 'D-01 · Периметр', status: 'online', freshness: '18 сек назад', visibility: 86 },
-  { id: 'CAM-09', name: 'Склад, запад', zone: 'B-01 · Складирование', status: 'offline', freshness: '2 ч 14 мин назад', visibility: 0 },
-]
+export const cameras: Camera[] = []
 
 export const incidentsSeed: Incident[] = [
   { id: 'INC-248', type: 'СИЗ', title: 'Рабочий без каски', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: '14:32', age: '8 мин', priority: 'Высокий', status: 'Требует проверки', assignee: 'Не назначен', sla: '22 мин', confidence: 94, grouped: 3, note: 'Три последовательные детекции одного человека. Лицо не идентифицируется.' },
@@ -93,21 +73,6 @@ export const archiveResults = [
   { time: '10:42:18', duration: '24 мин', camera: 'CAM-02', zone: 'C-02', title: 'Мобильный кран без видимого движения', confidence: 86 },
   { time: '12:16:05', duration: '31 мин', camera: 'CAM-02', zone: 'C-02', title: 'Положение стрелы и опор не изменилось', confidence: 82 },
   { time: '15:28:41', duration: '22 мин', camera: 'CAM-03', zone: 'A-03', title: 'Башенный кран без наблюдаемой активности', confidence: 74 },
-]
-
-export const evidenceCases = [
-  { id: 'CASE-012', image: case01, title: 'Экскаватор работает в границах котлована', category: 'Техника', zone: 'A-03 · Котлован', camera: 'CAM-03', time: 'Сегодня, 14:39', confidence: 96, visibility: 88, verdict: 'Подтверждено', note: 'Экскаватор найден в рабочей зоне. Положение ковша и изменение грунта подтверждают активность.' },
-  { id: 'CASE-011', image: case02, title: 'Две буровые установки на участке', category: 'Техника', zone: 'A-03 · Котлован', camera: 'CAM-03', time: 'Сегодня, 13:54', confidence: 93, visibility: 91, verdict: 'Подтверждено', note: 'Обе установки различимы полностью. Перекрытий ключевых объектов нет.' },
-  { id: 'CASE-010', image: case03, title: 'Рабочая зона частично перекрыта техникой', category: 'Качество обзора', zone: 'B-01 · Складирование', camera: 'CAM-07', time: 'Сегодня, 12:48', confidence: 74, visibility: 62, verdict: 'Требует проверки', note: 'Часть зоны закрыта буровой установкой. Вывод о количестве людей ограничен.' },
-  { id: 'CASE-009', image: case04, title: 'Мобильный кран выполняет подъём', category: 'Техника', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: 'Сегодня, 11:26', confidence: 91, visibility: 83, verdict: 'Подтверждено', note: 'Груз находится на подвесе, опоры крана видимы. Событие относится к плановой работе.' },
-  { id: 'CASE-008', image: case05, title: 'Работы в зимних условиях', category: 'Условия работ', zone: 'D-01 · Периметр', camera: 'CAM-05', time: 'Сегодня, 10:42', confidence: 69, visibility: 57, verdict: 'Недостаточно данных', note: 'Снег и расстояние снижают различимость людей и средств защиты.' },
-  { id: 'CASE-007', image: case06, title: 'Разработка грунта двумя экскаваторами', category: 'Прогресс', zone: 'A-03 · Котлован', camera: 'CAM-03', time: 'Сегодня, 09:18', confidence: 95, visibility: 92, verdict: 'Подтверждено', note: 'Контур котлована и две единицы техники хорошо различимы.' },
-  { id: 'CASE-006', image: case07, title: 'Панорамный обзор строительной площадки', category: 'Прогресс', zone: 'Все зоны', camera: 'CAM-01', time: 'Вчера, 17:20', confidence: 82, visibility: 86, verdict: 'Подтверждено', note: 'Кадр пригоден для сравнения общего прогресса, но не для проверки СИЗ.' },
-  { id: 'CASE-005', image: case08, title: 'Техника у границы рабочей зоны', category: 'Безопасность', zone: 'A-03 · Котлован', camera: 'CAM-03', time: 'Вчера, 15:02', confidence: 78, visibility: 71, verdict: 'Требует проверки', note: 'Дистанцию до границы необходимо проверить по плану площадки.' },
-  { id: 'CASE-004', image: case09, title: 'Подготовка свайного поля', category: 'Прогресс', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: 'Вчера, 12:48', confidence: 88, visibility: 89, verdict: 'Подтверждено', note: 'Расположение установок и подготовленные точки доступны для визуального сравнения.' },
-  { id: 'CASE-003', image: case10, title: 'Кран и рабочий в зоне подъёма', category: 'Безопасность', zone: 'B-01 · Складирование', camera: 'CAM-07', time: 'Вчера, 10:16', confidence: 84, visibility: 76, verdict: 'Требует проверки', note: 'Человек находится близко к грузу. Точная дистанция по одному кадру не определяется.' },
-  { id: 'CASE-002', image: case11, title: 'Состояние площадки после снегопада', category: 'Условия работ', zone: 'Все зоны', camera: 'CAM-01', time: '15 сен, 16:30', confidence: 63, visibility: 54, verdict: 'Недостаточно данных', note: 'Снег закрывает часть поверхности. Оценка земляных работ ограничена.' },
-  { id: 'CASE-001', image: case12, title: 'Экскаваторы на этапе разработки грунта', category: 'Техника', zone: 'A-03 · Котлован', camera: 'CAM-03', time: '15 сен, 11:42', confidence: 92, visibility: 87, verdict: 'Подтверждено', note: 'Три единицы техники различимы. Кадр пригоден для отчёта о смене.' },
 ]
 
 export const analytics = [

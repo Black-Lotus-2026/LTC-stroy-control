@@ -46,12 +46,15 @@ services:
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
       STORAGE_PUBLIC_URL: http://localhost:8000/media
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
     volumes:
       # Код примонтирован — правки применяются без пересборки образа.
       - ./backend:/app
       - storage_data:/app/var/storage
       # Исходные файлы организаторов (справочник работ, ссылки на датасеты).
       - ./data:/app/data:ro
+      - ./info:/app/info:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -70,10 +73,13 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
     volumes:
       - ./backend:/app
       - storage_data:/app/var/storage
       - ./data:/app/data:ro
+      - ./info:/app/info:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +100,24 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./package.json:/app/package.json
+      - ./vite.config.ts:/app/vite.config.ts
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

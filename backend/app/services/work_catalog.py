@@ -177,8 +177,7 @@ def parse_work_catalog(source: str | Path | IO[bytes]) -> ParseReport:
         applicable_to = [
             header
             for column, header in applicability_headers.items()
-            if len(row) >= column
-            and str(row[column - 1]).strip() in APPLICABILITY_MARKS
+            if len(row) >= column and str(row[column - 1]).strip() in APPLICABILITY_MARKS
         ]
 
         item = ParsedWorkType(

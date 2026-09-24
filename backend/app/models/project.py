@@ -71,7 +71,8 @@ class ProjectSettings(TimestampMixin, Base):
     __tablename__ = "project_settings"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"),
+        PgUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         primary_key=True,
     )
 

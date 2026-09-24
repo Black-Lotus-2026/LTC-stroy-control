@@ -76,9 +76,9 @@ class RuleKind(StrEnum):
 class FrameSource(StrEnum):
     """Откуда пришёл кадр. Дальше по конвейеру источник не имеет значения."""
 
-    STREAM = "stream"      # выборка из видеопотока камеры
-    UPLOAD = "upload"      # ручная загрузка через интерфейс
-    DATASET = "dataset"    # пакетный импорт из папки с изображениями
+    STREAM = "stream"  # выборка из видеопотока камеры
+    UPLOAD = "upload"  # ручная загрузка через интерфейс
+    DATASET = "dataset"  # пакетный импорт из папки с изображениями
 
 
 class FrameStatus(StrEnum):
@@ -121,10 +121,10 @@ class IncidentType(StrEnum):
 
 
 class IncidentStatus(StrEnum):
-    PENDING = "pending"            # требует проверки
-    CONFIRMED = "confirmed"        # подтверждено человеком
-    IN_PROGRESS = "in_progress"    # взято в работу
-    RESOLVED = "resolved"          # устранено
+    PENDING = "pending"  # требует проверки
+    CONFIRMED = "confirmed"  # подтверждено человеком
+    IN_PROGRESS = "in_progress"  # взято в работу
+    RESOLVED = "resolved"  # устранено
     FALSE_POSITIVE = "false_positive"  # отклонено как ошибка распознавания
 
 
@@ -142,8 +142,8 @@ class RejectReason(StrEnum):
 
 
 class IncidentEventType(StrEnum):
-    DETECTED = "detected"          # создано движком правил
-    UPDATED = "updated"            # обновлено новым наблюдением
+    DETECTED = "detected"  # создано движком правил
+    UPDATED = "updated"  # обновлено новым наблюдением
     ASSIGNED = "assigned"
     STATUS_CHANGED = "status_changed"
     COMMENTED = "commented"

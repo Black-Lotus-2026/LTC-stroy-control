@@ -25,6 +25,8 @@ EXPECTED_TABLES = {
     "incidents",
     "incident_events",
     "incident_evidence",
+    "vlm_verifications",
+    "video_assets",
     "users",
 }
 

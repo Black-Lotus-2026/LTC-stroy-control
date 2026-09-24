@@ -32,3 +32,6 @@ vite.config.d.ts
 .DS_Store
 *~
 .~lock.*#
+.agents
+.specify
+specs

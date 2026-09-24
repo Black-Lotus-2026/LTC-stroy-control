@@ -7,10 +7,11 @@ help:  ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-up:  ## Поднять весь стенд (api, worker, beat, postgres, redis)
+up:  ## Поднять весь стенд (api, worker, beat, postgres, redis, frontend)
 	docker compose up --build -d
-	@echo "API:     http://localhost:8000"
-	@echo "Swagger: http://localhost:8000/docs"
+	@echo "Frontend: http://localhost:5173"
+	@echo "API:      http://localhost:8000"
+	@echo "Swagger:  http://localhost:8000/docs"
 
 down:  ## Остановить стенд (данные сохраняются)
 	docker compose down
@@ -35,6 +36,9 @@ revision:  ## Создать миграцию: make revision m="описание
 
 import-catalog:  ## Загрузить справочник видов работ из data/work_catalog.xlsx
 	docker compose exec api python -m app.cli import-catalog
+
+generate-demo:  ## Сгенерировать эталонный демо-файл календарного плана (Многоквартирный жилой дом)
+	docker compose exec api python -m app.scripts.generate_demo_schedule
 
 shell:  ## Python-консоль внутри контейнера api
 	docker compose exec api python

@@ -174,7 +174,8 @@ class Detection(UUIDPrimaryKeyMixin, Base):
 
     # Связь «каска → человек»: рамка СИЗ ссылается на рамку человека.
     parent_detection_id: Mapped[uuid.UUID | None] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("detections.id", ondelete="SET NULL"),
+        PgUUID(as_uuid=True),
+        ForeignKey("detections.id", ondelete="SET NULL"),
         default=None,
     )
 
