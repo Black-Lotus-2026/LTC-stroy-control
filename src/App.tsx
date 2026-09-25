@@ -33,6 +33,11 @@ import {
   detectFrameImage,
   getCurrentStageByDate,
   API_PREFIX,
+  UserProfile,
+  fetchCurrentUser,
+  loginUser,
+  registerUser,
+  logoutUser,
 } from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
@@ -1638,6 +1643,85 @@ export default function App() {
   const [streamCheckResult, setStreamCheckResult] = useState<{ status: string; message: string } | null>(null)
   const [isCheckingStream, setIsCheckingStream] = useState(false)
 
+  // User Authentication State
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [authTab, setAuthTab] = useState<'login' | 'register'>('login')
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
+
+  // Check active user session on startup
+  useEffect(() => {
+    fetchCurrentUser().then((user) => {
+      if (user) {
+        setCurrentUser(user)
+      } else {
+        setIsAuthModalOpen(true)
+      }
+    })
+  }, [])
+
+  const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setAuthError(null)
+    const form = e.currentTarget
+    const username = (form.elements.namedItem('login_username') as HTMLInputElement).value.trim()
+    const password = (form.elements.namedItem('login_password') as HTMLInputElement).value
+    if (!username || !password) return
+
+    setIsSubmittingAuth(true)
+    try {
+      const res = await loginUser({ username, password })
+      setCurrentUser(res.user)
+      setIsAuthModalOpen(false)
+      toast(`Добро пожаловать, ${res.user.username}!`)
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Ошибка авторизации')
+    } finally {
+      setIsSubmittingAuth(false)
+    }
+  }
+
+  const handleRegisterSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setAuthError(null)
+    const form = e.currentTarget
+    const username = (form.elements.namedItem('reg_username') as HTMLInputElement).value.trim()
+    const password = (form.elements.namedItem('reg_password') as HTMLInputElement).value
+    const confirmPassword = (form.elements.namedItem('reg_confirm_password') as HTMLInputElement).value
+
+    if (password !== confirmPassword) {
+      setAuthError('Введенные пароли не совпадают')
+      return
+    }
+
+    if (password.length < 4) {
+      setAuthError('Пароль должен содержать не менее 4 символов')
+      return
+    }
+
+    setIsSubmittingAuth(true)
+    try {
+      const res = await registerUser({ username, password, confirm_password: confirmPassword })
+      setCurrentUser(res.user)
+      setIsAuthModalOpen(false)
+      toast(`Аккаунт «${res.user.username}» успешно создан!`)
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Ошибка регистрации')
+    } finally {
+      setIsSubmittingAuth(false)
+    }
+  }
+
+  const handleLogout = () => {
+    logoutUser()
+    setCurrentUser(null)
+    setIsUserMenuOpen(false)
+    setIsAuthModalOpen(true)
+    toast('Вы вышли из системы')
+  }
+
   const handleCheckStream = async () => {
     const el = document.getElementById('cam_stream_input') as HTMLInputElement
     const url = el?.value?.trim()
@@ -2000,11 +2084,103 @@ export default function App() {
           <button className="date-button">
             <Icon name="clock" size={16} />Сегодня, {new Date().toLocaleTimeString().slice(0, 5)}
           </button>
-          <button className="icon-button notification" aria-label="Уведомления">
-            <Icon name="bell" />
-            <i />
-          </button>
-          <button className="avatar" aria-label="Меню пользователя">СК</button>
+          {currentUser ? (
+            <div style={{ position: 'relative' }}>
+              <button
+                className="avatar"
+                aria-label="Меню пользователя"
+                onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                title={`Пользователь: ${currentUser.username} (${currentUser.role})`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '4px 12px',
+                  borderRadius: '20px',
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  cursor: 'pointer',
+                  color: '#fff',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  width: 'auto',
+                  height: '36px',
+                }}
+              >
+                <span
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    background: '#38bdf8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#0b0d10',
+                  }}
+                >
+                  {currentUser.username.slice(0, 2).toUpperCase()}
+                </span>
+                <span>{currentUser.username}</span>
+                <span style={{ fontSize: '9px', opacity: 0.7 }}>▼</span>
+              </button>
+
+              {isUserMenuOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: '115%',
+                    background: '#16191f',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    borderRadius: '12px',
+                    padding: '10px',
+                    minWidth: '200px',
+                    zIndex: 1000,
+                    boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
+                  }}
+                >
+                  <div style={{ padding: '6px 8px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>{currentUser.username}</div>
+                    <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '2px' }}>
+                      {currentUser.role === 'admin' ? 'Администратор' : 'Инженер технадзора'}
+                    </div>
+                  </div>
+                  <button
+                    className="button"
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#f87171',
+                      borderColor: 'rgba(248,113,113,0.3)',
+                      fontSize: '12px',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                    }}
+                    onClick={handleLogout}
+                  >
+                    Выйти из аккаунта
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              className="button primary"
+              style={{ padding: '4px 14px', fontSize: '12px', height: '34px', borderRadius: '18px' }}
+              onClick={() => {
+                setAuthTab('login')
+                setAuthError(null)
+                setIsAuthModalOpen(true)
+              }}
+            >
+              Вход / Регистрация
+            </button>
+          )}
         </header>
 
         {/* Object & Construction Site Switcher Bar */}
@@ -2073,7 +2249,172 @@ export default function App() {
         <div className="page-content">{pageBody}</div>
       </div>
 
-      {mobileNav && <button className="nav-backdrop" aria-label="Закрыть меню" onClick={() => setMobileNav(false)} />}
+      {/* Modal: Login / Register */}
+      {isAuthModalOpen && (
+        <div className="modal-backdrop" style={{ zIndex: 1200 }}>
+          <div className="dialog" style={{ maxWidth: '440px', width: '100%' }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '16px', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => { setAuthTab('login'); setAuthError(null) }}
+                style={{
+                  padding: '8px 16px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: authTab === 'login' ? '2px solid #38bdf8' : '2px solid transparent',
+                  color: authTab === 'login' ? '#38bdf8' : '#94a3b8',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                Вход
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthTab('register'); setAuthError(null) }}
+                style={{
+                  padding: '8px 16px',
+                  background: 'transparent',
+                  border: 'none',
+                  borderBottom: authTab === 'register' ? '2px solid #38bdf8' : '2px solid transparent',
+                  color: authTab === 'register' ? '#38bdf8' : '#94a3b8',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                Регистрация
+              </button>
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => setIsAuthModalOpen(false)}
+                  style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '18px', cursor: 'pointer' }}
+                  title="Закрыть"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {authTab === 'login' ? (
+              <div>
+                <h3 style={{ marginTop: 0 }}>Вход в систему</h3>
+                <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '16px' }}>
+                  Введите логин и пароль для работы с платформой «Строй-контроль».
+                </p>
+
+                {authError && (
+                  <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', borderRadius: '8px', color: '#fca5a5', fontSize: '13px', marginBottom: '14px' }}>
+                    {authError}
+                  </div>
+                )}
+
+                <form onSubmit={handleLoginSubmit}>
+                  <label>
+                    Логин *
+                    <input
+                      name="login_username"
+                      placeholder="ваш логин"
+                      required
+                      autoFocus
+                    />
+                  </label>
+                  <label>
+                    Пароль *
+                    <input
+                      type="password"
+                      name="login_password"
+                      placeholder="введите пароль"
+                      required
+                    />
+                  </label>
+                  <div className="dialog-actions" style={{ marginTop: '20px' }}>
+                    <button type="submit" className="button primary full" disabled={isSubmittingAuth}>
+                      {isSubmittingAuth ? 'Вход...' : 'Войти в систему'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: '#94a3b8' }}>
+                  Нет учетной записи?{' '}
+                  <button
+                    type="button"
+                    onClick={() => { setAuthTab('register'); setAuthError(null) }}
+                    style={{ background: 'transparent', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                  >
+                    Зарегистрироваться
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <h3 style={{ marginTop: 0 }}>Регистрация</h3>
+                <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '16px' }}>
+                  Придумайте логин (не обязательно email) и введите пароль дважды.
+                </p>
+
+                {authError && (
+                  <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', borderRadius: '8px', color: '#fca5a5', fontSize: '13px', marginBottom: '14px' }}>
+                    {authError}
+                  </div>
+                )}
+
+                <form onSubmit={handleRegisterSubmit}>
+                  <label>
+                    Придумайте логин *
+                    <input
+                      name="reg_username"
+                      placeholder="например, ivan_engineer"
+                      minLength={3}
+                      required
+                      autoFocus
+                    />
+                    <small style={{ color: '#94a3b8', fontSize: '11px', display: 'block', marginTop: '4px' }}>Логин не обязательно почта, минимум 3 символа</small>
+                  </label>
+                  <label>
+                    Придумайте пароль *
+                    <input
+                      type="password"
+                      name="reg_password"
+                      placeholder="не менее 4 символов"
+                      minLength={4}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Повторите пароль *
+                    <input
+                      type="password"
+                      name="reg_confirm_password"
+                      placeholder="повторите введенный пароль"
+                      minLength={4}
+                      required
+                    />
+                  </label>
+                  <div className="dialog-actions" style={{ marginTop: '20px' }}>
+                    <button type="submit" className="button primary full" disabled={isSubmittingAuth}>
+                      {isSubmittingAuth ? 'Создание аккаунта...' : 'Зарегистрироваться'}
+                    </button>
+                  </div>
+                </form>
+
+                <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: '#94a3b8' }}>
+                  Уже зарегистрированы?{' '}
+                  <button
+                    type="button"
+                    onClick={() => { setAuthTab('login'); setAuthError(null) }}
+                    style={{ background: 'transparent', border: 'none', color: '#38bdf8', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                  >
+                    Войти в систему
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal: Create Object */}
       {isCreateProjectOpen && (

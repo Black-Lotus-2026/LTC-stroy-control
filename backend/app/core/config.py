@@ -67,6 +67,11 @@ class Settings(BaseSettings):
         ]
     )
 
+    # --- JWT Authentication ---
+    jwt_secret_key: str = "stroy-control-super-secure-jwt-secret-key-2026-production"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_days: int = 30
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> str:

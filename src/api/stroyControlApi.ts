@@ -141,6 +141,110 @@ function getApiBaseUrl(): string {
 export const API_BASE_URL = getApiBaseUrl()
 export const API_PREFIX = `${API_BASE_URL}/api/v1`
 
+export interface UserProfile {
+  id: string
+  username: string
+  name: string
+  role: string
+  created_at: string
+}
+
+export interface AuthTokenResponse {
+  access_token: string
+  token_type: string
+  user: UserProfile
+}
+
+const TOKEN_KEY = 'stroy_control_token'
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token)
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getAuthHeaders(): Record<string, string> {
+  const token = getStoredToken()
+  if (token) {
+    return { Authorization: `Bearer ${token}` }
+  }
+  return {}
+}
+
+export async function registerUser(data: {
+  username: string
+  password: string
+  confirm_password: string
+}): Promise<AuthTokenResponse> {
+  const res = await fetch(`${API_PREFIX}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка регистрации' }))
+    throw new Error(err.detail || 'Ошибка регистрации')
+  }
+  const result: AuthTokenResponse = await res.json()
+  setStoredToken(result.access_token)
+  return result
+}
+
+export async function loginUser(data: {
+  username: string
+  password: string
+}): Promise<AuthTokenResponse> {
+  const res = await fetch(`${API_PREFIX}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Неверный логин или пароль' }))
+    throw new Error(err.detail || 'Неверный логин или пароль')
+  }
+  const result: AuthTokenResponse = await res.json()
+  setStoredToken(result.access_token)
+  return result
+}
+
+export async function fetchCurrentUser(): Promise<UserProfile | null> {
+  const token = getStoredToken()
+  if (!token) return null
+  try {
+    const res = await fetch(`${API_PREFIX}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.ok) {
+      return await res.json()
+    }
+    if (res.status === 401) {
+      setStoredToken(null)
+    }
+  } catch {
+    // offline
+  }
+  return null
+}
+
+export function logoutUser(): void {
+  setStoredToken(null)
+}
+
 // ----------------------------------------------------------------------------
 // Projects, Construction Sites (Zones), and Cameras API
 // ----------------------------------------------------------------------------
