@@ -61,6 +61,7 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
     "crane_manipulator": "truck_crane",
     "tower_crane": "tower_crane",
     "concrete_mixer": "concrete_mixer",
+    "concrete_mixer_truck": "concrete_mixer",
     "concrete_truck": "concrete_mixer",
     "cement_mixer": "concrete_mixer",
     "mixer": "concrete_mixer",
@@ -175,8 +176,13 @@ class MachineryDetector:
         if env_path and Path(env_path).exists():
             return Path(env_path)
 
-        # Standard direct weights location in app/backend
-        app_weights = Path(__file__).resolve().parents[2] / "weights" / "construction_machinery.pt"
+        # Preferred weights location: heavy_equipment_weights or construction_machinery
+        weights_dir = Path(__file__).resolve().parents[2] / "weights"
+        heavy_weights = weights_dir / "heavy_equipment_weights.pt"
+        if heavy_weights.exists():
+            return heavy_weights
+
+        app_weights = weights_dir / "construction_machinery.pt"
         if app_weights.exists():
             return app_weights
 
