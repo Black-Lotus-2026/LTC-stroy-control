@@ -277,8 +277,33 @@ export async function createProject(data: {
   return await res.json()
 }
 
+export async function updateProject(
+  projectId: string,
+  data: {
+    name?: string
+    code?: string
+    address?: string
+    object_kind?: string
+    status?: string
+  }
+): Promise<ProjectItem> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка обновления объекта' }))
+    throw new Error(err.detail || 'Ошибка обновления объекта')
+  }
+  return await res.json()
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
-  await fetch(`${API_PREFIX}/projects/${projectId}`, { method: 'DELETE' })
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error('Ошибка удаления объекта')
+  }
 }
 
 export async function fetchProjectZones(projectId: string): Promise<ZoneItem[]> {
@@ -305,6 +330,37 @@ export async function createProjectZone(
     throw new Error(err.detail || 'Ошибка создания стройплощадки')
   }
   return await res.json()
+}
+
+export async function updateZone(
+  projectId: string,
+  zoneId: string,
+  data: {
+    name?: string
+    code?: string
+    description?: string
+    status?: string
+  }
+): Promise<ZoneItem> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/zones/${zoneId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка обновления стройплощадки' }))
+    throw new Error(err.detail || 'Ошибка обновления стройплощадки')
+  }
+  return await res.json()
+}
+
+export async function deleteZone(projectId: string, zoneId: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/zones/${zoneId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    throw new Error('Ошибка удаления стройплощадки')
+  }
 }
 
 export async function fetchCameras(projectId?: string): Promise<CameraItem[]> {
@@ -555,6 +611,34 @@ export async function fetchStageProbabilities(stageId: string): Promise<StagePro
     // Fallback probability calculation
   }
   return getFallbackProbabilities(stageId)
+}
+
+export async function updateStageProbabilities(
+  stageId: string,
+  overrides: Record<string, string | number>
+): Promise<StageProbabilityResponse> {
+  const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ overrides }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Ошибка обновления профиля техники' }))
+    throw new Error(err.detail || 'Ошибка обновления профиля техники')
+  }
+  return await res.json()
+}
+
+export async function resetStageProbabilities(
+  stageId: string
+): Promise<StageProbabilityResponse> {
+  const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    throw new Error('Ошибка сброса профиля техники')
+  }
+  return await res.json()
 }
 
 // ----------------------------------------------------------------------------

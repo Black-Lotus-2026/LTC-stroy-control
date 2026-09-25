@@ -16,6 +16,7 @@ from app.schemas.stroy_control import (
     MachineryProbabilityItem,
     ScheduleImportResponse,
     StageItem,
+    StageMachineryOverrideRequest,
     StageProbabilityResponse,
     StageUpdateRequest,
 )
@@ -211,10 +212,7 @@ def cascade_shift(
 
 
 @router.get("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
-def get_stage_probabilities(
-    stage_id: str, db: DbSession
-) -> StageProbabilityResponse:
-    """Получить распределение вероятностей техники для детального экрана этапа."""
+def _find_stage(stage_id: str, db: DbSession) -> ScheduleTask | None:
     target_uuid = None
     try:
         target_uuid = uuid.UUID(stage_id)
@@ -231,18 +229,43 @@ def get_stage_probabilities(
             ).all()
             if all_stages:
                 stage = all_stages[0]
+    return stage
 
+
+def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbabilityResponse:
     matcher = StageMachineryService()
     stage_name = stage.name if stage else "Общестроительные работы"
     prob_profile = matcher.estimate_machinery_probabilities(stage_name)
+    overrides = (stage.machinery_probabilities or {}) if stage else {}
+
+    status_to_prob = {
+        "MANDATORY": 0.95,
+        "RECOMMENDED": 0.75,
+        "NEUTRAL": 0.40,
+        "UNCHARACTERISTIC": 0.05,
+        "ОБЯЗАТЕЛЬНАЯ": 0.95,
+        "РЕКОМЕНДОВАННАЯ": 0.75,
+        "ДОПУСТИМАЯ": 0.40,
+        "НЕ ДОПУСКАЕТСЯ": 0.05,
+    }
 
     items: list[MachineryProbabilityItem] = []
     # Map all 10 specialized classes
     for cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
-        # Match probability from StageMachineryService output
-        prob = prob_profile.probabilities.get(raw_label, 0.0)
-        if prob == 0.0:
-            prob = prob_profile.probabilities.get(label_ru.lower(), 0.0)
+        override_val = overrides.get(code) or overrides.get(raw_label) or overrides.get(label_ru)
+        if override_val is not None:
+            if isinstance(override_val, str) and override_val.strip().upper() in status_to_prob:
+                prob = status_to_prob[override_val.strip().upper()]
+            else:
+                try:
+                    prob = float(override_val)
+                except (ValueError, TypeError):
+                    prob = 0.5
+        else:
+            # Match probability from StageMachineryService output
+            prob = prob_profile.probabilities.get(raw_label, 0.0)
+            if prob == 0.0:
+                prob = prob_profile.probabilities.get(label_ru.lower(), 0.0)
 
         # Classification rule thresholds
         if prob > 0.8:
@@ -280,3 +303,47 @@ def get_stage_probabilities(
         probabilities=items,
         top_machinery=top_machinery,
     )
+
+
+@router.get("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
+def get_stage_probabilities(
+    stage_id: str, db: DbSession
+) -> StageProbabilityResponse:
+    """Получить распределение вероятностей техники для детального экрана этапа."""
+    stage = _find_stage(stage_id, db)
+    return _build_stage_probability_response(stage)
+
+
+@router.put("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
+def update_stage_probabilities(
+    stage_id: str,
+    payload: StageMachineryOverrideRequest,
+    db: DbSession,
+) -> StageProbabilityResponse:
+    """Ручная настройка статуса/вероятности техники на этапе."""
+    stage = _find_stage(stage_id, db)
+    if not stage:
+        raise HTTPException(status_code=404, detail="Этап не найден")
+
+    current_overrides = dict(stage.machinery_probabilities or {})
+    current_overrides.update(payload.overrides)
+    stage.machinery_probabilities = current_overrides
+    db.commit()
+    db.refresh(stage)
+    return _build_stage_probability_response(stage)
+
+
+@router.delete("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
+def reset_stage_probabilities(
+    stage_id: str,
+    db: DbSession,
+) -> StageProbabilityResponse:
+    """Сбросить ручные настройки техники к расчётам по справочнику/AI."""
+    stage = _find_stage(stage_id, db)
+    if not stage:
+        raise HTTPException(status_code=404, detail="Этап не найден")
+
+    stage.machinery_probabilities = {}
+    db.commit()
+    db.refresh(stage)
+    return _build_stage_probability_response(stage)

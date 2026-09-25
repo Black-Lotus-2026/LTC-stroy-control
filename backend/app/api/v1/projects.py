@@ -18,8 +18,10 @@ from app.schemas.stroy_control import (
     CameraUpdate,
     ProjectCreate,
     ProjectItem,
+    ProjectUpdate,
     ZoneCreate,
     ZoneItem,
+    ZoneUpdate,
 )
 
 router = APIRouter(prefix="/projects", tags=["Объекты и стройплощадки"])
@@ -184,6 +186,81 @@ def delete_project(project_id: uuid.UUID, db: DbSession) -> None:
     db.commit()
 
 
+@router.patch("/{project_id}", response_model=ProjectItem)
+def update_project(
+    project_id: uuid.UUID,
+    data: ProjectUpdate,
+    db: DbSession,
+) -> ProjectItem:
+    """Обновить информацию об объекте строительства."""
+    project = (
+        db.scalars(
+            select(Project)
+            .options(selectinload(Project.zones), selectinload(Project.cameras))
+            .where(Project.id == project_id)
+        )
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Объект строительства не найден")
+
+    if data.name is not None and data.name.strip():
+        project.name = data.name.strip()
+    if data.code is not None and data.code.strip():
+        project.code = data.code.strip()
+    if data.address is not None:
+        project.address = data.address.strip() if data.address.strip() else None
+    if data.object_kind is not None and data.object_kind.strip():
+        project.object_kind = data.object_kind.strip()
+    if data.status is not None and data.status.strip():
+        project.status = data.status.strip()
+
+    db.commit()
+    db.refresh(project)
+
+    stage_count = (
+        db.scalar(
+            select(func.count(ScheduleTask.id)).where(
+                ScheduleTask.project_id == project.id
+            )
+        )
+        or 0
+    )
+
+    return ProjectItem(
+        id=project.id,
+        code=project.code,
+        name=project.name,
+        address=project.address,
+        object_kind=project.object_kind,
+        status=project.status,
+        zones=[
+            ZoneItem(
+                id=z.id,
+                project_id=z.project_id,
+                code=z.code,
+                name=z.name,
+                description=z.description,
+                status=z.status,
+            )
+            for z in project.zones
+        ],
+        cameras=[
+            CameraItem(
+                id=c.id,
+                project_id=c.project_id,
+                zone_id=c.zone_id,
+                code=c.code,
+                name=c.name,
+                stream_url=c.stream_url,
+                status=c.status.value if hasattr(c.status, "value") else str(c.status),
+            )
+            for c in project.cameras
+        ],
+        stages_count=stage_count,
+    )
+
+
 @router.get("/{project_id}/zones", response_model=list[ZoneItem])
 def list_zones(project_id: uuid.UUID, db: DbSession) -> list[ZoneItem]:
     """Получить стройплощадки (зоны/участки) объекта."""
@@ -232,6 +309,59 @@ def create_zone(project_id: uuid.UUID, data: ZoneCreate, db: DbSession) -> ZoneI
         description=zone.description,
         status=zone.status,
     )
+
+
+@router.patch("/{project_id}/zones/{zone_id}", response_model=ZoneItem)
+def update_zone(
+    project_id: uuid.UUID,
+    zone_id: uuid.UUID,
+    data: ZoneUpdate,
+    db: DbSession,
+) -> ZoneItem:
+    """Обновить стройплощадку (участок/зону)."""
+    zone = db.scalars(
+        select(Zone).where(Zone.id == zone_id, Zone.project_id == project_id)
+    ).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="Стройплощадка не найдена")
+
+    if data.name is not None and data.name.strip():
+        zone.name = data.name.strip()
+    if data.code is not None and data.code.strip():
+        zone.code = data.code.strip()
+    if data.description is not None:
+        zone.description = data.description.strip() if data.description.strip() else None
+    if data.status is not None and data.status.strip():
+        zone.status = data.status.strip()
+
+    db.commit()
+    db.refresh(zone)
+
+    return ZoneItem(
+        id=zone.id,
+        project_id=zone.project_id,
+        code=zone.code,
+        name=zone.name,
+        description=zone.description,
+        status=zone.status,
+    )
+
+
+@router.delete("/{project_id}/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_zone(
+    project_id: uuid.UUID,
+    zone_id: uuid.UUID,
+    db: DbSession,
+) -> None:
+    """Удалить стройплощадку (участок/зону)."""
+    zone = db.scalars(
+        select(Zone).where(Zone.id == zone_id, Zone.project_id == project_id)
+    ).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="Стройплощадка не найдена")
+
+    db.delete(zone)
+    db.commit()
 
 
 @router.get("/{project_id}/cameras", response_model=list[CameraItem])

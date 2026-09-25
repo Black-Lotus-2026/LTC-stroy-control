@@ -265,7 +265,16 @@ export const StageAnalytics: React.FC<StageAnalyticsProps> = ({ selectedStage, o
 
             {/* View 2: Multi-dimensional RadarChart */}
             {activeTab === 'radarchart' && (
-              <div className="flex flex-col md:flex-row items-center justify-center gap-6 py-2">
+              <div className="flex flex-col items-center justify-center gap-4 py-2">
+                <div className="text-center">
+                  <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest block mb-0.5">
+                    Многомерный профиль распределения
+                  </span>
+                  <h3 className="text-sm font-extrabold text-white uppercase tracking-wider">
+                    ПРОФИЛЬ ТЕХНИКИ НА ЭТАПЕ
+                  </h3>
+                </div>
+                <div className="flex flex-col md:flex-row items-center justify-center gap-6">
                 <div className="relative">
                   <svg width="280" height="280" className="overflow-visible">
                     {/* Concentric Web Rings (25%, 50%, 75%, 100%) */}
@@ -377,8 +386,9 @@ export const StageAnalytics: React.FC<StageAnalyticsProps> = ({ selectedStage, o
                   </div>
                 </div>
               </div>
-            )}
-          </>
+            </div>
+          )}
+        </>
         )}
       </div>
     </div>

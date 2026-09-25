@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -139,6 +140,13 @@ class StageProbabilityResponse(BaseModel):
     top_machinery: list[str]
 
 
+class StageMachineryOverrideRequest(BaseModel):
+    overrides: dict[str, Any] = Field(
+        ...,
+        description="Словарь переопределений статуса/вероятности техники",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Incidents & VLM Verification Models
 # ---------------------------------------------------------------------------
@@ -197,6 +205,13 @@ class ZoneItem(BaseModel):
     status: str = "active"
 
 
+class ZoneUpdate(BaseModel):
+    name: str | None = Field(None, description="Название стройплощадки/участка")
+    code: str | None = Field(None, description="Код участка")
+    description: str | None = Field(None, description="Описание или назначение зоны")
+    status: str | None = Field(None, description="Статус площадки (active/archived)")
+
+
 class CameraCreate(BaseModel):
     name: str = Field(..., description="Название камеры")
     code: str | None = Field(None, description="Код камеры, например 'CAM-01'")
@@ -229,6 +244,14 @@ class ProjectCreate(BaseModel):
     code: str | None = Field(None, description="Уникальный код объекта")
     address: str | None = Field(None, description="Адрес объекта")
     object_kind: str | None = Field("Жильё", description="Категория/тип объекта")
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(None, description="Название объекта строительства")
+    code: str | None = Field(None, description="Уникальный код объекта")
+    address: str | None = Field(None, description="Адрес объекта")
+    object_kind: str | None = Field(None, description="Категория/тип объекта")
+    status: str | None = Field(None, description="Статус объекта")
 
 
 class ProjectItem(BaseModel):

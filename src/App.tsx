@@ -14,8 +14,12 @@ import {
   CameraItem,
   fetchProjects,
   createProject,
+  updateProject,
+  deleteProject,
   fetchProjectZones,
   createProjectZone,
+  updateZone,
+  deleteZone,
   fetchCameras,
   createCamera,
   updateCamera,
@@ -29,6 +33,8 @@ import {
   cascadeShiftStages,
   uploadVideoAsset,
   fetchStageProbabilities,
+  updateStageProbabilities,
+  resetStageProbabilities,
   MachineryProbabilityItem,
   detectFrameImage,
   getCurrentStageByDate,
@@ -1259,13 +1265,16 @@ function Progress({
 function Analytics({
   stages,
   navigate,
+  toast,
 }: {
   stages: StageItem[]
   navigate: (p: PageKey) => void
+  toast?: (s: string) => void
 }) {
   const [selectedStageId, setSelectedStageId] = useState<string>('')
   const [probItems, setProbItems] = useState<MachineryProbabilityItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [hasCustomOverride, setHasCustomOverride] = useState(false)
 
   // Automatically select the active stage on today's date (2026-09-24)
   useEffect(() => {
@@ -1289,13 +1298,71 @@ function Analytics({
 
   const selectedStage = stages.find((s) => s.id === selectedStageId) || stages[0]
 
+  // Status mapping
+  type ClassificationType = MachineryProbabilityItem['classification']
+  const statusMeta: Record<ClassificationType, { prob: number; level: string; cls: string }> = {
+    MANDATORY: { prob: 0.95, level: 'Обязательная', cls: 'mandatory' },
+    RECOMMENDED: { prob: 0.75, level: 'Рекомендованная', cls: 'recommended' },
+    NEUTRAL: { prob: 0.40, level: 'Допустимая', cls: 'neutral' },
+    UNCHARACTERISTIC: { prob: 0.05, level: 'Не допускается', cls: 'uncharacteristic' },
+  }
+
+  // Handle manual status override by user
+  const handleStatusChange = async (machineryCode: string, newStatus: string) => {
+    const validStatus = (['MANDATORY', 'RECOMMENDED', 'NEUTRAL', 'UNCHARACTERISTIC'].includes(newStatus)
+      ? newStatus
+      : 'NEUTRAL') as ClassificationType
+    const meta = statusMeta[validStatus]
+
+    // 1. Optimistic state update
+    setProbItems((prev) =>
+      prev.map((item) =>
+        item.machinery_code === machineryCode
+          ? {
+              ...item,
+              probability: meta.prob,
+              requirement_level: meta.level,
+              classification: validStatus,
+            }
+          : item
+      )
+    )
+    setHasCustomOverride(true)
+
+    // 2. Persist to API
+    try {
+      await updateStageProbabilities(selectedStageId, { [machineryCode]: validStatus })
+      toast?.(`Статус техники обновлён: «${meta.level}»`)
+    } catch {
+      toast?.(`Статус обновлён локально`)
+    }
+  }
+
+  // Reset manual overrides to AI calculation
+  const handleResetProbabilities = async () => {
+    setIsLoading(true)
+    try {
+      const res = await resetStageProbabilities(selectedStageId)
+      setProbItems(res.probabilities || [])
+      setHasCustomOverride(false)
+      toast?.('Профиль сброшен к автоматическому расчёту AI/ГЭСН')
+    } catch {
+      const res = await fetchStageProbabilities(selectedStageId)
+      setProbItems(res.probabilities || [])
+      setHasCustomOverride(false)
+      toast?.('Профиль возвращен к авто-расчёту')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   // Radar chart SVG geometry
   const radarRadius = 90
-  const centerCoord = 110
+  const centerCoord = 140
   const count = probItems.length || 10
   const points = probItems.map((item, idx) => {
     const angle = (Math.PI * 2 * idx) / count - Math.PI / 2
-    const dist = Math.max(0.06, Math.min(1.0, item.probability)) * radarRadius
+    const dist = Math.max(0.08, Math.min(1.0, item.probability)) * radarRadius
     const x = centerCoord + dist * Math.cos(angle)
     const y = centerCoord + dist * Math.sin(angle)
     return { x, y, item, angle }
@@ -1327,11 +1394,24 @@ function Analytics({
                       АКТИВЕН СЕГОДНЯ (24.09.2026)
                     </span>
                   )}
+                  {hasCustomOverride && (
+                    <span style={{ background: '#1e3a8a', color: '#93c5fd', fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '3px', border: '1px solid #3b82f6' }}>
+                      Ручная настройка
+                    </span>
+                  )}
                 </div>
                 <h2>Вероятностное распределение строительной техники (10 классов)</h2>
               </div>
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Этап:</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  className="button"
+                  style={{ fontSize: '11px', padding: '3px 8px', height: '28px' }}
+                  onClick={handleResetProbabilities}
+                  title="Сбросить все ручные изменения к расчету по справочнику ГЭСН"
+                >
+                  ⟲ Авто-расчёт
+                </button>
+                <span style={{ fontSize: '11px', color: 'var(--muted)', marginLeft: '6px' }}>Этап:</span>
                 <select
                   value={selectedStageId}
                   onChange={(e) => setSelectedStageId(e.target.value)}
@@ -1349,14 +1429,14 @@ function Analytics({
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1.2fr) minmax(280px, 1fr)', gap: '20px', alignItems: 'start' }}>
-              {/* Table of 10 machinery probabilities */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 1.3fr) minmax(300px, 1fr)', gap: '20px', alignItems: 'start' }}>
+              {/* Table of 10 machinery probabilities with manual status customization */}
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 60px 100px', gap: '8px', padding: '6px 8px', fontSize: '10px', color: 'var(--muted)', borderBottom: '1px solid #35373c' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 50px 140px', gap: '8px', padding: '6px 8px', fontSize: '10px', color: 'var(--muted)', borderBottom: '1px solid #35373c' }}>
                   <span>Класс техники</span>
                   <span>Вероятность</span>
                   <span style={{ textAlign: 'right' }}>%</span>
-                  <span style={{ textAlign: 'right' }}>Статус</span>
+                  <span style={{ textAlign: 'center' }}>Статус (настройка)</span>
                 </div>
                 {isLoading ? (
                   <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)' }}>Расчёт вероятностей...</div>
@@ -1366,10 +1446,10 @@ function Analytics({
                       key={item.machinery_code}
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '140px 1fr 60px 100px',
+                        gridTemplateColumns: '130px 1fr 50px 140px',
                         gap: '8px',
                         alignItems: 'center',
-                        padding: '8px',
+                        padding: '6px 8px',
                         borderBottom: '1px solid #222327',
                         fontSize: '11px',
                       }}
@@ -1384,20 +1464,56 @@ function Analytics({
                       <span style={{ textAlign: 'right', fontWeight: 600, color: '#fff' }}>
                         {Math.round(item.probability * 100)}%
                       </span>
-                      <span style={{ textAlign: 'right' }}>
-                        <span className={`prob-badge ${item.classification.toLowerCase()}`}>
-                          {item.requirement_level}
-                        </span>
-                      </span>
+                      <div style={{ display: 'flex', justifyContent: 'center' }}>
+                        <select
+                          value={item.classification}
+                          onChange={(e) => handleStatusChange(item.machinery_code, e.target.value)}
+                          style={{
+                            background: '#121417',
+                            color:
+                              item.classification === 'MANDATORY'
+                                ? '#34d399'
+                                : item.classification === 'RECOMMENDED'
+                                ? '#60a5fa'
+                                : item.classification === 'NEUTRAL'
+                                ? '#cbd5e1'
+                                : '#f87171',
+                            border: '1px solid #35373c',
+                            borderRadius: '4px',
+                            padding: '2px 4px',
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            width: '100%',
+                            maxWidth: '135px',
+                          }}
+                          title="Ручная настройка статуса техники на данном этапе"
+                        >
+                          <option value="MANDATORY">🟢 Обязательная</option>
+                          <option value="RECOMMENDED">🔵 Рекомендованная</option>
+                          <option value="NEUTRAL">⚪ Допустимая</option>
+                          <option value="UNCHARACTERISTIC">🔴 Не допускается</option>
+                        </select>
+                      </div>
                     </div>
                   ))
                 )}
               </div>
 
-              {/* Radar Chart */}
-              <div className="radar-container" style={{ background: '#1c1e22', border: '1px solid #35373c', padding: '16px' }}>
-                <span className="section-kicker" style={{ marginBottom: '8px' }}>ПРОФИЛЬ ТЕХНИКИ НА ЭТАПЕ</span>
-                <svg width="220" height="220" viewBox="0 0 220 220">
+              {/* Radar Chart (Роза ветров) with prominent title */}
+              <div className="radar-container" style={{ background: '#1c1e22', border: '1px solid #35373c', padding: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div style={{ width: '100%', textAlign: 'center', marginBottom: '8px' }}>
+                  <span className="section-kicker" style={{ color: '#cf9d3d', fontSize: '9px' }}>РОЗА ВЕТРОВ РАСПРЕДЕЛЕНИЯ</span>
+                  <h3 style={{ margin: '2px 0 0', fontSize: '14px', fontWeight: 800, color: '#ffffff', letterSpacing: '0.6px' }}>
+                    ПРОФИЛЬ ТЕХНИКИ НА ЭТАПЕ
+                  </h3>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', marginTop: '2px' }}>
+                    {selectedStage?.name || 'Выбранный этап'}
+                  </div>
+                </div>
+
+                <svg width="280" height="280" viewBox="0 0 280 280" style={{ overflow: 'visible' }}>
+                  {/* Concentric rings */}
                   {[0.25, 0.5, 0.75, 1.0].map((level) => (
                     <circle
                       key={level}
@@ -1409,17 +1525,58 @@ function Analytics({
                       strokeDasharray={level < 1.0 ? '2,3' : undefined}
                     />
                   ))}
-                  {polyPoints && <polygon points={polyPoints} fill="rgba(207,157,61,.25)" stroke="#cf9d3d" strokeWidth="2" />}
+
+                  {/* Radial axes */}
                   {points.map((p, idx) => (
-                    <g key={idx}>
-                      <line x1={centerCoord} y1={centerCoord} x2={centerCoord + radarRadius * Math.cos(p.angle)} y2={centerCoord + radarRadius * Math.sin(p.angle)} stroke="#2a2c30" />
-                      <circle cx={p.x} cy={p.y} r="3" fill="#cf9d3d" />
-                    </g>
+                    <line
+                      key={idx}
+                      x1={centerCoord}
+                      y1={centerCoord}
+                      x2={centerCoord + radarRadius * Math.cos(p.angle)}
+                      y2={centerCoord + radarRadius * Math.sin(p.angle)}
+                      stroke="#2a2c30"
+                    />
                   ))}
+
+                  {/* Filled radar polygon */}
+                  {polyPoints && <polygon points={polyPoints} fill="rgba(207,157,61,.30)" stroke="#cf9d3d" strokeWidth="2" />}
+
+                  {/* Data points & labels */}
+                  {points.map((p, idx) => {
+                    const labelDist = radarRadius + 16
+                    const lx = centerCoord + labelDist * Math.cos(p.angle)
+                    const ly = centerCoord + labelDist * Math.sin(p.angle)
+                    const textAnchor = Math.cos(p.angle) > 0.2 ? 'start' : Math.cos(p.angle) < -0.2 ? 'end' : 'middle'
+                    return (
+                      <g key={idx}>
+                        <circle cx={p.x} cy={p.y} r="3.5" fill="#cf9d3d" stroke="#0b0d10" strokeWidth="1" />
+                        <text
+                          x={lx}
+                          y={ly}
+                          textAnchor={textAnchor}
+                          dominantBaseline="central"
+                          fill="#9ca3af"
+                          fontSize="9"
+                          fontWeight={p.item.probability >= 0.6 ? 700 : 400}
+                        >
+                          {p.item.machinery_name_ru}
+                        </text>
+                      </g>
+                    )
+                  })}
                 </svg>
-                <small style={{ color: 'var(--muted)', fontSize: '10px', marginTop: '8px' }}>
-                  {selectedStage?.name || 'Выбранный этап'}
-                </small>
+
+                <div style={{ display: 'flex', gap: '12px', marginTop: '14px', fontSize: '9.5px', color: 'var(--muted)' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34d399' }} /> &gt;80% Обязательная
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#60a5fa' }} /> 60-80% Рекомендованная
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f87171' }} /> &lt;15% Не допускается
+                  </span>
+                </div>
               </div>
             </div>
           </section>
@@ -1503,105 +1660,323 @@ function Reports({
 // ----------------------------------------------------------------------------
 function Settings({
   activeProject,
+  projectsList,
+  onSelectProject,
+  onUpdateProject,
+  onDeleteProject,
+  setIsCreateProjectOpen,
   activeZones,
+  onAddZone,
+  onEditZone,
+  onDeleteZone,
   camerasList,
-  setIsCreateZoneOpen,
   onAddCamera,
   onEditCamera,
   onDeleteCamera,
   toast,
 }: {
   activeProject?: ProjectItem
+  projectsList: ProjectItem[]
+  onSelectProject: (projectId: string) => void
+  onUpdateProject: (
+    projectId: string,
+    data: { name: string; code: string; address?: string; object_kind?: string; status?: string }
+  ) => Promise<void>
+  onDeleteProject: (projectId: string) => Promise<void>
+  setIsCreateProjectOpen: (b: boolean) => void
   activeZones: ZoneItem[]
+  onAddZone: () => void
+  onEditZone: (zone: ZoneItem) => void
+  onDeleteZone: (zone: ZoneItem) => Promise<void>
   camerasList: CameraItem[]
-  setIsCreateZoneOpen: (b: boolean) => void
   onAddCamera: () => void
   onEditCamera: (camera: CameraItem) => void
   onDeleteCamera: (camera: CameraItem) => void
   toast: (s: string) => void
 }) {
+  const [activeTab, setActiveTab] = useState<'general' | 'zones' | 'cameras'>('general')
+
+  // Form state for active project
+  const [name, setName] = useState(activeProject?.name || '')
+  const [code, setCode] = useState(activeProject?.code || '')
+  const [address, setAddress] = useState(activeProject?.address || '')
+  const [objectKind, setObjectKind] = useState(activeProject?.object_kind || 'Жильё')
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Synchronize when activeProject changes
+  useEffect(() => {
+    setName(activeProject?.name || '')
+    setCode(activeProject?.code || '')
+    setAddress(activeProject?.address || '')
+    setObjectKind(activeProject?.object_kind || 'Жильё')
+  }, [activeProject?.id])
+
+  const handleSaveProject = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!activeProject) return
+    if (!name.trim()) {
+      toast('Название объекта не может быть пустым')
+      return
+    }
+    setIsSaving(true)
+    try {
+      await onUpdateProject(activeProject.id, {
+        name: name.trim(),
+        code: code.trim() || activeProject.code,
+        address: address.trim() || undefined,
+        object_kind: objectKind,
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleDeleteProjectClick = async () => {
+    if (!activeProject) return
+    await onDeleteProject(activeProject.id)
+  }
+
   return (
     <div className="settings-page">
       <nav className="settings-nav panel">
-        <button className="active">Общие</button>
-        <button>Стройплощадки ({activeZones.length})</button>
-        <button>Камеры ({camerasList.length})</button>
-        <button>Правила наблюдения</button>
+        <button
+          className={activeTab === 'general' ? 'active' : ''}
+          onClick={() => setActiveTab('general')}
+        >
+          Общие
+        </button>
+        <button
+          className={activeTab === 'zones' ? 'active' : ''}
+          onClick={() => setActiveTab('zones')}
+        >
+          Стройплощадки ({activeZones.length})
+        </button>
+        <button
+          className={activeTab === 'cameras' ? 'active' : ''}
+          onClick={() => setActiveTab('cameras')}
+        >
+          Камеры ({camerasList.length})
+        </button>
       </nav>
+
       <section className="settings-content panel">
-        <div className="settings-heading">
-          <div>
-            <span className="section-kicker">ОБЪЕКТ СТРОИТЕЛЬСТВА</span>
-            <h2>{activeProject?.name || 'Настройки проекта'}</h2>
-            <p>Параметры объекта, стройплощадок и подключенного видеонаблюдения.</p>
-          </div>
-          <button className="button primary" onClick={() => toast('Настройки сохранены')}>
-            Сохранить
-          </button>
-        </div>
-        <div className="form-grid">
-          <label>
-            Название объекта
-            <input defaultValue={activeProject?.name || ''} />
-          </label>
-          <label>
-            Код объекта
-            <input defaultValue={activeProject?.code || ''} />
-          </label>
-          <label>
-            Адрес объекта
-            <input defaultValue={activeProject?.address || ''} />
-          </label>
-          <label>
-            Тип объекта
-            <select defaultValue={activeProject?.object_kind || 'Жильё'}>
-              <option>Жильё</option>
-              <option>Промышленное строительство</option>
-              <option>Инфраструктура</option>
-              <option>Социальный объект</option>
-            </select>
-          </label>
-        </div>
-
-        <h3>Стройплощадки объекта</h3>
-        <div style={{ marginBottom: '14px' }}>
-          {activeZones.map((z) => (
-            <div key={z.id} className="setting-row">
+        {/* Tab 1: General (Projects) */}
+        {activeTab === 'general' && (
+          <>
+            <div className="settings-heading">
               <div>
-                <strong>{z.name} ({z.code})</strong>
-                <span>{z.description || 'Без описания'}</span>
+                <span className="section-kicker">ОБЪЕКТ СТРОИТЕЛЬСТВА</span>
+                <h2>{activeProject?.name || 'Настройки проекта'}</h2>
+                <p>Управление объектами строительства, их параметрами и жизненным циклом.</p>
               </div>
-              <Status tone="success">{z.status}</Status>
-            </div>
-          ))}
-          <button className="button" style={{ marginTop: '8px' }} onClick={() => setIsCreateZoneOpen(true)}>
-            + Добавить стройплощадку
-          </button>
-        </div>
-
-        <h3>Камеры видеонаблюдения</h3>
-        <div>
-          {camerasList.map((c) => (
-            <div key={c.id} className="setting-row">
-              <div>
-                <strong>{c.code} · {c.name}</strong>
-                <span>{c.stream_url || 'Локальный канал'}</span>
-              </div>
-              <div className="setting-row-actions">
-                <Status tone={c.status === 'online' ? 'success' : 'critical'}>{c.status}</Status>
-                <button className="button" type="button" onClick={() => onEditCamera(c)}>
-                  Изменить
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button className="button" type="button" onClick={() => setIsCreateProjectOpen(true)}>
+                  + Новый объект
                 </button>
-                <button className="button danger" type="button" onClick={() => onDeleteCamera(c)}>
-                  Удалить
+                {activeProject && (
+                  <button
+                    className="button danger"
+                    type="button"
+                    onClick={handleDeleteProjectClick}
+                    title="Удалить данный объект строительства"
+                  >
+                    Удалить объект
+                  </button>
+                )}
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={isSaving || !activeProject}
+                  onClick={handleSaveProject}
+                >
+                  {isSaving ? 'Сохранение...' : 'Сохранить изменения'}
                 </button>
               </div>
             </div>
-          ))}
-          <button className="button" style={{ marginTop: '8px' }} onClick={onAddCamera}>
-            + Подключить камеру
-          </button>
-        </div>
+
+            {projectsList.length > 1 && (
+              <div
+                style={{
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: '#1c1e22',
+                  padding: '10px 14px',
+                  borderRadius: '6px',
+                  border: '1px solid #35373c',
+                }}
+              >
+                <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Выбрать объект:</span>
+                <select
+                  value={activeProject?.id || ''}
+                  onChange={(e) => onSelectProject(e.target.value)}
+                  style={{
+                    background: '#121417',
+                    border: '1px solid #4a4d53',
+                    color: '#fff',
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  {projectsList.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.code}) — {p.zones.length} площадок, {p.cameras.length} камер
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveProject} className="form-grid">
+              <label>
+                Название объекта *
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="например, ЖК «Северный», корпус 2"
+                  required
+                />
+              </label>
+              <label>
+                Код объекта
+                <input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="PRJ-SEV"
+                />
+              </label>
+              <label>
+                Адрес объекта
+                <input
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="г. Москва, ул. Полярная, 18"
+                />
+              </label>
+              <label>
+                Тип объекта
+                <select
+                  value={objectKind}
+                  onChange={(e) => setObjectKind(e.target.value)}
+                >
+                  <option>Жильё</option>
+                  <option>Промышленное строительство</option>
+                  <option>Инфраструктура</option>
+                  <option>Социальный объект</option>
+                </select>
+              </label>
+            </form>
+          </>
+        )}
+
+        {/* Tab 2: Construction Sites (Zones) */}
+        {activeTab === 'zones' && (
+          <>
+            <div className="settings-heading">
+              <div>
+                <span className="section-kicker">СТРОЙПЛОЩАДКИ ОБЪЕКТА</span>
+                <h2>Участки и зоны: {activeProject?.name}</h2>
+                <p>Управление отдельными стройплощадками, захватками и секциями строительства.</p>
+              </div>
+              <button className="button primary" onClick={onAddZone}>
+                + Добавить стройплощадку
+              </button>
+            </div>
+
+            <div style={{ marginBottom: '14px' }}>
+              {activeZones.length === 0 ? (
+                <div
+                  style={{
+                    padding: '24px',
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    background: '#1c1e22',
+                    borderRadius: '6px',
+                    border: '1px solid #2e3035',
+                  }}
+                >
+                  Стройплощадки еще не добавлены к объекту. Нажмите «+ Добавить стройплощадку».
+                </div>
+              ) : (
+                activeZones.map((z) => (
+                  <div key={z.id} className="setting-row">
+                    <div>
+                      <strong>
+                        {z.name}{' '}
+                        <span style={{ color: 'var(--muted)', fontSize: '11px', fontWeight: 400 }}>
+                          ({z.code})
+                        </span>
+                      </strong>
+                      <span>{z.description || 'Без описания'}</span>
+                    </div>
+                    <div className="setting-row-actions">
+                      <Status tone="success">{z.status}</Status>
+                      <button className="button" type="button" onClick={() => onEditZone(z)}>
+                        Изменить
+                      </button>
+                      <button className="button danger" type="button" onClick={() => onDeleteZone(z)}>
+                        Удалить
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Tab 3: Cameras */}
+        {activeTab === 'cameras' && (
+          <>
+            <div className="settings-heading">
+              <div>
+                <span className="section-kicker">ВИДЕОНАБЛЮДЕНИЕ</span>
+                <h2>Камеры объекта: {activeProject?.name}</h2>
+                <p>Подключение и настройка IP/RTSP/HLS камер по стройплощадкам.</p>
+              </div>
+              <button className="button primary" onClick={onAddCamera}>
+                + Подключить камеру
+              </button>
+            </div>
+
+            <div>
+              {camerasList.length === 0 ? (
+                <div
+                  style={{
+                    padding: '24px',
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    background: '#1c1e22',
+                    borderRadius: '6px',
+                    border: '1px solid #2e3035',
+                  }}
+                >
+                  Камеры еще не подключены. Нажмите «+ Подключить камеру».
+                </div>
+              ) : (
+                camerasList.map((c) => (
+                  <div key={c.id} className="setting-row">
+                    <div>
+                      <strong>{c.code} · {c.name}</strong>
+                      <span>{c.stream_url || 'Локальный канал'}</span>
+                    </div>
+                    <div className="setting-row-actions">
+                      <Status tone={c.status === 'online' ? 'success' : 'critical'}>{c.status}</Status>
+                      <button className="button" type="button" onClick={() => onEditCamera(c)}>
+                        Изменить
+                      </button>
+                      <button className="button danger" type="button" onClick={() => onDeleteCamera(c)}>
+                        Удалить
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
       </section>
     </div>
   )
@@ -1637,6 +2012,7 @@ export default function App() {
   // Dialogs
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false)
   const [isCreateZoneOpen, setIsCreateZoneOpen] = useState(false)
+  const [editingZone, setEditingZone] = useState<ZoneItem | null>(null)
   const [isCreateCameraOpen, setIsCameraModalOpen] = useState(false)
   const [editingCamera, setEditingCamera] = useState<CameraItem | null>(null)
   const [isUploadVideoOpen, setIsUploadModalOpen] = useState(false)
@@ -1828,8 +2204,42 @@ export default function App() {
     }
   }
 
-  // Handle Create Zone (Construction Site)
-  const handleCreateZoneSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  // Handle Update Project
+  const handleUpdateProject = async (
+    projectId: string,
+    data: { name: string; code: string; address?: string; object_kind?: string; status?: string }
+  ) => {
+    try {
+      const updated = await updateProject(projectId, data)
+      setProjectsList((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+      toast(`Объект «${updated.name}» успешно обновлен`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка обновления объекта')
+    }
+  }
+
+  // Handle Delete Project
+  const handleDeleteProject = async (projectId: string) => {
+    const prj = projectsList.find((p) => p.id === projectId)
+    if (!prj) return
+    if (!window.confirm(`Вы действительно хотите удалить объект «${prj.name}» со всеми участками и камерами?`)) {
+      return
+    }
+    try {
+      await deleteProject(projectId)
+      const remaining = projectsList.filter((p) => p.id !== projectId)
+      setProjectsList(remaining)
+      if (activeProjectId === projectId) {
+        setActiveProjectId(remaining[0]?.id || null)
+      }
+      toast(`Объект «${prj.name}» удален`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка удаления объекта')
+    }
+  }
+
+  // Handle Create / Edit Zone (Construction Site)
+  const handleZoneSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const targetProjectId = activeProjectId || projectsList[0]?.id
     if (!targetProjectId) {
@@ -1842,12 +2252,38 @@ export default function App() {
     const description = (form.elements.namedItem('zone_desc') as HTMLTextAreaElement).value
 
     try {
+      if (editingZone) {
+        const updated = await updateZone(targetProjectId, editingZone.id, {
+          name,
+          code: code || undefined,
+          description: description || undefined,
+        })
+        setActiveZones((prev) => prev.map((z) => (z.id === updated.id ? updated : z)))
+        setEditingZone(null)
+        setIsCreateZoneOpen(false)
+        toast(`Стройплощадка «${updated.name}» обновлена`)
+        return
+      }
+
       const created = await createProjectZone(targetProjectId, { name, code, description })
       setActiveZones((prev) => [...prev, created])
       setIsCreateZoneOpen(false)
       toast(`Стройплощадка «${created.name}» добавлена`)
     } catch (err: unknown) {
-      toast(err instanceof Error ? err.message : 'Ошибка создания площадки')
+      toast(err instanceof Error ? err.message : 'Ошибка сохранения площадки')
+    }
+  }
+
+  // Handle Delete Zone
+  const handleDeleteZone = async (zone: ZoneItem) => {
+    const targetProjectId = activeProjectId || projectsList[0]?.id
+    if (!targetProjectId || !window.confirm(`Удалить стройплощадку «${zone.name}»?`)) return
+    try {
+      await deleteZone(targetProjectId, zone.id)
+      setActiveZones((prev) => prev.filter((z) => z.id !== zone.id))
+      toast(`Стройплощадка «${zone.name}» удалена`)
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : 'Ошибка удаления площадки')
     }
   }
 
@@ -1982,9 +2418,22 @@ export default function App() {
         return (
           <Settings
             activeProject={activeProject}
+            projectsList={projectsList}
+            onSelectProject={(id) => setActiveProjectId(id)}
+            onUpdateProject={handleUpdateProject}
+            onDeleteProject={handleDeleteProject}
+            setIsCreateProjectOpen={setIsCreateProjectOpen}
             activeZones={activeZones}
+            onAddZone={() => {
+              setEditingZone(null)
+              setIsCreateZoneOpen(true)
+            }}
+            onEditZone={(zone) => {
+              setEditingZone(zone)
+              setIsCreateZoneOpen(true)
+            }}
+            onDeleteZone={handleDeleteZone}
             camerasList={camerasList}
-            setIsCreateZoneOpen={setIsCreateZoneOpen}
             onAddCamera={() => {
               setEditingCamera(null)
               setIsCameraModalOpen(true)
@@ -2000,7 +2449,7 @@ export default function App() {
       default:
         return null
     }
-  }, [page, stages, activeProject, activeZones, camerasList, selectedCameraId, uploadedVideoUrl, uploadedVideoName, videoTimestamp, activeProjectId])
+  }, [page, stages, activeProject, projectsList, activeZones, camerasList, selectedCameraId, uploadedVideoUrl, uploadedVideoName, videoTimestamp, activeProjectId])
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
@@ -2221,7 +2670,10 @@ export default function App() {
             <button
               className="button"
               style={{ padding: '0 8px', height: '32px', fontSize: '11px' }}
-              onClick={() => setIsCreateZoneOpen(true)}
+              onClick={() => {
+                setEditingZone(null)
+                setIsCreateZoneOpen(true)
+              }}
               disabled={!activeProjectId}
             >
               + Стройплощадка
@@ -2453,30 +2905,54 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal: Create Construction Site (Zone) */}
+      {/* Modal: Create / Edit Construction Site (Zone) */}
       {isCreateZoneOpen && (
         <div className="modal-backdrop">
-          <div className="dialog">
-            <h3>Создать стройплощадку</h3>
-            <p>Добавьте участок или зону внутри объекта «{activeProject?.name}».</p>
-            <form onSubmit={handleCreateZoneSubmit}>
+          <div className="dialog" key={editingZone?.id || 'new-zone'}>
+            <h3>{editingZone ? 'Редактировать стройплощадку' : 'Создать стройплощадку'}</h3>
+            <p>
+              {editingZone
+                ? `Измените наименование или параметры участка на объекте «${activeProject?.name}».`
+                : `Добавьте участок или зону внутри объекта «${activeProject?.name}».`}
+            </p>
+            <form onSubmit={handleZoneSubmit}>
               <label>
                 Наименование площадки/участка *
-                <input name="zone_name" placeholder="например, Котлован секции А" required />
+                <input
+                  name="zone_name"
+                  placeholder="например, Котлован секции А"
+                  defaultValue={editingZone?.name || ''}
+                  required
+                />
               </label>
               <label>
                 Код участка
-                <input name="zone_code" placeholder="например, A-01" />
+                <input
+                  name="zone_code"
+                  placeholder="например, A-01"
+                  defaultValue={editingZone?.code || ''}
+                />
               </label>
               <label>
                 Описание
-                <textarea name="zone_desc" placeholder="Краткое назначение участка" />
+                <textarea
+                  name="zone_desc"
+                  placeholder="Краткое назначение участка"
+                  defaultValue={editingZone?.description || ''}
+                />
               </label>
               <div className="dialog-actions">
                 <button type="submit" className="button primary">
-                  Создать площадку
+                  {editingZone ? 'Сохранить изменения' : 'Создать площадку'}
                 </button>
-                <button type="button" className="button" onClick={() => setIsCreateZoneOpen(false)}>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => {
+                    setIsCreateZoneOpen(false)
+                    setEditingZone(null)
+                  }}
+                >
                   Отмена
                 </button>
               </div>
