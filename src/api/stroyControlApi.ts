@@ -124,8 +124,22 @@ export interface ProjectItem {
   stages_count: number
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API_PREFIX = `${API_BASE_URL}/api/v1`
+function getApiBaseUrl(): string {
+  const envUrl = import.meta.env.VITE_API_URL
+  if (envUrl && typeof envUrl === 'string') {
+    // Windows Docker IPv6 bug: 'localhost' resolves to [::1] which hangs in Docker Windows bridge.
+    // Replace localhost with 127.0.0.1 to force direct IPv4 connection.
+    return envUrl.replace('://localhost', '://127.0.0.1')
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname
+    return `http://${host}:8000`
+  }
+  return 'http://127.0.0.1:8000'
+}
+
+export const API_BASE_URL = getApiBaseUrl()
+export const API_PREFIX = `${API_BASE_URL}/api/v1`
 
 // ----------------------------------------------------------------------------
 // Projects, Construction Sites (Zones), and Cameras API

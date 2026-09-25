@@ -261,7 +261,11 @@ def create_camera(project_id: uuid.UUID, data: CameraCreate, db: DbSession) -> C
     if not project:
         raise HTTPException(status_code=404, detail="Объект строительства не найден")
 
-    code = data.code.strip() if data.code and data.code.strip() else f"CAM-{uuid.uuid4().hex[:4].upper()}"
+    raw_code = data.code.strip() if data.code and data.code.strip() else f"CAM-{uuid.uuid4().hex[:4].upper()}"
+    code = raw_code
+    existing = db.scalars(select(Camera).where(Camera.code == code)).first()
+    if existing:
+        code = f"{raw_code}-{uuid.uuid4().hex[:4].upper()}"
 
     camera = Camera(
         project_id=project_id,

@@ -32,6 +32,7 @@ import {
   MachineryProbabilityItem,
   detectFrameImage,
   getCurrentStageByDate,
+  API_PREFIX,
 } from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
@@ -1642,7 +1643,7 @@ export default function App() {
     setIsCheckingStream(true)
     setStreamCheckResult(null)
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/videos/check-stream?url=${encodeURIComponent(url)}`)
+      const res = await fetch(`${API_PREFIX}/videos/check-stream?url=${encodeURIComponent(url)}`)
       const data = await res.json()
       setStreamCheckResult({
         status: data.status,
@@ -1668,7 +1669,7 @@ export default function App() {
     fetchProjects().then(async (prjs) => {
       if (prjs.length > 0) {
         setProjectsList(prjs)
-        setActiveProjectId(prjs[0].id)
+        setActiveProjectId((prev) => prev || prjs[0].id)
       } else {
         // Create initial default project if empty
         try {
@@ -1681,7 +1682,20 @@ export default function App() {
           setProjectsList([initPrj])
           setActiveProjectId(initPrj.id)
         } catch {
-          // offline fallback
+          // offline local fallback so controls are never disabled
+          const fallbackPrj: ProjectItem = {
+            id: 'local-default-prj',
+            code: 'PRJ-SEV',
+            name: 'ЖК «Северный», корпус 2',
+            address: 'г. Москва, ул. Полярная, 18',
+            object_kind: 'Жильё',
+            status: 'active',
+            zones: [],
+            cameras: [],
+            stages_count: 0,
+          }
+          setProjectsList([fallbackPrj])
+          setActiveProjectId(fallbackPrj.id)
         }
       }
     })
@@ -1719,7 +1733,7 @@ export default function App() {
 
     try {
       const created = await createProject({ name, address, object_kind: objectKind })
-      setProjectsList((prev) => [...prev, created])
+      setProjectsList((prev) => [...prev.filter((p) => p.id !== 'local-default-prj'), created])
       setActiveProjectId(created.id)
       setIsCreateProjectOpen(false)
       toast(`Объект «${created.name}» успешно создан`)
@@ -1731,14 +1745,18 @@ export default function App() {
   // Handle Create Zone (Construction Site)
   const handleCreateZoneSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!activeProjectId) return
+    const targetProjectId = activeProjectId || projectsList[0]?.id
+    if (!targetProjectId) {
+      toast('Сначала выберите или создайте объект')
+      return
+    }
     const form = e.currentTarget
     const name = (form.elements.namedItem('zone_name') as HTMLInputElement).value
     const code = (form.elements.namedItem('zone_code') as HTMLInputElement).value
     const description = (form.elements.namedItem('zone_desc') as HTMLTextAreaElement).value
 
     try {
-      const created = await createProjectZone(activeProjectId, { name, code, description })
+      const created = await createProjectZone(targetProjectId, { name, code, description })
       setActiveZones((prev) => [...prev, created])
       setIsCreateZoneOpen(false)
       toast(`Стройплощадка «${created.name}» добавлена`)
@@ -1750,7 +1768,11 @@ export default function App() {
   // Handle camera creation and editing in one form.
   const handleCameraSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!activeProjectId) return
+    const targetProjectId = activeProjectId || projectsList[0]?.id
+    if (!targetProjectId) {
+      toast('Сначала выберите или создайте объект')
+      return
+    }
     const form = e.currentTarget
     const name = (form.elements.namedItem('cam_name') as HTMLInputElement).value
     const code = (form.elements.namedItem('cam_code') as HTMLInputElement).value
@@ -1759,7 +1781,7 @@ export default function App() {
 
     try {
       if (editingCamera) {
-        const updated = await updateCamera(activeProjectId, editingCamera.id, {
+        const updated = await updateCamera(targetProjectId, editingCamera.id, {
           name,
           code,
           stream_url: streamUrl,
@@ -1772,7 +1794,7 @@ export default function App() {
         return
       }
 
-      const created = await createCamera(activeProjectId, {
+      const created = await createCamera(targetProjectId, {
         name,
         code: code || undefined,
         stream_url: streamUrl || undefined,
@@ -1790,9 +1812,10 @@ export default function App() {
   }
 
   const handleDeleteCamera = async (camera: CameraItem) => {
-    if (!activeProjectId || !window.confirm(`Удалить камеру «${camera.name}»?`)) return
+    const targetProjectId = activeProjectId || projectsList[0]?.id
+    if (!targetProjectId || !window.confirm(`Удалить камеру «${camera.name}»?`)) return
     try {
-      await deleteCamera(activeProjectId, camera.id)
+      await deleteCamera(targetProjectId, camera.id)
       const remaining = camerasList.filter((item) => item.id !== camera.id)
       setCamerasList(remaining)
       if (selectedCameraId === camera.id) {
