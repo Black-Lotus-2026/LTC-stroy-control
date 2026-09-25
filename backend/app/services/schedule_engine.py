@@ -103,8 +103,14 @@ class ScheduleEngine:
         project_id: uuid.UUID | None = None,
     ) -> list[ScheduleTask]:
         """Parse uploaded schedule bytes (.xlsx or .csv) and persist ScheduleTasks."""
-        # Ensure a default project exists if not specified
-        if project_id is None:
+        # Ensure project exists in database if specified, or create/fallback to default
+        target_project_id: uuid.UUID | None = None
+        if project_id is not None:
+            project = self.db.get(Project, project_id)
+            if project:
+                target_project_id = project.id
+
+        if target_project_id is None:
             project = self.db.scalars(select(Project)).first()
             if not project:
                 project = Project(
@@ -114,7 +120,9 @@ class ScheduleEngine:
                 )
                 self.db.add(project)
                 self.db.flush()
-            project_id = project.id
+            target_project_id = project.id
+
+        project_id = target_project_id
 
         is_csv = filename.lower().endswith(".csv")
         extracted_rows: list[dict[str, Any]] = []

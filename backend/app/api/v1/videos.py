@@ -188,7 +188,7 @@ async def proxy_camera_stream(
 
     client = httpx.AsyncClient(
         verify=False,
-        timeout=httpx.Timeout(15.0, read=None),
+        timeout=httpx.Timeout(connect=3.5, read=None, write=5.0, pool=5.0),
         trust_env=False,
     )
 

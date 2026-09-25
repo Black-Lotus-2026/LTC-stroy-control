@@ -36,6 +36,7 @@ import {
   fetchStageProbabilities,
   updateStageProbabilities,
   resetStageProbabilities,
+  getStageCustomOverrides,
   MachineryProbabilityItem,
   detectFrameImage,
   getCurrentStageByDate,
@@ -50,6 +51,7 @@ import {
   fetchIncidents,
   createIncident,
   IncidentAlertItem,
+  normalizeSnapshotUrl,
 } from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
@@ -220,6 +222,58 @@ export function getStageMachineryRules(stageName?: string): StageMachineryRules 
   }
 }
 
+const MACHINERY_CODE_TO_RU: Record<string, string> = {
+  dump_truck: 'Самосвал',
+  excavator: 'Экскаватор',
+  tower_crane: 'Башенный кран',
+  truck_crane: 'Автокран',
+  concrete_mixer: 'Автобетоносмеситель',
+  concrete_pump: 'Бетононасос',
+  bulldozer: 'Бульдозер',
+  wheel_loader: 'Погрузчик',
+  roller: 'Каток',
+  aerial_lift: 'Автогидроподъемник',
+}
+
+function getEffectiveStageRules(stage?: StageItem | null): {
+  mandatory: string[]
+  recommended: string[]
+  uncharacteristic: string[]
+} {
+  const base = getStageMachineryRules(stage?.name)
+  if (!stage) return base
+
+  const overrides = getStageCustomOverrides(stage.id)
+  if (!overrides || Object.keys(overrides).length === 0) {
+    return base
+  }
+
+  const mandatory = new Set<string>(base.mandatory)
+  const recommended = new Set<string>(base.recommended)
+  const uncharacteristic = new Set<string>(base.uncharacteristic)
+
+  for (const [code, status] of Object.entries(overrides)) {
+    const labelRu = MACHINERY_CODE_TO_RU[code] || code
+    mandatory.delete(labelRu)
+    recommended.delete(labelRu)
+    uncharacteristic.delete(labelRu)
+
+    if (status === 'MANDATORY') {
+      mandatory.add(labelRu)
+    } else if (status === 'RECOMMENDED') {
+      recommended.add(labelRu)
+    } else if (status === 'UNCHARACTERISTIC') {
+      uncharacteristic.add(labelRu)
+    }
+  }
+
+  return {
+    mandatory: Array.from(mandatory),
+    recommended: Array.from(recommended),
+    uncharacteristic: Array.from(uncharacteristic),
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Camera Frame with RTSP Live Stream Player & Real AI Machinery Bounding Boxes
 // ----------------------------------------------------------------------------
@@ -235,6 +289,7 @@ function CameraFrame({
   onSelectClass = undefined,
   onDetectionsUpdate = undefined,
   onFrameAnalysis = undefined,
+  onStreamStatusChange = undefined,
 }: {
   boxes?: boolean
   compact?: boolean
@@ -247,6 +302,7 @@ function CameraFrame({
   onSelectClass?: (label: string) => void
   onDetectionsUpdate?: (dets: LiveDetectionInfo[]) => void
   onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
+  onStreamStatusChange?: (online: boolean) => void
 }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [realDetections, setRealDetections] = useState<LiveDetectionInfo[]>([])
@@ -262,13 +318,30 @@ function CameraFrame({
   const lastDetectTimeRef = useRef<number>(-999)
   const detectionInFlightRef = useRef(false)
 
-  const effectiveStreamUrl = streamUrl || (videoUrl?.toLowerCase().startsWith('rtsp://') ? videoUrl : null)
+  const rawStream = (streamUrl || (videoUrl?.toLowerCase().startsWith('rtsp://') ? videoUrl : null))?.trim() || null
+  const effectiveStreamUrl = rawStream
+    ? (/^(rtsp|https?):\/\//i.test(rawStream)
+        ? rawStream
+        : rawStream.includes(':554') || rawStream.toLowerCase().includes('rtsp')
+        ? `rtsp://${rawStream}`
+        : `http://${rawStream}`)
+    : null
   const isRtsp = Boolean(effectiveStreamUrl && effectiveStreamUrl.toLowerCase().startsWith('rtsp://'))
   const isHttpStream = Boolean(effectiveStreamUrl && /^https?:\/\//i.test(effectiveStreamUrl))
   const proxiedStreamUrl = isHttpStream && effectiveStreamUrl
     ? getCameraStreamProxyUrl(effectiveStreamUrl)
     : null
   const isFileVideo = Boolean(videoUrl && !isRtsp && (videoUrl.startsWith('http') || videoUrl.startsWith('blob:') || videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov')))
+
+  const isStreamActive = Boolean(
+    isFileVideo ||
+    (isHttpStream && !streamLoadError) ||
+    (isRtsp && effectiveStreamUrl)
+  )
+
+  useEffect(() => {
+    onStreamStatusChange?.(isStreamActive)
+  }, [isStreamActive, onStreamStatusChange])
 
   useEffect(() => {
     setStreamLoadError(false)
@@ -320,6 +393,7 @@ function CameraFrame({
   }, [])
 
   const triggerDetection = useCallback(async () => {
+    if (!isStreamActive) return
     if (detectionInFlightRef.current) return
     try {
       let canvas: HTMLCanvasElement | null = null
@@ -340,7 +414,12 @@ function CameraFrame({
       }
 
       if (!canvas) return
-      const snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.82)
+      let snapshotDataUrl = ''
+      try {
+        snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+      } catch (err) {
+        console.warn('Canvas toDataURL failed (possibly tainted):', err)
+      }
       detectionInFlightRef.current = true
       setIsDetecting(true)
 
@@ -366,7 +445,9 @@ function CameraFrame({
           const validDets = mapped.filter((d) => d.conf >= 60)
           setRealDetections(mapped)
           onDetectionsUpdate?.(validDets)
-          onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime)
+          if (snapshotDataUrl) {
+            onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime)
+          }
         } catch (err) {
           console.warn('Real AI detection error:', err)
           setRealDetections([])
@@ -382,16 +463,16 @@ function CameraFrame({
       detectionInFlightRef.current = false
       setIsDetecting(false)
     }
-  }, [activeStageName, currentTime, isFileVideo, onDetectionsUpdate])
+  }, [activeStageName, currentTime, isFileVideo, isStreamActive, onDetectionsUpdate, onFrameAnalysis])
 
-  // Periodic / seek trigger when video is playing
+  // Periodic / seek trigger when video is playing or live stream is active
   useEffect(() => {
     if (isFileVideo) {
       if (Math.abs(currentTime - lastDetectTimeRef.current) >= 1.8) {
         lastDetectTimeRef.current = currentTime
         triggerDetection()
       }
-    } else if (isHttpStream) {
+    } else if (isHttpStream || isRtsp) {
       const initialTimer = setTimeout(triggerDetection, 800)
       const interval = setInterval(triggerDetection, 2000)
       return () => {
@@ -402,7 +483,7 @@ function CameraFrame({
       const timer = setTimeout(triggerDetection, 400)
       return () => clearTimeout(timer)
     }
-  }, [currentTime, isFileVideo, isHttpStream, triggerDetection])
+  }, [currentTime, isFileVideo, isHttpStream, isRtsp, triggerDetection])
 
   const displayedDetections = streamLoadError
     ? []
@@ -486,6 +567,7 @@ function CameraFrame({
           ref={videoRef}
           key={videoUrl || 'video'}
           src={videoUrl ?? undefined}
+          crossOrigin={videoUrl && videoUrl.startsWith('http') && !videoUrl.includes(window.location.host) ? 'anonymous' : undefined}
           controls
           autoPlay
           loop
@@ -504,42 +586,47 @@ function CameraFrame({
           }}
         />
       ) : (
-        <img
-          ref={imgRef}
-          src={cameraImage}
-          alt="Кадр с камеры: площадка, техника"
-          style={{ objectFit: 'contain', background: '#090b0e' }}
-          onLoad={() => {
-            updateDetectionViewport()
-            triggerDetection()
-          }}
-        />
+        <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: compact ? '220px' : '440px', background: '#090b0e', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', padding: '24px', textAlign: 'center' }}>
+          <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px', color: '#f87171' }}>
+            <Icon name="video" size={26} />
+          </div>
+          <strong style={{ color: '#fff', fontSize: '14px', marginBottom: '6px' }}>Видеопоток отсутствует</strong>
+          <p style={{ fontSize: '11px', color: '#64748b', maxWidth: '340px', margin: '0 0 16px', lineHeight: 1.4 }}>
+            Подключите сетевую IP/RTSP камеру в настройках объекта или загрузите видеозапись СМР для запуска автоматического AI-контроля спецтехники.
+          </p>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid #ef4444', padding: '3px 8px', borderRadius: '4px', fontSize: '10px', color: '#fca5a5' }}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ef4444' }} />
+            ОФФЛАЙН · Мониторинг приостановлен
+          </div>
+        </div>
       )}
 
       {/* Manual & Auto Frame Detection Trigger Button */}
-      <button
-        type="button"
-        onClick={() => triggerDetection()}
-        disabled={isDetecting}
-        className="btn btn-secondary btn-sm"
-        style={{
-          position: 'absolute',
-          top: '12px',
-          right: '12px',
-          zIndex: 15,
-          background: 'rgba(20, 24, 30, 0.85)',
-          border: '1px solid rgba(255, 255, 255, 0.25)',
-          color: '#e2e8f0',
-          backdropFilter: 'blur(6px)',
-          fontSize: '11px',
-          padding: '5px 12px',
-          borderRadius: '4px',
-          cursor: isDetecting ? 'wait' : 'pointer',
-        }}
-        title="Запустить распознавание техники на текущем кадре"
-      >
-        {isDetecting ? '🔄 Анализ...' : '⚡ Распознать кадр (AI)'}
-      </button>
+      {isStreamActive && (
+        <button
+          type="button"
+          onClick={() => triggerDetection()}
+          disabled={isDetecting}
+          className="btn btn-secondary btn-sm"
+          style={{
+            position: 'absolute',
+            top: '12px',
+            right: '12px',
+            zIndex: 15,
+            background: 'rgba(20, 24, 30, 0.85)',
+            border: '1px solid rgba(255, 255, 255, 0.25)',
+            color: '#e2e8f0',
+            backdropFilter: 'blur(6px)',
+            fontSize: '11px',
+            padding: '5px 12px',
+            borderRadius: '4px',
+            cursor: isDetecting ? 'wait' : 'pointer',
+          }}
+          title="Запустить распознавание техники на текущем кадре"
+        >
+          {isDetecting ? '🔄 Анализ...' : '⚡ Распознать кадр (AI)'}
+        </button>
+      )}
 
       {detectorNotice && (
         <div className="detector-notice" role="status">
@@ -637,6 +724,7 @@ function Monitoring({
   setIsUploadModalOpen,
   setIsCameraModalOpen,
   onFrameAnalysis,
+  onStreamStatusChange,
   toast,
 }: {
   activeProject?: ProjectItem
@@ -653,6 +741,7 @@ function Monitoring({
   setIsUploadModalOpen: (b: boolean) => void
   setIsCameraModalOpen: (b: boolean) => void
   onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
+  onStreamStatusChange?: (online: boolean) => void
   toast: (s: string) => void
 }) {
   const [mode, setMode] = useState('Техника')
@@ -815,6 +904,7 @@ function Monitoring({
               onSelectClass={(eq) => setActiveEquipment((prev) => (prev === eq ? null : eq))}
               onDetectionsUpdate={setLiveDetections}
               onFrameAnalysis={onFrameAnalysis}
+              onStreamStatusChange={onStreamStatusChange}
             />
 
             <div className="analysis-tabs" role="tablist">
@@ -963,8 +1053,12 @@ function PhotoArchive({
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
 
+  const incidentsWithPhotos = useMemo(() => {
+    return incidents.filter((inc) => Boolean(inc.snapshotUrl))
+  }, [incidents])
+
   const filteredIncidents = useMemo(() => {
-    return incidents.filter((inc) => {
+    return incidentsWithPhotos.filter((inc) => {
       const isError =
         inc.severity === 'ERROR' ||
         inc.priority === 'Критический' ||
@@ -981,7 +1075,7 @@ function PhotoArchive({
       }
       return true
     })
-  }, [incidents, filterSeverity, searchQuery])
+  }, [incidentsWithPhotos, filterSeverity, searchQuery])
 
   return (
     <div className="archive-page">
@@ -1010,7 +1104,7 @@ function PhotoArchive({
               onClick={() => setFilterSeverity('all')}
               style={{ fontSize: '11px', height: '36px' }}
             >
-              Все фото ({incidents.length})
+              Все фото ({incidentsWithPhotos.length})
             </button>
             <button
               className={`button ${filterSeverity === 'ERROR' ? 'primary' : ''}`}
@@ -1043,8 +1137,8 @@ function PhotoArchive({
 
         {filteredIncidents.length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--muted)' }}>
-            Фотофиксаций нарушений пока нет. При воспроизведении видео или трансляции с камер система
-            автоматически зафиксирует кадр участка при нарушении регламента.
+            Фотофиксаций нарушений пока нет. При воспроизведении видео или трансляции система автоматически
+            зафиксирует кадр участка из видео при нарушении регламента.
           </div>
         ) : (
           <div className="photo-archive-grid">
@@ -1054,7 +1148,7 @@ function PhotoArchive({
                 r.priority === 'Критический' ||
                 r.discrepancyType === 'MISSING_MANDATORY' ||
                 r.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
-              const photoSrc = r.snapshotUrl || cameraImage
+              const photoSrc = r.snapshotUrl!
               const isHighlighted = highlightedIncidentId === r.id
 
               return (
@@ -1204,11 +1298,13 @@ function Progress({
   stages,
   setStages,
   activeProjectId,
+  navigate,
   toast,
 }: {
   stages: StageItem[]
   setStages: React.Dispatch<React.SetStateAction<StageItem[]>>
   activeProjectId?: string | null
+  navigate?: (p: PageKey) => void
   toast: (s: string) => void
 }) {
   const [isLoading, setIsLoading] = useState(false)
@@ -1279,7 +1375,7 @@ function Progress({
 
   const handleAdjustDuration = async (stage: StageItem, delta: number) => {
     const newDuration = Math.max(1, stage.duration_days + delta)
-    const currentEnd = new Date(stage.planned_end)
+    const currentEnd = stage.planned_end ? new Date(stage.planned_end) : new Date()
     currentEnd.setDate(currentEnd.getDate() + delta)
     const newEnd = currentEnd.toISOString().split('T')[0]
 
@@ -1307,15 +1403,35 @@ function Progress({
     }
   }
 
-  // Calculate timeline bounds
-  const startTimes = stages.map((s) => new Date(s.planned_start).getTime()).filter(Boolean)
-  const endTimes = stages.map((s) => new Date(s.planned_end).getTime()).filter(Boolean)
+  // Calculate timeline bounds safely
+  const startTimes = stages
+    .map((s) => (s.planned_start ? new Date(s.planned_start).getTime() : NaN))
+    .filter((t) => !isNaN(t))
+  const endTimes = stages
+    .map((s) => (s.planned_end ? new Date(s.planned_end).getTime() : NaN))
+    .filter((t) => !isNaN(t))
   const minTime = startTimes.length > 0 ? Math.min(...startTimes) : Date.now()
   const maxTime = endTimes.length > 0 ? Math.max(...endTimes) : minTime + 30 * 24 * 3600 * 1000
   const totalMs = Math.max(maxTime - minTime, 1)
 
   // Current stage on reference date (2026-09-24)
   const todayActiveStage = getCurrentStageByDate(stages)
+  const todayMs = new Date('2026-09-24T12:00:00Z').getTime()
+  const todayPct = Math.max(0, Math.min(100, ((todayMs - minTime) / totalMs) * 100))
+  const isTodayInRange = todayMs >= minTime && todayMs <= maxTime
+
+  // Generate 6 date ruler ticks
+  const tickCount = 6
+  const timelineTicks = Array.from({ length: tickCount }).map((_, i) => {
+    const t = minTime + (totalMs / (tickCount - 1)) * i
+    const d = new Date(t)
+    const label = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getFullYear()).slice(2)}`
+    const pct = (i / (tickCount - 1)) * 100
+    return { label, pct }
+  })
+
+  const selectedStage = stages.find((s) => s.id === selectedStageId) || stages[0]
+  const stageRules = selectedStage ? getStageMachineryRules(selectedStage.name) : null
 
   return (
     <div className="progress-page" style={{ gridTemplateColumns: '1fr' }}>
@@ -1338,7 +1454,7 @@ function Progress({
           </label>
 
           <button className="button" onClick={handleLoadDemo} disabled={isLoading}>
-            Загрузить демо-план
+            {isLoading ? 'Загрузка...' : 'Загрузить демо-план'}
           </button>
 
           {stages.length > 0 && (
@@ -1366,23 +1482,85 @@ function Progress({
                 Импортировать .xlsx / .csv
                 <input type="file" accept=".xlsx,.csv" onChange={handleFileUpload} style={{ display: 'none' }} />
               </label>
-              <button className="button" onClick={handleLoadDemo}>
-                Загрузить эталонный демо-план
+              <button className="button" onClick={handleLoadDemo} disabled={isLoading}>
+                {isLoading ? 'Загрузка...' : 'Загрузить эталонный демо-план'}
               </button>
             </div>
           </div>
         ) : (
           <div style={{ marginTop: '16px' }}>
             {/* Gantt Timeline View */}
-            <div className="gantt-container" style={{ background: '#171a1e', border: '1px solid #35373c', padding: '14px', overflowX: 'auto', position: 'relative' }}>
-              <div style={{ minWidth: '760px', position: 'relative' }}>
+            <div className="gantt-container" style={{ background: '#171a1e', border: '1px solid #35373c', borderRadius: '6px', padding: '14px', overflowX: 'auto', position: 'relative' }}>
+              <div style={{ minWidth: '820px', position: 'relative' }}>
+                {/* Timeline Header Ruler */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '290px 1fr 140px',
+                    gap: '12px',
+                    alignItems: 'center',
+                    padding: '6px 6px 12px 6px',
+                    borderBottom: '1px solid #35373c',
+                    marginBottom: '8px',
+                    fontSize: '11px',
+                    color: 'var(--muted)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Этап СМР / Длительность</div>
+                  <div style={{ position: 'relative', height: '20px' }}>
+                    {timelineTicks.map((tick, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          position: 'absolute',
+                          left: `${tick.pct}%`,
+                          transform: idx === 0 ? 'none' : idx === timelineTicks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)',
+                          color: '#9ca3af',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {tick.label}
+                      </div>
+                    ))}
+                    {isTodayInRange && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${todayPct}%`,
+                          top: '-2px',
+                          transform: 'translateX(-50%)',
+                          background: '#ef4444',
+                          color: '#fff',
+                          fontSize: '8px',
+                          fontWeight: 800,
+                          padding: '1px 5px',
+                          borderRadius: '2px',
+                          whiteSpace: 'nowrap',
+                          zIndex: 3,
+                          boxShadow: '0 0 6px rgba(239,68,68,0.6)',
+                        }}
+                      >
+                        СЕГОДНЯ
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Сдвиг / Дни</div>
+                </div>
+
+                {/* Stages Gantt Rows */}
                 {stages.map((stg) => {
-                  const sTime = new Date(stg.planned_start).getTime()
-                  const eTime = new Date(stg.planned_end).getTime()
-                  const leftPct = Math.max(0, Math.min(100, ((sTime - minTime) / totalMs) * 100))
+                  const rawStart = stg.planned_start ? new Date(stg.planned_start).getTime() : NaN
+                  const rawEnd = stg.planned_end ? new Date(stg.planned_end).getTime() : NaN
+                  const sTime = isNaN(rawStart) ? minTime : rawStart
+                  const eTime = isNaN(rawEnd) ? sTime + (stg.duration_days || 1) * 86400000 : rawEnd
+                  const leftPct = Math.max(0, Math.min(97, ((sTime - minTime) / totalMs) * 100))
                   const widthPct = Math.max(3, Math.min(100 - leftPct, ((eTime - sTime) / totalMs) * 100))
                   const isSelected = selectedStageId === stg.id
                   const isTodayActive = todayActiveStage?.id === stg.id
+                  const startStr = stg.planned_start ? String(stg.planned_start).slice(0, 10) : '—'
+                  const endStr = stg.planned_end ? String(stg.planned_end).slice(0, 10) : '—'
 
                   return (
                     <div
@@ -1395,13 +1573,15 @@ function Progress({
                         alignItems: 'center',
                         padding: '8px 6px',
                         borderBottom: '1px solid #25272c',
-                        background: isSelected ? 'rgba(207,157,61,.12)' : isTodayActive ? 'rgba(234,179,8,.06)' : 'transparent',
+                        background: isSelected ? 'rgba(207,157,61,.14)' : isTodayActive ? 'rgba(234,179,8,.08)' : 'transparent',
+                        borderRadius: isSelected ? '4px' : '0',
                         cursor: 'pointer',
+                        transition: 'background 0.15s ease',
                       }}
                     >
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
-                          <strong style={{ fontSize: '11px', color: '#fff' }}>
+                          <strong style={{ fontSize: '11px', color: isSelected ? '#f59e0b' : '#fff' }}>
                             {stg.order_index}. {stg.name}
                           </strong>
                           {isTodayActive && (
@@ -1409,13 +1589,33 @@ function Progress({
                               СЕГОДНЯ
                             </span>
                           )}
+                          {stg.status === 'completed' && (
+                            <span style={{ background: 'rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px' }}>
+                              ✓ Завершён
+                            </span>
+                          )}
                         </div>
                         <span style={{ fontSize: '9px', color: 'var(--muted)' }}>
-                          {stg.duration_days} дн. ({stg.planned_start.slice(0, 10)} – {stg.planned_end.slice(0, 10)})
+                          {stg.duration_days} дн. ({startStr} – {endStr})
                         </span>
                       </div>
 
                       <div style={{ position: 'relative', height: '24px', background: '#1c1e22', borderRadius: '2px', overflow: 'hidden' }}>
+                        {isTodayInRange && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: `${todayPct}%`,
+                              top: 0,
+                              bottom: 0,
+                              width: '2px',
+                              background: '#ef4444',
+                              opacity: 0.6,
+                              zIndex: 1,
+                              pointerEvents: 'none',
+                            }}
+                          />
+                        )}
                         <div
                           style={{
                             position: 'absolute',
@@ -1423,21 +1623,28 @@ function Progress({
                             width: `${widthPct}%`,
                             top: '2px',
                             bottom: '2px',
-                            background: isSelected ? '#f59e0b' : isTodayActive ? '#eab308' : '#cf9d3d',
-                            border: isTodayActive ? '1px solid #ffffff' : undefined,
+                            background: isSelected
+                              ? '#f59e0b'
+                              : isTodayActive
+                              ? '#eab308'
+                              : stg.status === 'completed'
+                              ? '#3b82f6'
+                              : '#cf9d3d',
+                            border: isTodayActive ? '1px solid #ffffff' : isSelected ? '1px solid #fef08a' : undefined,
                             boxShadow: isTodayActive ? '0 0 8px rgba(234,179,8,0.6)' : undefined,
                             borderRadius: '2px',
                             display: 'flex',
                             alignItems: 'center',
                             padding: '0 6px',
                             fontSize: '9px',
-                            color: '#000',
+                            color: stg.status === 'completed' ? '#ffffff' : '#000',
                             fontWeight: 700,
                             overflow: 'hidden',
                             whiteSpace: 'nowrap',
+                            zIndex: 2,
                           }}
                         >
-                          {stg.duration_days} дн {isTodayActive ? '• Активен' : ''}
+                          {stg.duration_days} дн {isTodayActive ? '• Активен' : stg.status === 'completed' ? '✓' : ''}
                         </div>
                       </div>
 
@@ -1470,6 +1677,77 @@ function Progress({
                 })}
               </div>
             </div>
+
+            {/* Selected Stage Detail Inspector */}
+            {selectedStage && (
+              <div
+                style={{
+                  marginTop: '16px',
+                  padding: '16px',
+                  background: '#171a1e',
+                  border: '1px solid #35373c',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '16px',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '11px', color: '#cf9d3d', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Этап {selectedStage.order_index} из {stages.length}
+                    </span>
+                    <span
+                      style={{
+                        background:
+                          selectedStage.status === 'completed'
+                            ? '#2563eb'
+                            : selectedStage.status === 'active'
+                            ? '#eab308'
+                            : '#4b5563',
+                        color: selectedStage.status === 'active' ? '#000' : '#fff',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        padding: '2px 6px',
+                        borderRadius: '3px',
+                      }}
+                    >
+                      {selectedStage.status === 'completed' ? 'Завершён' : selectedStage.status === 'active' ? 'Активен сейчас' : 'Запланирован'}
+                    </span>
+                  </div>
+                  <h3 style={{ margin: '0 0 6px 0', fontSize: '15px', color: '#fff' }}>{selectedStage.name}</h3>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                    <span>Сроки: <strong style={{ color: '#fff' }}>{selectedStage.planned_start ? String(selectedStage.planned_start).slice(0, 10) : '—'} — {selectedStage.planned_end ? String(selectedStage.planned_end).slice(0, 10) : '—'}</strong></span>
+                    <span>Длительность: <strong style={{ color: '#fff' }}>{selectedStage.duration_days} дн.</strong></span>
+                    {selectedStage.matched_catalog_name && (
+                      <span>Справочник: <strong style={{ color: '#93c5fd' }}>{selectedStage.matched_catalog_name}</strong></span>
+                    )}
+                  </div>
+                  {stageRules && (
+                    <div style={{ marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px' }}>
+                      <span style={{ color: '#4ade80' }}>Обязательно: {stageRules.mandatory.join(', ') || 'нет'}</span>
+                      <span style={{ color: '#facc15' }}>• Рекомендовано: {stageRules.recommended.join(', ') || 'нет'}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  {navigate && (
+                    <button
+                      type="button"
+                      className="button primary"
+                      onClick={() => navigate('analytics')}
+                      style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <Icon name="chart" size={16} />
+                      Профиль техники этапа
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1529,21 +1807,34 @@ function Analytics({
   stages,
   navigate,
   toast,
+  onStageOverridesUpdated,
 }: {
   stages: StageItem[]
   navigate: (p: PageKey) => void
   toast?: (s: string) => void
+  onStageOverridesUpdated?: (stageId: string) => void
 }) {
-  const [selectedStageId, setSelectedStageId] = useState<string>('')
+  const [selectedStageId, setSelectedStageId] = useState<string>(() => {
+    return localStorage.getItem('analytics_selected_stage_id') || ''
+  })
   const [probItems, setProbItems] = useState<MachineryProbabilityItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [hasCustomOverride, setHasCustomOverride] = useState(false)
 
-  // Automatically select the active stage on today's date (2026-09-24)
+  // Automatically select the active stage on today's date (2026-09-24) or restore from localStorage
   useEffect(() => {
-    if (stages.length > 0 && !selectedStageId) {
-      const current = getCurrentStageByDate(stages)
-      setSelectedStageId(current ? current.id : stages[0].id)
+    if (stages.length > 0) {
+      if (!selectedStageId || !stages.some((s) => s.id === selectedStageId)) {
+        const saved = localStorage.getItem('analytics_selected_stage_id')
+        if (saved && stages.some((s) => s.id === saved)) {
+          setSelectedStageId(saved)
+        } else {
+          const current = getCurrentStageByDate(stages)
+          const fallbackId = current ? current.id : stages[0].id
+          setSelectedStageId(fallbackId)
+          localStorage.setItem('analytics_selected_stage_id', fallbackId)
+        }
+      }
     }
   }, [stages, selectedStageId])
 
@@ -1553,6 +1844,7 @@ function Analytics({
     fetchStageProbabilities(selectedStageId)
       .then((res) => {
         setProbItems(res.probabilities || [])
+        setHasCustomOverride(Boolean(res.has_custom_override))
       })
       .finally(() => {
         setIsLoading(false)
@@ -1594,9 +1886,12 @@ function Analytics({
 
     // 2. Persist to API
     try {
-      await updateStageProbabilities(selectedStageId, { [machineryCode]: validStatus })
+      const res = await updateStageProbabilities(selectedStageId, { [machineryCode]: validStatus })
+      setHasCustomOverride(Boolean(res.has_custom_override ?? true))
+      onStageOverridesUpdated?.(selectedStageId)
       toast?.(`Статус техники обновлён: «${meta.level}»`)
     } catch {
+      onStageOverridesUpdated?.(selectedStageId)
       toast?.(`Статус обновлён локально`)
     }
   }
@@ -1608,11 +1903,13 @@ function Analytics({
       const res = await resetStageProbabilities(selectedStageId)
       setProbItems(res.probabilities || [])
       setHasCustomOverride(false)
+      onStageOverridesUpdated?.(selectedStageId)
       toast?.('Профиль сброшен к автоматическому расчёту AI/ГЭСН')
     } catch {
       const res = await fetchStageProbabilities(selectedStageId)
       setProbItems(res.probabilities || [])
       setHasCustomOverride(false)
+      onStageOverridesUpdated?.(selectedStageId)
       toast?.('Профиль возвращен к авто-расчёту')
     } finally {
       setIsLoading(false)
@@ -1657,11 +1954,6 @@ function Analytics({
                       АКТИВЕН СЕГОДНЯ (24.09.2026)
                     </span>
                   )}
-                  {hasCustomOverride && (
-                    <span style={{ background: '#1e3a8a', color: '#93c5fd', fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '3px', border: '1px solid #3b82f6' }}>
-                      Ручная настройка
-                    </span>
-                  )}
                 </div>
                 <h2>Вероятностное распределение строительной техники (10 классов)</h2>
               </div>
@@ -1677,7 +1969,11 @@ function Analytics({
                 <span style={{ fontSize: '11px', color: 'var(--muted)', marginLeft: '6px' }}>Этап:</span>
                 <select
                   value={selectedStageId}
-                  onChange={(e) => setSelectedStageId(e.target.value)}
+                  onChange={(e) => {
+                    const newId = e.target.value
+                    setSelectedStageId(newId)
+                    localStorage.setItem('analytics_selected_stage_id', newId)
+                  }}
                   style={{ background: '#171a1e', border: '1px solid var(--border)', color: '#fff', padding: '4px 8px', fontSize: '11px' }}
                 >
                   {stages.map((s) => {
@@ -1962,8 +2258,8 @@ function Reports({
               <span>предупреждений</span>
             </div>
             <div>
-              <strong>{incidents.filter((i) => i.status === 'Устранено').length}</strong>
-              <span>устранено</span>
+              <strong>{incidents.filter((i) => i.status === 'Требует проверки').length}</strong>
+              <span>требует проверки</span>
             </div>
             <div>
               <strong>{incidents.filter((i) => i.status === 'В работе').length}</strong>
@@ -2030,7 +2326,8 @@ function Reports({
                   inc.discrepancyType === 'MISSING_MANDATORY' ||
                   inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
                 const isHighlighted = highlightedIncidentId === inc.id
-                const photoSrc = inc.snapshotUrl || cameraImage
+                const isStreamIncident = inc.type === 'Видеопоток' || inc.discrepancyType?.startsWith('STREAM_')
+                const hasSnapshot = Boolean(inc.snapshotUrl)
 
                 return (
                   <article
@@ -2038,42 +2335,67 @@ function Reports({
                     id={`report-item-${inc.id}`}
                     className={`report-incident-card ${isHighlighted ? 'highlighted' : ''}`}
                   >
-                    {/* Thumbnail */}
-                    <div
-                      style={{
-                        position: 'relative',
-                        width: '140px',
-                        height: '84px',
-                        background: '#0b0d10',
-                        borderRadius: '6px',
-                        overflow: 'hidden',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                      onClick={() => setSelectedPhoto(photoSrc)}
-                      title="Кликните для просмотра полноразмерного снимка"
-                    >
-                      <img
-                        src={photoSrc}
-                        alt={inc.title}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
+                    {/* Thumbnail if snapshot exists, or clean status icon */}
+                    {hasSnapshot ? (
                       <div
                         style={{
-                          position: 'absolute',
-                          bottom: '4px',
-                          right: '4px',
-                          background: 'rgba(0,0,0,0.7)',
-                          color: '#94a3b8',
-                          fontSize: '9px',
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          fontFamily: 'monospace',
+                          position: 'relative',
+                          width: '140px',
+                          height: '84px',
+                          background: '#0b0d10',
+                          borderRadius: '6px',
+                          overflow: 'hidden',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          border: '1px solid #2e3035',
+                        }}
+                        onClick={() => setSelectedPhoto(inc.snapshotUrl!)}
+                        title="Кликните для просмотра полноразмерного снимка"
+                      >
+                        <img
+                          src={inc.snapshotUrl}
+                          alt={inc.title}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: '4px',
+                            right: '4px',
+                            background: 'rgba(0,0,0,0.7)',
+                            color: '#94a3b8',
+                            fontSize: '9px',
+                            padding: '1px 4px',
+                            borderRadius: '3px',
+                            fontFamily: 'monospace',
+                          }}
+                        >
+                          {inc.time}
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          width: '84px',
+                          height: '84px',
+                          background: isStreamIncident ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255,255,255,0.04)',
+                          border: `1px solid ${isStreamIncident ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.08)'}`,
+                          borderRadius: '6px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '4px',
+                          flexShrink: 0,
+                          color: isStreamIncident ? '#38bdf8' : 'var(--muted)',
                         }}
                       >
-                        {inc.time}
+                        <Icon name={isStreamIncident ? 'video' : 'alert'} size={24} />
+                        <span style={{ fontSize: '9px', opacity: 0.8 }}>
+                          {isStreamIncident ? 'Поток' : 'Без фото'}
+                        </span>
                       </div>
-                    </div>
+                    )}
 
                     {/* Incident Details */}
                     <div>
@@ -2098,9 +2420,11 @@ function Reports({
                             Этап: {inc.stageName}
                           </span>
                         )}
-                        <Status tone={inc.status === 'Устранено' ? 'success' : isError ? 'critical' : 'warning'}>
-                          {inc.status}
-                        </Status>
+                        {inc.status && inc.status !== 'Устранено' && (
+                          <Status tone={inc.status === 'В работе' ? 'warning' : isError ? 'critical' : 'warning'}>
+                            {inc.status}
+                          </Status>
+                        )}
                       </div>
 
                       <h4 style={{ margin: '0 0 4px', fontSize: '13px', color: '#fff', fontWeight: 700 }}>
@@ -2118,20 +2442,22 @@ function Reports({
                       </div>
                     </div>
 
-                    {/* Navigation Link to Photo Archive */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', justifyContent: 'center' }}>
-                      <button
-                        className="button primary"
-                        style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
-                        onClick={() => {
-                          onNavigateToArchive(inc.id)
-                          toast(`Переход к фотофиксации ${inc.id} в фотоархиве`)
-                        }}
-                        title="Открыть данный кадр в фотоархиве"
-                      >
-                        Смотреть в фотоархиве ↗
-                      </button>
-                    </div>
+                    {/* Navigation Link to Photo Archive only if real snapshot exists */}
+                    {hasSnapshot && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', justifyContent: 'center' }}>
+                        <button
+                          className="button primary"
+                          style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
+                          onClick={() => {
+                            onNavigateToArchive(inc.id)
+                            toast(`Переход к фотофиксации ${inc.id} в фотоархиве`)
+                          }}
+                          title="Открыть данный кадр в фотоархиве"
+                        >
+                          Смотреть в фотоархиве ↗
+                        </button>
+                      </div>
+                    )}
                   </article>
                 )
               })}
@@ -2573,6 +2899,9 @@ export default function App() {
 
   const recentObservationsRef = useRef<{ timestamp: number; detectedLabels: string[] }[]>([])
   const violationCooldownRef = useRef<Record<string, number>>({})
+  const streamStartTimeRef = useRef<number | null>(null)
+  const detectedLabelsInWindowRef = useRef<Set<string>>(new Set())
+  const latestSnapshotRef = useRef<string | null>(null)
 
   // Hierarchy: Projects -> Zones -> Cameras
   const [projectsList, setProjectsList] = useState<ProjectItem[]>([])
@@ -2589,6 +2918,14 @@ export default function App() {
   const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string | null>(null)
   const [uploadedVideoName, setUploadedVideoName] = useState<string | null>(null)
   const [videoTimestamp, setVideoTimestamp] = useState<string>(getNowDateTimeLocal())
+  const [stageOverridesVersion, setStageOverridesVersion] = useState(0)
+  const [cameraReportedOnline, setCameraReportedOnline] = useState<boolean>(true)
+  const streamTransitionStateRef = useRef<'ONLINE' | 'OFFLINE' | null>(null)
+
+  const curCam = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
+  const hasConfiguredCamera = Boolean(curCam && curCam.stream_url)
+  const isStreamConfigured = Boolean(uploadedVideoUrl || (hasConfiguredCamera && camerasList.length > 0))
+  const isStreamOnline = isStreamConfigured && cameraReportedOnline
 
   // Dialogs
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false)
@@ -2629,25 +2966,29 @@ export default function App() {
     fetchIncidents()
       .then((apiIncs) => {
         if (apiIncs && apiIncs.length > 0) {
-          const mapped: Incident[] = apiIncs.map((item) => ({
-            id: item.code,
-            type: 'Техника',
-            title: item.title || 'Нарушение регламента',
-            zone: item.zone_name || 'Основная площадка',
-            camera: item.camera_name || 'Камера 1',
-            time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '14:30',
-            age: 'Недавно',
-            priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
-            status: (item.status === 'open' ? 'Требует проверки' : item.status === 'in_progress' ? 'В работе' : 'Устранено') as IncidentStatus,
-            assignee: 'Не назначен',
-            sla: item.severity === 'ERROR' ? '15 мин' : '45 мин',
-            confidence: 95,
-            note: item.description || '',
-            severity: item.severity,
-            snapshotUrl: item.snapshot_url || undefined,
-            stageName: undefined,
-            discrepancyType: item.discrepancy_type,
-          }))
+          const mapped: Incident[] = apiIncs.map((item) => {
+            const rawStatus = (item.status || '').toLowerCase()
+            const resolvedStatus = rawStatus === 'in_progress' ? 'В работе' : 'Требует проверки'
+            return {
+              id: item.code,
+              type: 'Техника',
+              title: item.title || 'Нарушение регламента',
+              zone: item.zone_name || 'Основная площадка',
+              camera: item.camera_name || 'Камера 1',
+              time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '14:30',
+              age: 'Недавно',
+              priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
+              status: resolvedStatus as IncidentStatus,
+              assignee: 'Не назначен',
+              sla: item.severity === 'ERROR' ? '15 мин' : '45 мин',
+              confidence: 95,
+              note: item.description || '',
+              severity: item.severity,
+              snapshotUrl: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url),
+              stageName: item.stage_name || undefined,
+              discrepancyType: item.discrepancy_type,
+            }
+          })
           setIncidentsList(mapped)
         }
       })
@@ -2914,7 +3255,8 @@ export default function App() {
     const form = e.currentTarget
     const name = (form.elements.namedItem('cam_name') as HTMLInputElement).value
     const code = (form.elements.namedItem('cam_code') as HTMLInputElement).value
-    const streamUrl = (form.elements.namedItem('cam_stream') as HTMLInputElement).value
+    const rawStreamUrl = (form.elements.namedItem('cam_stream') as HTMLInputElement).value?.trim() || ''
+    const streamUrl = rawStreamUrl || 'rtsp://127.0.0.1:8554/live/stroy_cam'
     const zoneId = (form.elements.namedItem('cam_zone') as HTMLSelectElement).value
 
     try {
@@ -2928,6 +3270,7 @@ export default function App() {
         setCamerasList((prev) => prev.map((camera) => camera.id === updated.id ? updated : camera))
         setEditingCamera(null)
         setIsCameraModalOpen(false)
+        setCameraReportedOnline(true)
         toast(`Настройки камеры «${updated.name}» обновлены`)
         return
       }
@@ -2935,7 +3278,7 @@ export default function App() {
       const created = await createCamera(targetProjectId, {
         name,
         code: code || undefined,
-        stream_url: streamUrl || undefined,
+        stream_url: streamUrl,
         zone_id: zoneId || undefined,
       })
       setCamerasList((prev) => [...prev, created])
@@ -2943,6 +3286,7 @@ export default function App() {
       setUploadedVideoUrl(null)
       setUploadedVideoName(null)
       setIsCameraModalOpen(false)
+      setCameraReportedOnline(true)
       toast(`Камера «${created.name}» успешно подключена и активирована`)
     } catch (err: unknown) {
       toast(err instanceof Error ? err.message : 'Ошибка добавления камеры')
@@ -3001,57 +3345,192 @@ export default function App() {
     }
   }
 
+  // Reset detection observations when video or camera switches
+  useEffect(() => {
+    recentObservationsRef.current = []
+    violationCooldownRef.current = {}
+    detectedLabelsInWindowRef.current.clear()
+    streamStartTimeRef.current = isStreamOnline ? Date.now() / 1000 : null
+    latestSnapshotRef.current = null
+  }, [uploadedVideoUrl, selectedCameraId, isStreamOnline])
+
+  // Stream state transition monitor: emits one-shot report incident on state change ONLY
+  useEffect(() => {
+    const currentState: 'ONLINE' | 'OFFLINE' = isStreamOnline ? 'ONLINE' : 'OFFLINE'
+    const prevState = streamTransitionStateRef.current
+
+    if (prevState === currentState) return
+    streamTransitionStateRef.current = currentState
+
+    const activeZoneObj = activeZones.find((z) => z.id === activeZoneId) || activeZones[0]
+    const curCamObj = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
+    const zoneName = activeZoneObj?.name || 'Основная площадка'
+    const camName = curCamObj?.name || 'Камера 1 (Обзор)'
+    const nowStr = new Date().toLocaleTimeString('ru-RU').slice(0, 5)
+
+    if (prevState === null) {
+      if (!isStreamOnline) {
+        const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
+        const newIncident: Incident = {
+          id: newId,
+          type: 'Видеопоток',
+          title: 'Отсутствует видеопоток',
+          zone: zoneName,
+          camera: camName,
+          time: nowStr,
+          age: 'Только что',
+          priority: 'Средний',
+          status: 'Требует проверки',
+          assignee: 'Дежурный инженер',
+          sla: '30 мин',
+          confidence: 100,
+          note: 'Трансляция с камер объекта отсутствует. Загрузите видеозапись СМР или подключите сетевую камеру для запуска мониторинга.',
+          severity: 'WARNING',
+          discrepancyType: 'STREAM_OFFLINE',
+        }
+        setIncidentsList((prev) => [newIncident, ...prev])
+        createIncident({
+          title: newIncident.title,
+          description: newIncident.note,
+          severity: 'WARNING',
+          discrepancy_type: 'STREAM_OFFLINE',
+          zone_name: zoneName,
+          camera_name: camName,
+        }).catch((e) => console.warn('Failed to persist stream offline incident:', e))
+      }
+      return
+    }
+
+    if (prevState === 'OFFLINE' && currentState === 'ONLINE') {
+      streamStartTimeRef.current = Date.now() / 1000
+      detectedLabelsInWindowRef.current.clear()
+      latestSnapshotRef.current = null
+
+      const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
+      const newIncident: Incident = {
+        id: newId,
+        type: 'Видеопоток',
+        title: 'Видеопоток активен',
+        zone: zoneName,
+        camera: camName,
+        time: nowStr,
+        age: 'Только что',
+        priority: 'Низкий',
+        status: 'В работе',
+        assignee: 'Система',
+        sla: '10 мин',
+        confidence: 100,
+        note: uploadedVideoName
+          ? `Запущена обработка видеозаписи «${uploadedVideoName}». Контроль техники активен.`
+          : `Видеопоток с камеры «${camName}» успешно подключен. Автоматический контроль техники запущен.`,
+        severity: 'WARNING',
+        discrepancyType: 'STREAM_ONLINE',
+      }
+      setIncidentsList((prev) => [newIncident, ...prev])
+      toast(uploadedVideoName ? `Видео «${uploadedVideoName}» активно: детекция техники запущена` : 'Видеопоток активен: детекция техники запущена')
+      createIncident({
+        title: newIncident.title,
+        description: newIncident.note,
+        severity: 'WARNING',
+        discrepancy_type: 'STREAM_ONLINE',
+        zone_name: zoneName,
+        camera_name: camName,
+      }).catch((e) => console.warn('Failed to persist stream online incident:', e))
+    } else if (prevState === 'ONLINE' && currentState === 'OFFLINE') {
+      streamStartTimeRef.current = null
+      detectedLabelsInWindowRef.current.clear()
+      latestSnapshotRef.current = null
+
+      const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
+      const newIncident: Incident = {
+        id: newId,
+        type: 'Видеопоток',
+        title: 'Потеря видеопотока',
+        zone: zoneName,
+        camera: camName,
+        time: nowStr,
+        age: 'Только что',
+        priority: 'Высокий',
+        status: 'Требует проверки',
+        assignee: 'Дежурный инженер',
+        sla: '15 мин',
+        confidence: 100,
+        note: 'Прекратилась трансляция видеопотока с объекта. Мониторинг строительной техники приостановлен.',
+        severity: 'ERROR',
+        discrepancyType: 'STREAM_LOST',
+      }
+      setIncidentsList((prev) => [newIncident, ...prev])
+      toast('Внимание: потерян видеопоток объекта')
+      createIncident({
+        title: newIncident.title,
+        description: newIncident.note,
+        severity: 'ERROR',
+        discrepancy_type: 'STREAM_LOST',
+        zone_name: zoneName,
+        camera_name: camName,
+      }).catch((e) => console.warn('Failed to persist stream lost incident:', e))
+    }
+  }, [isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, toast])
+
   // Realtime Frame Analysis & 30s Violation Window Evaluator
   const handleFrameAnalysis = useCallback(
     (snapshotDataUrl: string, dets: LiveDetectionInfo[], timeSeconds: number) => {
+      // Do not run violation detection or create alerts when video stream is offline
+      if (!isStreamOnline) {
+        streamStartTimeRef.current = null
+        detectedLabelsInWindowRef.current.clear()
+        return
+      }
+
       const nowSec = Date.now() / 1000
-      const effectiveTime = timeSeconds > 0 ? timeSeconds : nowSec
-      const detectedLabels = Array.from(new Set(dets.map((d) => d.label)))
+      if (streamStartTimeRef.current === null) {
+        streamStartTimeRef.current = nowSec
+      }
 
-      // 1. Record frame observation
-      recentObservationsRef.current.push({
-        timestamp: effectiveTime,
-        detectedLabels,
-      })
+      // Save latest frame snapshot from video
+      if (snapshotDataUrl) {
+        latestSnapshotRef.current = snapshotDataUrl
+      }
 
-      // Purge entries older than violationWindowSeconds
-      const windowSec = violationWindowSeconds || 30
-      recentObservationsRef.current = recentObservationsRef.current.filter(
-        (obs) => effectiveTime - obs.timestamp <= windowSec
-      )
-
-      const oldestTime = recentObservationsRef.current[0]?.timestamp ?? effectiveTime
-      const timeSpan = effectiveTime - oldestTime
-
-      // 2. Resolve active stage & machinery rules
-      const activeStage = getCurrentStageByDate(stages) || stages[0]
-      const stageName = activeStage?.name || 'Монолитные конструкции'
-      const rules = getStageMachineryRules(stageName)
-
-      // Set of all machinery observed in the window
-      const allObservedInWindow = new Set<string>()
-      for (const obs of recentObservationsRef.current) {
-        for (const l of obs.detectedLabels) {
-          allObservedInWindow.add(l)
+      // Remember confident machinery from YOLO (conf >= 60, identical to bounding box display)
+      for (const d of dets) {
+        if (d.conf >= 60 && d.label) {
+          detectedLabelsInWindowRef.current.add(d.label)
         }
       }
+
+      const windowSec = violationWindowSeconds || 30
+      const elapsedSec = nowSec - streamStartTimeRef.current
+
+      // Check after 30 seconds have elapsed
+      if (elapsedSec < windowSec) {
+        return
+      }
+
+      // 30 seconds elapsed: reset window start timer for the next 30-second cycle
+      streamStartTimeRef.current = nowSec
+
+      // Resolve active stage & analytical assumption (what machinery should be present)
+      const activeStage = getCurrentStageByDate(stages) || stages[0]
+      const stageName = activeStage?.name || 'Монолитные конструкции'
+      const rules = getEffectiveStageRules(activeStage)
+      const observedMachinery = new Set(detectedLabelsInWindowRef.current)
+      // Clear remembered labels for the next 30-second observation cycle
+      detectedLabelsInWindowRef.current.clear()
 
       const activeZoneObj = activeZones.find((z) => z.id === activeZoneId) || activeZones[0]
       const curCam = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
       const zoneName = activeZoneObj?.name || 'Основная площадка'
       const camName = curCam?.name || 'Камера 1 (Обзор)'
+      const effectiveSnapshot = snapshotDataUrl || latestSnapshotRef.current || ''
 
-      const triggerViolation = (
+      const emitViolation = (
         severity: 'ERROR' | 'WARNING',
         discrepancyType: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT',
+        machineryName: string,
         title: string,
-        note: string,
-        key: string
+        note: string
       ) => {
-        const lastTrigger = violationCooldownRef.current[key] || 0
-        if (nowSec - lastTrigger < 45) return
-        violationCooldownRef.current[key] = nowSec
-
         const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
         const nowStr = new Date().toLocaleTimeString('ru-RU').slice(0, 5)
 
@@ -3070,7 +3549,7 @@ export default function App() {
           confidence: 96,
           note,
           severity,
-          snapshotUrl: snapshotDataUrl,
+          snapshotUrl: effectiveSnapshot || undefined,
           stageName,
           discrepancyType,
         }
@@ -3081,12 +3560,13 @@ export default function App() {
           title,
           desc: note,
           severity,
-          snapshotUrl: snapshotDataUrl,
+          snapshotUrl: effectiveSnapshot || undefined,
         })
+        toast(severity === 'ERROR' ? `🔴 ${title}` : `⚠️ ${title}`)
 
         setTimeout(() => {
           setActiveViolationAlert((prev) => (prev?.id === newId ? null : prev))
-        }, 10000)
+        }, 12000)
 
         // Asynchronously persist to backend DB & snapshot storage
         createIncident({
@@ -3094,56 +3574,63 @@ export default function App() {
           description: note,
           severity,
           discrepancy_type: discrepancyType,
+          machinery_type: machineryName,
           zone_name: zoneName,
           camera_name: camName,
           stage_name: stageName,
-          frame_snapshot_base64: snapshotDataUrl,
-        }).catch((e) => console.warn('Failed to persist incident:', e))
+          frame_snapshot_base64: effectiveSnapshot || null,
+        })
+          .then((saved) => {
+            const serverUrl = normalizeSnapshotUrl(saved.frame_snapshot_url || saved.snapshot_url)
+            if (serverUrl) {
+              setIncidentsList((prev) =>
+                prev.map((i) => (i.id === newId ? { ...i, snapshotUrl: serverUrl } : i))
+              )
+            }
+          })
+          .catch((e) => console.warn('Failed to persist incident:', e))
       }
 
-      // 3. Check Uncharacteristic (forbidden / extra) machinery in current frame -> ERROR
-      for (const label of detectedLabels) {
-        if (rules.uncharacteristic.some((u) => u.toLowerCase() === label.toLowerCase())) {
-          triggerViolation(
+      // 1. Нет необходимой техники (ERROR)
+      for (const mandatory of rules.mandatory) {
+        if (!observedMachinery.has(mandatory)) {
+          emitViolation(
             'ERROR',
-            'UNCHARACTERISTIC_PRESENT',
-            `Обнаружена нехарактерная (лишняя) техника: ${label}`,
-            `На этапе «${stageName}» зафиксирована лишняя/нехарактерная техника «${label}», не предусмотренная технологической картой.`,
-            `uncharacteristic_${label}`
+            'MISSING_MANDATORY',
+            mandatory,
+            `Нет необходимой техники: ${mandatory}`,
+            `Причина: нет необходимой техники (${mandatory}). За 30 секунд анализа видеопотока на этапе «${stageName}» техника не зафиксирована в кадре.`
           )
         }
       }
 
-      // 4. Check Missing Machinery only after continuous window is evaluated (>= windowSec)
-      if (timeSpan >= windowSec) {
-        // Missing Mandatory -> ERROR
-        for (const mandatory of rules.mandatory) {
-          if (!allObservedInWindow.has(mandatory)) {
-            triggerViolation(
-              'ERROR',
-              'MISSING_MANDATORY',
-              `Отсутствует обязательная техника: ${mandatory}`,
-              `В течение контрольного периода ${windowSec} сек на этапе «${stageName}» в рабочей зоне не зафиксировано присутствие обязательной техники (${mandatory}).`,
-              `missing_mandatory_${mandatory}`
-            )
-          }
+      // 2. Нет рекомендованной техники (WARNING)
+      for (const rec of rules.recommended) {
+        if (!observedMachinery.has(rec)) {
+          emitViolation(
+            'WARNING',
+            'MISSING_RECOMMENDED',
+            rec,
+            `Нет рекомендованной техники: ${rec}`,
+            `Причина: нет рекомендованной техники (${rec}). За 30 секунд анализа видеопотока на этапе «${stageName}» техника не зафиксирована в кадре.`
+          )
         }
+      }
 
-        // Missing Recommended -> WARNING
-        for (const rec of rules.recommended) {
-          if (!allObservedInWindow.has(rec)) {
-            triggerViolation(
-              'WARNING',
-              'MISSING_RECOMMENDED',
-              `Отсутствует рекомендованная техника: ${rec}`,
-              `В течение контрольного периода ${windowSec} сек на этапе «${stageName}» не зафиксирована рекомендованная техника (${rec}).`,
-              `missing_recommended_${rec}`
-            )
-          }
+      // 3. Есть лишняя техника (ERROR)
+      for (const label of observedMachinery) {
+        if (rules.uncharacteristic.some((u) => u.toLowerCase() === label.toLowerCase())) {
+          emitViolation(
+            'ERROR',
+            'UNCHARACTERISTIC_PRESENT',
+            label,
+            `Есть лишняя техника: ${label}`,
+            `Причина: есть лишняя техника (${label}). На этапе «${stageName}» зафиксирована не предусмотренная регламентом спецтехника.`
+          )
         }
       }
     },
-    [violationWindowSeconds, stages, activeZones, activeZoneId, camerasList, selectedCameraId]
+    [isStreamOnline, violationWindowSeconds, stages, stageOverridesVersion, activeZones, activeZoneId, camerasList, selectedCameraId, toast]
   )
 
   const title = titles[page] ?? titles.monitoring
@@ -3170,6 +3657,7 @@ export default function App() {
               setIsCameraModalOpen(open)
             }}
             onFrameAnalysis={handleFrameAnalysis}
+            onStreamStatusChange={setCameraReportedOnline}
             toast={toast}
           />
         )
@@ -3192,11 +3680,19 @@ export default function App() {
             stages={stages}
             setStages={setStages}
             activeProjectId={activeProjectId}
+            navigate={setPage}
             toast={toast}
           />
         )
       case 'analytics':
-        return <Analytics stages={stages} navigate={setPage} toast={toast} />
+        return (
+          <Analytics
+            stages={stages}
+            navigate={setPage}
+            toast={toast}
+            onStageOverridesUpdated={() => setStageOverridesVersion((v) => v + 1)}
+          />
+        )
       case 'reports':
         return (
           <Reports
@@ -3791,8 +4287,13 @@ export default function App() {
                 <input name="cam_code" placeholder="CAM-01" defaultValue={editingCamera?.code || ''} />
               </label>
               <label>
-                URL потока (HTTP(S) MJPEG, RTSP, HLS или IP)
-                <input id="cam_stream_input" name="cam_stream" placeholder="https://192.168.1.106:8080/video" defaultValue={editingCamera?.stream_url || ''} />
+                URL потока (HTTP(S) MJPEG, RTSP или IP)
+                <input
+                  id="cam_stream_input"
+                  name="cam_stream"
+                  placeholder="rtsp://127.0.0.1:8554/live/stroy_cam"
+                  defaultValue={editingCamera?.stream_url || (editingCamera ? '' : 'rtsp://127.0.0.1:8554/live/stroy_cam')}
+                />
               </label>
               <div style={{ display: 'flex', gap: '6px', marginTop: '-4px', marginBottom: '8px', alignItems: 'center' }}>
                 <button
@@ -3825,11 +4326,11 @@ export default function App() {
                   style={{ fontSize: '10px', padding: '2px 8px' }}
                   onClick={() => {
                     const el = document.getElementById('cam_stream_input') as HTMLInputElement
-                    if (el) el.value = 'rtsp://192.168.1.106:8554/video'
+                    if (el) el.value = 'rtsp://127.0.0.1:8554/live/stroy_cam'
                     setStreamCheckResult(null)
                   }}
                 >
-                  VLC RTSP (:8554/video)
+                  RTSP: Стройплощадка (:8554)
                 </button>
                 <button
                   type="button"
@@ -3837,11 +4338,11 @@ export default function App() {
                   style={{ fontSize: '10px', padding: '2px 8px' }}
                   onClick={() => {
                     const el = document.getElementById('cam_stream_input') as HTMLInputElement
-                    if (el) el.value = 'https://192.168.1.106:8080/video'
+                    if (el) el.value = 'rtsp://127.0.0.1:554/live/crane_cam'
                     setStreamCheckResult(null)
                   }}
                 >
-                  HTTP MJPEG (:8080/video)
+                  RTSP: Кран (:554)
                 </button>
                 <button
                   type="button"
@@ -3849,11 +4350,11 @@ export default function App() {
                   style={{ fontSize: '10px', padding: '2px 8px' }}
                   onClick={() => {
                     const el = document.getElementById('cam_stream_input') as HTMLInputElement
-                    if (el) el.value = 'rtsp://192.168.1.120:554/live/crane_cam'
+                    if (el) el.value = 'http://127.0.0.1:8000/media/sample_stream.mjpg'
                     setStreamCheckResult(null)
                   }}
                 >
-                  RTSP: Кран (Секция 1)
+                  HTTP MJPEG (:8000)
                 </button>
               </div>
               <label>
@@ -3958,22 +4459,44 @@ export default function App() {
             <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '4px', color: '#fff' }}>
               {activeViolationAlert.title}
             </div>
-            <p style={{ fontSize: '11px', opacity: 0.92, margin: '0 0 10px', lineHeight: 1.45, color: '#f1f5f9' }}>
+            <p style={{ fontSize: '11px', opacity: 0.92, margin: '0 0 8px', lineHeight: 1.45, color: '#f1f5f9' }}>
               {activeViolationAlert.desc}
             </p>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                className="button"
-                style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
-                onClick={() => {
-                  setHighlightedIncidentId(activeViolationAlert.id)
-                  setPage('archive')
-                  setActiveViolationAlert(null)
+
+            {/* Frame snapshot from video for problem alerts */}
+            {activeViolationAlert.snapshotUrl && (
+              <div
+                style={{
+                  margin: '0 0 10px',
+                  borderRadius: '6px',
+                  overflow: 'hidden',
+                  background: '#090b0e',
+                  border: '1px solid rgba(255,255,255,0.2)',
                 }}
               >
-                В фотоархив ↗
-              </button>
+                <img
+                  src={activeViolationAlert.snapshotUrl}
+                  alt="Кадр нарушения из видео"
+                  style={{ width: '100%', height: '140px', objectFit: 'contain', display: 'block' }}
+                />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {activeViolationAlert.snapshotUrl && (
+                <button
+                  type="button"
+                  className="button"
+                  style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
+                  onClick={() => {
+                    setHighlightedIncidentId(activeViolationAlert.id)
+                    setPage('archive')
+                    setActiveViolationAlert(null)
+                  }}
+                >
+                  В фотоархив ↗
+                </button>
+              )}
               <button
                 type="button"
                 className="button"

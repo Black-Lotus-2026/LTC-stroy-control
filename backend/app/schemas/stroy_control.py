@@ -14,7 +14,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class IncidentSeverity(str, Enum):
@@ -28,6 +28,9 @@ class DiscrepancyType(str, Enum):
     MISSING_RECOMMENDED = "MISSING_RECOMMENDED"
     UNCHARACTERISTIC_PRESENT = "UNCHARACTERISTIC_PRESENT"
     NEUTRAL_INFO = "NEUTRAL_INFO"
+    STREAM_OFFLINE = "STREAM_OFFLINE"
+    STREAM_ONLINE = "STREAM_ONLINE"
+    STREAM_LOST = "STREAM_LOST"
 
 
 class VideoStatus(str, Enum):
@@ -138,6 +141,7 @@ class StageProbabilityResponse(BaseModel):
     similarity_confidence: float = 0.0
     probabilities: list[MachineryProbabilityItem]
     top_machinery: list[str]
+    has_custom_override: bool = False
 
 
 class StageMachineryOverrideRequest(BaseModel):
@@ -165,26 +169,27 @@ class IncidentResponse(BaseModel):
     title: str | None = None
     description: str | None = None
     severity: IncidentSeverity
-    discrepancy_type: DiscrepancyType
-    machinery_type: str
-    stage_probability: float
+    discrepancy_type: str
+    machinery_type: str | None = None
+    stage_probability: float | None = None
     observed_count: int = 0
     frame_snapshot_url: str | None = None
+    snapshot_url: str | None = None
     is_vlm_verified: bool = False
     vlm_summary: str | None = None
     created_at: datetime
 
 
 class IncidentCreateRequest(BaseModel):
-    project_id: uuid.UUID
+    project_id: uuid.UUID | None = None
     stage_id: uuid.UUID | None = None
     stage_name: str | None = None
     zone_name: str | None = None
     camera_name: str | None = None
     severity: IncidentSeverity = IncidentSeverity.ERROR
-    discrepancy_type: DiscrepancyType = DiscrepancyType.MISSING_MANDATORY
-    machinery_type: str
-    stage_probability: float = 0.95
+    discrepancy_type: str = "MISSING_MANDATORY"
+    machinery_type: str | None = None
+    stage_probability: float | None = 0.95
     observed_count: int = 0
     title: str
     description: str
@@ -246,6 +251,18 @@ class CameraCreate(BaseModel):
     stream_url: str | None = Field(None, description="RTSP/HLS или IP поток")
     zone_id: uuid.UUID | None = Field(None, description="Привязка к стройплощадке")
 
+    @field_validator("zone_id", mode="before")
+    @classmethod
+    def validate_zone_id(cls, v: Any) -> uuid.UUID | None:
+        if not v or v == "" or v == "all":
+            return None
+        if isinstance(v, uuid.UUID):
+            return v
+        try:
+            return uuid.UUID(str(v))
+        except (ValueError, TypeError):
+            return None
+
 
 class CameraUpdate(BaseModel):
     name: str | None = Field(None, description="Название камеры")
@@ -253,6 +270,18 @@ class CameraUpdate(BaseModel):
     stream_url: str | None = Field(None, description="RTSP/HLS или IP поток")
     zone_id: uuid.UUID | None = Field(None, description="Привязка к стройплощадке")
     status: str | None = Field(None, description="Статус камеры (online/offline)")
+
+    @field_validator("zone_id", mode="before")
+    @classmethod
+    def validate_zone_id(cls, v: Any) -> uuid.UUID | None:
+        if not v or v == "" or v == "all":
+            return None
+        if isinstance(v, uuid.UUID):
+            return v
+        try:
+            return uuid.UUID(str(v))
+        except (ValueError, TypeError):
+            return None
 
 
 class CameraItem(BaseModel):

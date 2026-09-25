@@ -10,6 +10,7 @@ venv/
 
 # Настройки окружения и данные стенда
 .env
+var/
 backend/var/
 *.db
 celerybeat-schedule*

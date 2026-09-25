@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
@@ -27,12 +28,24 @@ from app.services.stage_matcher import StageMachineryService
 router = APIRouter(prefix="/schedule", tags=["Календарный план"])
 
 
+def _parse_uuid(val: Any) -> uuid.UUID | None:
+    if not val:
+        return None
+    if isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(str(val))
+    except (ValueError, AttributeError):
+        return None
+
+
 @router.get("/stages", response_model=list[StageItem])
-def get_stages(db: DbSession, project_id: uuid.UUID | None = None) -> list[StageItem]:
+def get_stages(db: DbSession, project_id: str | None = None) -> list[StageItem]:
     """Получить список этапов СМР для отображения на диаграмме Ганта."""
+    parsed_id = _parse_uuid(project_id)
     query = select(ScheduleTask).order_by(ScheduleTask.order_index)
-    if project_id:
-        query = query.where(ScheduleTask.project_id == project_id)
+    if parsed_id:
+        query = query.where(ScheduleTask.project_id == parsed_id)
 
     stages = db.scalars(query).all()
     return [
@@ -54,13 +67,14 @@ def get_stages(db: DbSession, project_id: uuid.UUID | None = None) -> list[Stage
 
 @router.delete("/stages", status_code=200)
 @router.post("/clear", status_code=200)
-def clear_stages(db: DbSession, project_id: uuid.UUID | None = None) -> dict[str, Any]:
+def clear_stages(db: DbSession, project_id: str | None = None) -> dict[str, Any]:
     """Очистить календарный план (все этапы или конкретного объекта)."""
     from sqlalchemy import delete
 
+    parsed_id = _parse_uuid(project_id)
     stmt = delete(ScheduleTask)
-    if project_id:
-        stmt = stmt.where(ScheduleTask.project_id == project_id)
+    if parsed_id:
+        stmt = stmt.where(ScheduleTask.project_id == parsed_id)
     res = db.execute(stmt)
     db.commit()
     return {"message": "Календарный план успешно очищен", "deleted_count": res.rowcount}
@@ -68,11 +82,12 @@ def clear_stages(db: DbSession, project_id: uuid.UUID | None = None) -> dict[str
 
 @router.post("/load-demo", response_model=ScheduleImportResponse)
 def load_demo(
-    db: DbSession, project_id: uuid.UUID | None = None
+    db: DbSession, project_id: str | None = None
 ) -> ScheduleImportResponse:
     """Загрузить эталонный демо-файл календарного плана 'Многоквартирный жилой дом'."""
+    parsed_id = _parse_uuid(project_id)
     engine = ScheduleEngine(db)
-    stages = engine.load_demo_schedule(project_id)
+    stages = engine.load_demo_schedule(parsed_id)
     items = [
         StageItem(
             id=s.id,
@@ -89,7 +104,7 @@ def load_demo(
         for s in stages
     ]
     return ScheduleImportResponse(
-        project_id=stages[0].project_id if stages else uuid.uuid4(),
+        project_id=stages[0].project_id if stages else (parsed_id or uuid.uuid4()),
         total_stages_imported=len(stages),
         matched_catalog_count=sum(1 for s in stages if s.matched_catalog_name),
         stages=items,
@@ -100,7 +115,7 @@ def load_demo(
 async def upload_schedule(
     db: DbSession,
     file: UploadFile = File(...),
-    project_id: uuid.UUID | None = None,
+    project_id: str | None = None,
 ) -> ScheduleImportResponse:
     """Загрузить пользовательский файл графика СМР (.xlsx или .csv)."""
     if not file.filename:
@@ -114,9 +129,10 @@ async def upload_schedule(
         )
 
     content = await file.read()
+    parsed_id = _parse_uuid(project_id)
     engine = ScheduleEngine(db)
     try:
-        stages = engine.import_schedule_bytes(content, file.filename, project_id)
+        stages = engine.import_schedule_bytes(content, file.filename, parsed_id)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка разбора файла графика: {e}")
 
@@ -136,7 +152,7 @@ async def upload_schedule(
         for s in stages
     ]
     return ScheduleImportResponse(
-        project_id=stages[0].project_id if stages else uuid.uuid4(),
+        project_id=stages[0].project_id if stages else (parsed_id or uuid.uuid4()),
         total_stages_imported=len(stages),
         matched_catalog_count=sum(1 for s in stages if s.matched_catalog_name),
         stages=items,
@@ -211,7 +227,6 @@ def cascade_shift(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
 def _find_stage(stage_id: str, db: DbSession) -> ScheduleTask | None:
     target_uuid = None
     try:
@@ -302,6 +317,7 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
         similarity_confidence=stage.catalog_similarity if (stage and stage.catalog_similarity is not None) else 0.95,
         probabilities=items,
         top_machinery=top_machinery,
+        has_custom_override=bool(overrides and len(overrides) > 0),
     )
 
 
@@ -311,6 +327,8 @@ def get_stage_probabilities(
 ) -> StageProbabilityResponse:
     """Получить распределение вероятностей техники для детального экрана этапа."""
     stage = _find_stage(stage_id, db)
+    if not stage:
+        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
     return _build_stage_probability_response(stage)
 
 
@@ -322,6 +340,8 @@ def update_stage_probabilities(
 ) -> StageProbabilityResponse:
     """Ручная настройка статуса/вероятности техники на этапе."""
     stage = _find_stage(stage_id, db)
+    if not stage:
+        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Этап не найден")
 
@@ -340,6 +360,8 @@ def reset_stage_probabilities(
 ) -> StageProbabilityResponse:
     """Сбросить ручные настройки техники к расчётам по справочнику/AI."""
     stage = _find_stage(stage_id, db)
+    if not stage:
+        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Этап не найден")
 

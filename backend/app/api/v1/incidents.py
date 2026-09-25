@@ -15,6 +15,7 @@ from app.models.enums import (
     IncidentType,
 )
 from app.models.incident import Incident, VlmVerification
+from app.models.project import Project
 from app.schemas.stroy_control import (
     IncidentConfigResponse,
     IncidentConfigUpdate,
@@ -80,6 +81,7 @@ def get_incidents(
                 stage_probability=0.96,
                 observed_count=0,
                 frame_snapshot_url="/media/snapshots/inc_042.jpg",
+                snapshot_url="/media/snapshots/inc_042.jpg",
                 is_vlm_verified=True,
                 vlm_summary="На этапе выемки грунта отсутствует обязательный экскаватор. Камера подтверждает отсутствие спецтехники на рабочей площадке.",
                 created_at=datetime.now(),
@@ -100,6 +102,7 @@ def get_incidents(
                 stage_probability=0.72,
                 observed_count=0,
                 frame_snapshot_url=None,
+                snapshot_url=None,
                 is_vlm_verified=False,
                 vlm_summary="Рекомендованный погрузчик не зафиксирован на кадрах рабочей смены.",
                 created_at=datetime.now(),
@@ -137,6 +140,7 @@ def get_incidents(
                 stage_probability=inc.stage_probability or 0.85,
                 observed_count=inc.observation_count,
                 frame_snapshot_url=snapshot_url,
+                snapshot_url=snapshot_url,
                 is_vlm_verified=inc.is_vlm_verified,
                 vlm_summary=inc.vlm_summary,
                 created_at=inc.created_at,
@@ -179,9 +183,27 @@ def create_incident(
         else IncidentType.EQUIPMENT_MISSING
     )
 
+    target_project_id = req.project_id
+    if target_project_id:
+        proj = db.get(Project, target_project_id)
+        if not proj:
+            target_project_id = None
+    if not target_project_id:
+        proj = db.scalars(select(Project)).first()
+        if proj:
+            target_project_id = proj.id
+        else:
+            proj = Project(
+                code="PRJ-DEFAULT",
+                name="Объект строительства",
+            )
+            db.add(proj)
+            db.flush()
+            target_project_id = proj.id
+
     incident = Incident(
         code=code,
-        project_id=req.project_id,
+        project_id=target_project_id,
         schedule_task_id=req.stage_id,
         category=IncidentCategory.EQUIPMENT,
         type=inc_type,
@@ -190,10 +212,10 @@ def create_incident(
         discrepancy_type=req.discrepancy_type,
         machinery_type=req.machinery_type,
         stage_probability=req.stage_probability,
-        observed_count=req.observed_count,
+        observation_count=req.observed_count or 1,
         priority=priority,
         status=IncidentStatus.PENDING,
-        dedup_key=f"{req.project_id}_{req.machinery_type}_{req.discrepancy_type}_{now.strftime('%Y%m%d%H%M')}",
+        dedup_key=f"{target_project_id}_{req.machinery_type}_{req.discrepancy_type}_{now.strftime('%Y%m%d%H%M%S')}",
         first_seen_at=now,
         last_seen_at=now,
         explanation={
@@ -225,6 +247,7 @@ def create_incident(
         stage_probability=incident.stage_probability or req.stage_probability,
         observed_count=incident.observation_count,
         frame_snapshot_url=snapshot_url,
+        snapshot_url=snapshot_url,
         is_vlm_verified=False,
         vlm_summary=None,
         created_at=incident.created_at,
