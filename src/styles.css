@@ -511,13 +511,13 @@ select option{background:#171a1e;color:#fff}
 .prob-bar-row:last-child { border-bottom: 0; }
 .prob-track { height: 12px; background: #171a1e; border: 1px solid #35373c; overflow: hidden; position: relative; }
 .prob-fill { height: 100%; transition: width .3s ease; }
-.prob-fill.mandatory { background: #cf9d3d; }
-.prob-fill.recommended { background: #e5b358; }
+.prob-fill.mandatory { background: #34d399; }
+.prob-fill.recommended { background: #eab308; }
 .prob-fill.neutral { background: #74777c; }
 .prob-fill.uncharacteristic { background: #dc2626; }
 .prob-badge { padding: 3px 8px; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; text-align: center; display: inline-block; }
-.prob-badge.mandatory { background: rgba(207,157,61,.18); color: #cf9d3d; border: 1px solid #cf9d3d; }
-.prob-badge.recommended { background: rgba(229,179,88,.15); color: #e5b358; border: 1px solid #e5b358; }
+.prob-badge.mandatory { background: rgba(52,211,153,.18); color: #34d399; border: 1px solid #34d399; }
+.prob-badge.recommended { background: rgba(234,179,8,.18); color: #eab308; border: 1px solid #eab308; }
 .prob-badge.neutral { background: rgba(116,119,124,.15); color: #a8aaad; border: 1px solid #74777c; }
 .prob-badge.uncharacteristic { background: rgba(220,38,38,.2); color: #f87171; border: 1px solid #dc2626; }
 

@@ -1458,7 +1458,17 @@ function Analytics({
                       <div className="prob-track">
                         <div
                           className={`prob-fill ${item.classification.toLowerCase()}`}
-                          style={{ width: `${Math.round(item.probability * 100)}%` }}
+                          style={{
+                            width: `${Math.round(item.probability * 100)}%`,
+                            background:
+                              item.classification === 'MANDATORY'
+                                ? '#34d399'
+                                : item.classification === 'RECOMMENDED'
+                                ? '#eab308'
+                                : item.classification === 'NEUTRAL'
+                                ? '#74777c'
+                                : '#dc2626',
+                          }}
                         />
                       </div>
                       <span style={{ textAlign: 'right', fontWeight: 600, color: '#fff' }}>
@@ -1474,7 +1484,7 @@ function Analytics({
                               item.classification === 'MANDATORY'
                                 ? '#34d399'
                                 : item.classification === 'RECOMMENDED'
-                                ? '#60a5fa'
+                                ? '#eab308'
                                 : item.classification === 'NEUTRAL'
                                 ? '#cbd5e1'
                                 : '#f87171',
@@ -1489,10 +1499,10 @@ function Analytics({
                           }}
                           title="Ручная настройка статуса техники на данном этапе"
                         >
-                          <option value="MANDATORY">🟢 Обязательная</option>
-                          <option value="RECOMMENDED">🔵 Рекомендованная</option>
-                          <option value="NEUTRAL">⚪ Допустимая</option>
-                          <option value="UNCHARACTERISTIC">🔴 Не допускается</option>
+                          <option value="MANDATORY">Обязательная</option>
+                          <option value="RECOMMENDED">Рекомендованная</option>
+                          <option value="NEUTRAL">Допустимая</option>
+                          <option value="UNCHARACTERISTIC">Не допускается</option>
                         </select>
                       </div>
                     </div>
@@ -1547,15 +1557,23 @@ function Analytics({
                     const lx = centerCoord + labelDist * Math.cos(p.angle)
                     const ly = centerCoord + labelDist * Math.sin(p.angle)
                     const textAnchor = Math.cos(p.angle) > 0.2 ? 'start' : Math.cos(p.angle) < -0.2 ? 'end' : 'middle'
+                    const pointColor =
+                      p.item.classification === 'MANDATORY' || p.item.probability > 0.8
+                        ? '#34d399'
+                        : p.item.classification === 'RECOMMENDED' || p.item.probability >= 0.6
+                        ? '#eab308'
+                        : p.item.classification === 'UNCHARACTERISTIC' || p.item.probability < 0.15
+                        ? '#f87171'
+                        : '#94a3b8'
                     return (
                       <g key={idx}>
-                        <circle cx={p.x} cy={p.y} r="3.5" fill="#cf9d3d" stroke="#0b0d10" strokeWidth="1" />
+                        <circle cx={p.x} cy={p.y} r="4" fill={pointColor} stroke="#0b0d10" strokeWidth="1.5" />
                         <text
                           x={lx}
                           y={ly}
                           textAnchor={textAnchor}
                           dominantBaseline="central"
-                          fill="#9ca3af"
+                          fill={p.item.probability >= 0.6 ? '#f1f5f9' : '#9ca3af'}
                           fontSize="9"
                           fontWeight={p.item.probability >= 0.6 ? 700 : 400}
                         >
@@ -1571,7 +1589,10 @@ function Analytics({
                     <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34d399' }} /> &gt;80% Обязательная
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#60a5fa' }} /> 60-80% Рекомендованная
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#eab308' }} /> 60-80% Рекомендованная
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#94a3b8' }} /> 15-60% Допустимая
                   </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#f87171' }} /> &lt;15% Не допускается

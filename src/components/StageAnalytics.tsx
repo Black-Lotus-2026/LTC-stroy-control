@@ -329,7 +329,15 @@ export const StageAnalytics: React.FC<StageAnalyticsProps> = ({ selectedStage, o
                           cx={p.x}
                           cy={p.y}
                           r="4"
-                          fill={p.item.probability > 0.6 ? '#34d399' : '#818cf8'}
+                          fill={
+                            p.item.probability > 0.8
+                              ? '#34d399'
+                              : p.item.probability >= 0.6
+                              ? '#eab308'
+                              : p.item.probability < 0.15
+                              ? '#f43f5e'
+                              : '#94a3b8'
+                          }
                           stroke="#0f172a"
                           strokeWidth="1.5"
                         />
@@ -367,9 +375,9 @@ export const StageAnalytics: React.FC<StageAnalyticsProps> = ({ selectedStage, o
                     </div>
                   </div>
                   <div className="flex items-start gap-2 bg-amber-950/30 border border-amber-800/40 p-2 rounded">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 mt-0.5 shrink-0" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 mt-0.5 shrink-0" />
                     <div>
-                      <strong className="text-amber-300">0.6 ≤ P ≤ 0.8: Рекомендованная</strong>
+                      <strong className="text-yellow-400">0.6 ≤ P ≤ 0.8: Рекомендованная</strong>
                       <p className="text-slate-400 text-[11px]">
                         Отсутствие техники фиксируется как WARNING
                       </p>
