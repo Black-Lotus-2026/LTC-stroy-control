@@ -272,7 +272,7 @@ function CameraFrame({
             height: d.height,
           }))
           setRealDetections(mapped)
-          onDetectionsUpdate?.(mapped)
+          onDetectionsUpdate?.(mapped.filter((d) => d.conf >= 60))
         } catch (err) {
           console.warn('Real AI detection error:', err)
           setRealDetections([])
@@ -310,7 +310,9 @@ function CameraFrame({
     }
   }, [currentTime, isFileVideo, isHttpStream, triggerDetection])
 
-  const displayedDetections = streamLoadError ? [] : realDetections
+  const displayedDetections = streamLoadError
+    ? []
+    : realDetections.filter((d) => d.conf >= 60)
 
   return (
     <div ref={frameRef} className={`camera-frame ${compact ? 'compact-frame' : ''}`} style={{ position: 'relative' }}>
