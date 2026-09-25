@@ -68,17 +68,40 @@ export interface StageProbabilityResponse {
 export interface IncidentAlertItem {
   id: string
   code: string
+  project_id?: string
   stage_id?: string | null
   stage_name?: string | null
+  zone_name?: string | null
+  camera_name?: string | null
+  title?: string | null
+  description?: string | null
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
-  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'NEUTRAL_INFO'
-  machinery_type: string
-  stage_probability: number
-  observed_count: number
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'NEUTRAL_INFO' | string
+  status?: string | null
+  machinery_type?: string
+  stage_probability?: number
+  observed_count?: number
   frame_snapshot_url?: string | null
-  is_vlm_verified: boolean
+  snapshot_url?: string | null
+  is_vlm_verified?: boolean
   vlm_summary?: string | null
-  created_at: string
+  created_at?: string
+}
+
+export interface IncidentCreatePayload {
+  project_id?: string
+  stage_id?: string | null
+  stage_name?: string | null
+  zone_name?: string | null
+  camera_name?: string | null
+  severity: 'ERROR' | 'WARNING'
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | string
+  machinery_type?: string
+  stage_probability?: number
+  observed_count?: number
+  title: string
+  description: string
+  frame_snapshot_base64?: string | null
 }
 
 export interface VlmVerificationResult {
@@ -645,9 +668,42 @@ export async function resetStageProbabilities(
 // Incidents & VLM Verification API
 // ----------------------------------------------------------------------------
 
-export async function fetchIncidents(): Promise<IncidentAlertItem[]> {
+export async function fetchIncidentConfig(): Promise<{ violation_evaluation_window_seconds: number }> {
   try {
-    const res = await fetch(`${API_PREFIX}/incidents`)
+    const res = await fetch(`${API_PREFIX}/incidents/config`)
+    if (res.ok) return await res.json()
+  } catch {
+    // fallback default
+  }
+  return { violation_evaluation_window_seconds: 30 }
+}
+
+export async function updateIncidentConfig(
+  seconds: number
+): Promise<{ violation_evaluation_window_seconds: number }> {
+  const res = await fetch(`${API_PREFIX}/incidents/config`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ violation_evaluation_window_seconds: seconds }),
+  })
+  if (!res.ok) throw new Error('Ошибка обновления периода фиксации нарушений')
+  return await res.json()
+}
+
+export async function createIncident(data: IncidentCreatePayload): Promise<IncidentAlertItem> {
+  const res = await fetch(`${API_PREFIX}/incidents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Ошибка регистрации инцидента')
+  return await res.json()
+}
+
+export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
+  try {
+    const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
+    const res = await fetch(url)
     if (res.ok) return await res.json()
   } catch {
     // Return mock incidents

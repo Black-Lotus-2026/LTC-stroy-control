@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_days: int = 30
 
+    # --- Контроль нарушений спецтехники ---
+    # Период проверки и фиксации нарушений (в секундах).
+    # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
+    violation_evaluation_window_seconds: int = 30
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> str:

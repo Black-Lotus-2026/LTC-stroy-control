@@ -205,7 +205,7 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
                     </span>
                     <span className="text-slate-600">•</span>
                     <span>
-                      Ожидание: <strong className="text-slate-200">{(incident.stage_probability * 100).toFixed(0)}%</strong>
+                      Ожидание: <strong className="text-slate-200">{((incident.stage_probability ?? 0.8) * 100).toFixed(0)}%</strong>
                     </span>
                   </div>
 

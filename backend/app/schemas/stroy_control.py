@@ -160,6 +160,10 @@ class IncidentResponse(BaseModel):
     project_id: uuid.UUID
     stage_id: uuid.UUID | None = None
     stage_name: str | None = None
+    zone_name: str | None = None
+    camera_name: str | None = None
+    title: str | None = None
+    description: str | None = None
     severity: IncidentSeverity
     discrepancy_type: DiscrepancyType
     machinery_type: str
@@ -169,6 +173,30 @@ class IncidentResponse(BaseModel):
     is_vlm_verified: bool = False
     vlm_summary: str | None = None
     created_at: datetime
+
+
+class IncidentCreateRequest(BaseModel):
+    project_id: uuid.UUID
+    stage_id: uuid.UUID | None = None
+    stage_name: str | None = None
+    zone_name: str | None = None
+    camera_name: str | None = None
+    severity: IncidentSeverity = IncidentSeverity.ERROR
+    discrepancy_type: DiscrepancyType = DiscrepancyType.MISSING_MANDATORY
+    machinery_type: str
+    stage_probability: float = 0.95
+    observed_count: int = 0
+    title: str
+    description: str
+    frame_snapshot_base64: str | None = None
+
+
+class IncidentConfigResponse(BaseModel):
+    violation_evaluation_window_seconds: int
+
+
+class IncidentConfigUpdate(BaseModel):
+    violation_evaluation_window_seconds: int = Field(..., ge=1, le=3600)
 
 
 class VlmVerificationResponse(BaseModel):

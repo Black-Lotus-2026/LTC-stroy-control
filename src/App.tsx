@@ -4,6 +4,7 @@ import {
   incidentsSeed,
   mockApi,
   type Incident,
+  type IncidentStatus,
   type PageKey,
 } from './data'
 import cameraImage from './assets/construction-camera.png'
@@ -44,11 +45,16 @@ import {
   loginUser,
   registerUser,
   logoutUser,
+  fetchIncidentConfig,
+  updateIncidentConfig,
+  fetchIncidents,
+  createIncident,
+  IncidentAlertItem,
 } from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'monitoring', label: 'Наблюдение', icon: 'video' },
-  { id: 'archive', label: 'Видеоархив', icon: 'archive' },
+  { id: 'archive', label: 'Фотоархив', icon: 'camera' },
   { id: 'progress', label: 'Прогресс', icon: 'progress' },
   { id: 'analytics', label: 'Аналитика', icon: 'chart' },
   { id: 'reports', label: 'Отчёты', icon: 'file' },
@@ -57,10 +63,10 @@ const nav: { id: PageKey; label: string; icon: string }[] = [
 
 const titles: Record<PageKey, [string, string]> = {
   monitoring: ['Наблюдение', 'Камеры, видеозаписи и детекция строительной техники'],
-  archive: ['Видеоархив', 'Поиск событий по камерам и времени'],
+  archive: ['Фотоархив', 'Фотофиксация нарушений и событий стройплощадки с привязкой к отчётам'],
   progress: ['Прогресс', 'Календарный график СМР и контроль сроков (Гант)'],
   analytics: ['Аналитика', 'Вероятностные профили спецтехники по этапам СМР'],
-  reports: ['Отчёты', 'Проверяемая сводка за смену'],
+  reports: ['Отчёты', 'Сводка нарушений за смену и контроль регламентов'],
   settings: ['Настройки', 'Объекты, стройплощадки, камеры и правила'],
 }
 
@@ -74,6 +80,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const paths: Record<string, React.JSX.Element> = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
     video: <><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></>,
+    camera: <><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></>,
     layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></>,
     alert: <><path d="M10.3 3.3 2.5 17a2 2 0 0 0 1.8 3h15.4a2 2 0 0 0 1.8-3L13.7 3.3a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></>,
     archive: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v12h14V8M10 12h4"/></>,
@@ -142,6 +149,77 @@ function getRequiredMachineryForStage(stageName?: string): string[] {
   return ['Башенный кран', 'Самосвал']
 }
 
+export interface StageMachineryRules {
+  mandatory: string[]
+  recommended: string[]
+  uncharacteristic: string[]
+}
+
+export function getStageMachineryRules(stageName?: string): StageMachineryRules {
+  if (!stageName) {
+    return {
+      mandatory: ['Башенный кран'],
+      recommended: ['Самосвал', 'Автобетоносмеситель'],
+      uncharacteristic: ['Асфальтоукладчик', 'Каток', 'Автогрейдер'],
+    }
+  }
+  const s = stageName.toLowerCase()
+  if (s.includes('котлован') || s.includes('землян')) {
+    return {
+      mandatory: ['Экскаватор', 'Самосвал'],
+      recommended: ['Бульдозер', 'Погрузчик'],
+      uncharacteristic: ['Башенный кран', 'Асфальтоукладчик', 'Каток', 'Автогидроподъемник'],
+    }
+  }
+  if (s.includes('фундамент') || s.includes('нулев')) {
+    return {
+      mandatory: ['Бетононасос', 'Автобетоносмеситель'],
+      recommended: ['Экскаватор', 'Автокран'],
+      uncharacteristic: ['Асфальтоукладчик', 'Каток', 'Автогрейдер'],
+    }
+  }
+  if (s.includes('монолит') || s.includes('каркас') || s.includes('стен') || s.includes('колонн') || s.includes('перекрыт')) {
+    return {
+      mandatory: ['Башенный кран', 'Бетононасос'],
+      recommended: ['Автобетоносмеситель', 'Автокран'],
+      uncharacteristic: ['Бульдозер', 'Асфальтоукладчик', 'Каток', 'Автогрейдер'],
+    }
+  }
+  if (s.includes('кладк') || s.includes('перегород')) {
+    return {
+      mandatory: ['Башенный кран'],
+      recommended: ['Автобетоносмеситель', 'Погрузчик', 'Автокран'],
+      uncharacteristic: ['Асфальтоукладчик', 'Каток', 'Автогрейдер', 'Бульдозер'],
+    }
+  }
+  if (s.includes('фасад') || s.includes('витраж') || s.includes('остеклен')) {
+    return {
+      mandatory: ['Автогидроподъемник'],
+      recommended: ['Автокран', 'Башенный кран'],
+      uncharacteristic: ['Экскаватор', 'Бульдозер', 'Асфальтоукладчик', 'Каток', 'Автогрейдер'],
+    }
+  }
+  if (s.includes('кровл')) {
+    return {
+      mandatory: ['Башенный кран'],
+      recommended: ['Автокран', 'Автогидроподъемник'],
+      uncharacteristic: ['Экскаватор', 'Бульдозер', 'Каток', 'Асфальтоукладчик', 'Автогрейдер'],
+    }
+  }
+  if (s.includes('благоустрой') || s.includes('дорож') || s.includes('асфальт')) {
+    return {
+      mandatory: ['Асфальтоукладчик', 'Каток'],
+      recommended: ['Самосвал', 'Погрузчик', 'Автогрейдер'],
+      uncharacteristic: ['Башенный кран', 'Бетононасос', 'Автогидроподъемник'],
+    }
+  }
+  return {
+    mandatory: ['Башенный кран'],
+    recommended: ['Самосвал', 'Автобетоносмеситель'],
+    uncharacteristic: ['Асфальтоукладчик', 'Каток'],
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Camera Frame with RTSP Live Stream Player & Real AI Machinery Bounding Boxes
 // ----------------------------------------------------------------------------
@@ -156,6 +234,7 @@ function CameraFrame({
   activeStageName = undefined,
   onSelectClass = undefined,
   onDetectionsUpdate = undefined,
+  onFrameAnalysis = undefined,
 }: {
   boxes?: boolean
   compact?: boolean
@@ -167,6 +246,7 @@ function CameraFrame({
   activeStageName?: string
   onSelectClass?: (label: string) => void
   onDetectionsUpdate?: (dets: LiveDetectionInfo[]) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
 }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [realDetections, setRealDetections] = useState<LiveDetectionInfo[]>([])
@@ -260,6 +340,7 @@ function CameraFrame({
       }
 
       if (!canvas) return
+      const snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.82)
       detectionInFlightRef.current = true
       setIsDetecting(true)
 
@@ -282,8 +363,10 @@ function CameraFrame({
             width: d.width,
             height: d.height,
           }))
+          const validDets = mapped.filter((d) => d.conf >= 60)
           setRealDetections(mapped)
-          onDetectionsUpdate?.(mapped.filter((d) => d.conf >= 60))
+          onDetectionsUpdate?.(validDets)
+          onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime)
         } catch (err) {
           console.warn('Real AI detection error:', err)
           setRealDetections([])
@@ -553,6 +636,7 @@ function Monitoring({
   setUploadedVideoName,
   setIsUploadModalOpen,
   setIsCameraModalOpen,
+  onFrameAnalysis,
   toast,
 }: {
   activeProject?: ProjectItem
@@ -568,6 +652,7 @@ function Monitoring({
   setUploadedVideoName: (name: string | null) => void
   setIsUploadModalOpen: (b: boolean) => void
   setIsCameraModalOpen: (b: boolean) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
   toast: (s: string) => void
 }) {
   const [mode, setMode] = useState('Техника')
@@ -729,6 +814,7 @@ function Monitoring({
               activeStageName={activeStage?.name}
               onSelectClass={(eq) => setActiveEquipment((prev) => (prev === eq ? null : eq))}
               onDetectionsUpdate={setLiveDetections}
+              onFrameAnalysis={onFrameAnalysis}
             />
 
             <div className="analysis-tabs" role="tablist">
@@ -857,78 +943,255 @@ function Timeline() {
 // ----------------------------------------------------------------------------
 // 4. Archive Page
 // ----------------------------------------------------------------------------
-function Archive({
+// ----------------------------------------------------------------------------
+// 4. Photo Archive Page (Фотоархив нарушений)
+// ----------------------------------------------------------------------------
+function PhotoArchive({
+  incidents,
+  violationWindowSeconds,
+  highlightedIncidentId,
+  onNavigateToReport,
   toast,
 }: {
+  incidents: Incident[]
+  violationWindowSeconds: number
+  highlightedIncidentId?: string | null
+  onNavigateToReport: (incidentId: string) => void
   toast: (s: string) => void
 }) {
-  const [query, setQuery] = useState('Покажи простои спецтехники дольше 20 минут')
-  const [searched, setSearched] = useState(true)
+  const [filterSeverity, setFilterSeverity] = useState<'all' | 'ERROR' | 'WARNING'>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
 
-  const search = async () => {
-    await mockApi.runArchiveSearch(query)
-    setSearched(true)
-  }
+  const filteredIncidents = useMemo(() => {
+    return incidents.filter((inc) => {
+      const isError =
+        inc.severity === 'ERROR' ||
+        inc.priority === 'Критический' ||
+        inc.discrepancyType === 'MISSING_MANDATORY' ||
+        inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+
+      if (filterSeverity === 'ERROR' && !isError) return false
+      if (filterSeverity === 'WARNING' && isError) return false
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        const text = `${inc.id} ${inc.title} ${inc.note} ${inc.zone} ${inc.stageName || ''}`.toLowerCase()
+        if (!text.includes(q)) return false
+      }
+      return true
+    })
+  }, [incidents, filterSeverity, searchQuery])
 
   return (
     <div className="archive-page">
       <section className="archive-search">
-        <span className="eyebrow">ПОИСК ПО ВИДЕОАРХИВУ</span>
-        <h1>Найдите событие без ручной перемотки</h1>
-        <div className="archive-searchbar">
-          <Icon name="search" size={20} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && search()}
-            aria-label="Запрос для поиска по видео"
-          />
-          <button className="button primary" onClick={search}>
-            Найти
-          </button>
+        <span className="eyebrow">ФОТОАРХИВ НАРУШЕНИЙ И СОБЫТИЙ СМР</span>
+        <h1>Фотофиксация нарушений спецтехники</h1>
+        <p style={{ color: 'var(--muted)', fontSize: '13px', margin: '4px 0 16px', maxWidth: '750px' }}>
+          Автоматическая фотофиксация участков стройплощадки при обнаружении несоответствий календарному плану
+          (окно контроля: {violationWindowSeconds} сек). Каждое зафиксированное фото сопровождается датой, временем и ссылкой на запись в отчёте.
+        </p>
+
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="archive-searchbar" style={{ flex: '1', minWidth: '260px' }}>
+            <Icon name="search" size={20} />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Поиск по технике, участку или коду инцидента..."
+              aria-label="Запрос для поиска"
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              className={`button ${filterSeverity === 'all' ? 'primary' : ''}`}
+              onClick={() => setFilterSeverity('all')}
+              style={{ fontSize: '11px', height: '36px' }}
+            >
+              Все фото ({incidents.length})
+            </button>
+            <button
+              className={`button ${filterSeverity === 'ERROR' ? 'primary' : ''}`}
+              onClick={() => setFilterSeverity('ERROR')}
+              style={{ fontSize: '11px', height: '36px', color: '#f87171' }}
+            >
+              Ошибки (ERROR)
+            </button>
+            <button
+              className={`button ${filterSeverity === 'WARNING' ? 'primary' : ''}`}
+              onClick={() => setFilterSeverity('WARNING')}
+              style={{ fontSize: '11px', height: '36px', color: '#fbbf24' }}
+            >
+              Предупреждения (WARNING)
+            </button>
+          </div>
         </div>
       </section>
 
-      {searched && (
-        <>
-          <div className="parsed-filters">
-            <span>Применённые фильтры:</span>
-            <Status>Техника: спецтехника СМР</Status>
-            <Status>Длительность: от 20 минут</Status>
-            <Status>Период: 7 дней</Status>
+      <section className="archive-results panel">
+        <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <span className="section-kicker">ФОТОСНИМКИ УЧАСТКОВ С НАРУШЕНИЯМИ</span>
+            <h2>Найдено {filteredIncidents.length} фотофиксаций</h2>
           </div>
-          <section className="archive-results panel">
-            <div className="panel-head">
-              <div>
-                <span className="section-kicker">РЕЗУЛЬТАТЫ</span>
-                <h2>Найдено {archiveResults.length} фрагмента</h2>
-              </div>
-            </div>
-            <div className="video-results">
-              {archiveResults.map((r, idx) => (
-                <article key={idx}>
-                  <div className="video-preview">
-                    <img src={cameraImage} alt="Кадр архива" />
-                    <button aria-label="Воспроизвести фрагмент" onClick={() => toast(`Воспроизведение фрагмента ${r.time}`)}>▶</button>
-                    <time>{r.duration}</time>
-                  </div>
-                  <div className="video-copy">
-                    <div className="meta-row">
-                      <span className="zone-code">{r.zone}</span>
-                      <time>{r.time}</time>
-                      <Status tone="neutral">Камера {r.camera}</Status>
+          <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+            Окно фиксации нарушений: <strong>{violationWindowSeconds} сек</strong>
+          </span>
+        </div>
+
+        {filteredIncidents.length === 0 ? (
+          <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--muted)' }}>
+            Фотофиксаций нарушений пока нет. При воспроизведении видео или трансляции с камер система
+            автоматически зафиксирует кадр участка при нарушении регламента.
+          </div>
+        ) : (
+          <div className="photo-archive-grid">
+            {filteredIncidents.map((r) => {
+              const isError =
+                r.severity === 'ERROR' ||
+                r.priority === 'Критический' ||
+                r.discrepancyType === 'MISSING_MANDATORY' ||
+                r.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+              const photoSrc = r.snapshotUrl || cameraImage
+              const isHighlighted = highlightedIncidentId === r.id
+
+              return (
+                <article
+                  key={r.id}
+                  className={`photo-card ${isHighlighted ? 'highlighted' : ''}`}
+                  style={{
+                    background: '#171a1e',
+                    border: isHighlighted ? '2px solid #38bdf8' : '1px solid #2e3035',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    boxShadow: isHighlighted ? '0 0 16px rgba(56,189,248,0.3)' : 'none',
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'relative',
+                      background: '#0b0d10',
+                      aspectRatio: '16/9',
+                      overflow: 'hidden',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setSelectedPhoto(photoSrc)}
+                    title="Нажмите для увеличения фото"
+                  >
+                    <img
+                      src={photoSrc}
+                      alt={r.title}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '8px',
+                        left: '8px',
+                        display: 'flex',
+                        gap: '6px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          background: isError ? 'rgba(220,38,38,0.9)' : 'rgba(234,179,8,0.9)',
+                          color: '#fff',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {isError ? 'ОШИБКА (ERROR)' : 'ПРЕДУПРЕЖДЕНИЕ (WARNING)'}
+                      </span>
+                      <span
+                        style={{
+                          background: 'rgba(0,0,0,0.7)',
+                          color: '#fff',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                        }}
+                      >
+                        {r.id}
+                      </span>
                     </div>
-                    <h3>{r.title}</h3>
-                    <p>Нейросеть зафиксировала неподвижность техники. Положение рабочих органов не менялось.</p>
-                    <button className="text-button" onClick={() => toast('Событие привязано к отчету')}>
-                      Привязать к отчёту
-                    </button>
+
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: '8px',
+                        right: '8px',
+                        background: 'rgba(0,0,0,0.75)',
+                        color: '#cbd5e1',
+                        fontSize: '10px',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      {r.time}
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', flex: 1, gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--muted)' }}>
+                      <span>Участок: <strong style={{ color: '#fff' }}>{r.zone}</strong></span>
+                      <span>Камера: <strong style={{ color: '#fff' }}>{r.camera}</strong></span>
+                    </div>
+
+                    <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#fff' }}>
+                      {r.title}
+                    </h3>
+
+                    <p style={{ margin: 0, fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.45, flex: 1 }}>
+                      {r.note}
+                    </p>
+
+                    <div style={{ paddingTop: '8px', borderTop: '1px solid #282a2e', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--muted)' }}>
+                        Фиксация за {violationWindowSeconds} сек
+                      </span>
+                      <button
+                        className="button primary"
+                        style={{ fontSize: '11px', padding: '4px 10px', height: '28px' }}
+                        onClick={() => {
+                          onNavigateToReport(r.id)
+                          toast(`Переход к записи ${r.id} в отчёте`)
+                        }}
+                        title="Перейти к данной записи в суточном отчёте"
+                      >
+                        Ссылка на запись в отчёте →
+                      </button>
+                    </div>
                   </div>
                 </article>
-              ))}
-            </div>
-          </section>
-        </>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Fullscreen Photo Modal */}
+      {selectedPhoto && (
+        <div className="modal-backdrop" onClick={() => setSelectedPhoto(null)} style={{ zIndex: 1300 }}>
+          <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+            <img src={selectedPhoto} alt="Фотофиксация нарушения" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }} />
+            <button
+              className="button"
+              style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.8)', color: '#fff' }}
+              onClick={() => setSelectedPhoto(null)}
+            >
+              ✕ Закрыть
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -1608,17 +1871,54 @@ function Analytics({
 }
 
 // ----------------------------------------------------------------------------
-// 7. Reports Page
+// 7. Reports Page (Суточный отчёт со сводкой нарушений и ссылками на фотоархив)
 // ----------------------------------------------------------------------------
 function Reports({
   activeProject,
   incidents,
+  highlightedIncidentId,
+  onNavigateToArchive,
   toast,
 }: {
   activeProject?: ProjectItem
   incidents: Incident[]
+  highlightedIncidentId?: string | null
+  onNavigateToArchive: (incidentId: string) => void
   toast: (s: string) => void
 }) {
+  const [filterSeverity, setFilterSeverity] = useState<'ALL' | 'ERROR' | 'WARNING'>('ALL')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
+
+  const errorsCount = incidents.filter(
+    (i) =>
+      i.severity === 'ERROR' ||
+      i.priority === 'Критический' ||
+      i.discrepancyType === 'MISSING_MANDATORY' ||
+      i.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+  ).length
+  const warningsCount = incidents.filter(
+    (i) => i.severity === 'WARNING' || i.discrepancyType === 'MISSING_RECOMMENDED'
+  ).length
+
+  const filteredIncidents = incidents.filter((inc) => {
+    const isError =
+      inc.severity === 'ERROR' ||
+      inc.priority === 'Критический' ||
+      inc.discrepancyType === 'MISSING_MANDATORY' ||
+      inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+
+    if (filterSeverity === 'ERROR' && !isError) return false
+    if (filterSeverity === 'WARNING' && isError) return false
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      const text = `${inc.id} ${inc.title} ${inc.note} ${inc.zone} ${inc.stageName || ''}`.toLowerCase()
+      if (!text.includes(q)) return false
+    }
+    return true
+  })
+
   return (
     <div className="reports-page">
       <aside className="report-options panel">
@@ -1654,6 +1954,14 @@ function Reports({
           <h2>События смены</h2>
           <div className="report-stats">
             <div>
+              <strong style={{ color: '#f87171' }}>{errorsCount}</strong>
+              <span>ошибок (ERROR)</span>
+            </div>
+            <div>
+              <strong style={{ color: '#fbbf24' }}>{warningsCount}</strong>
+              <span>предупреждений</span>
+            </div>
+            <div>
               <strong>{incidents.filter((i) => i.status === 'Устранено').length}</strong>
               <span>устранено</span>
             </div>
@@ -1661,16 +1969,191 @@ function Reports({
               <strong>{incidents.filter((i) => i.status === 'В работе').length}</strong>
               <span>в работе</span>
             </div>
-            <div>
-              <strong>{incidents.filter((i) => i.status === 'Требует проверки').length}</strong>
-              <span>на проверке</span>
-            </div>
-            <div>
-              <strong>18 мин</strong>
-              <span>медиана реакции</span>
-            </div>
           </div>
         </section>
+
+        {/* Violations and incidents list */}
+        <section style={{ marginTop: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '14px' }}>
+            <div>
+              <span className="section-kicker">ЖУРНАЛ ФИКСАЦИИ НАРУШЕНИЙ</span>
+              <h2 style={{ margin: 0 }}>Нарушения регламента и контроль спецтехники</h2>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                placeholder="Поиск по нарушениям..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  background: '#121417',
+                  border: '1px solid #35373c',
+                  color: '#fff',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                }}
+              />
+              <button
+                className={`button ${filterSeverity === 'ALL' ? 'primary' : ''}`}
+                style={{ fontSize: '11px', height: '32px' }}
+                onClick={() => setFilterSeverity('ALL')}
+              >
+                Все ({incidents.length})
+              </button>
+              <button
+                className={`button ${filterSeverity === 'ERROR' ? 'primary' : ''}`}
+                style={{ fontSize: '11px', height: '32px', color: '#f87171' }}
+                onClick={() => setFilterSeverity('ERROR')}
+              >
+                ERROR ({errorsCount})
+              </button>
+              <button
+                className={`button ${filterSeverity === 'WARNING' ? 'primary' : ''}`}
+                style={{ fontSize: '11px', height: '32px', color: '#fbbf24' }}
+                onClick={() => setFilterSeverity('WARNING')}
+              >
+                WARNING ({warningsCount})
+              </button>
+            </div>
+          </div>
+
+          {filteredIncidents.length === 0 ? (
+            <div style={{ padding: '30px', textAlign: 'center', color: 'var(--muted)', background: '#1c1e22', borderRadius: '6px', border: '1px solid #2e3035' }}>
+              Нет записей нарушений, соответствующих заданному фильтру.
+            </div>
+          ) : (
+            <div className="report-incidents-list">
+              {filteredIncidents.map((inc) => {
+                const isError =
+                  inc.severity === 'ERROR' ||
+                  inc.priority === 'Критический' ||
+                  inc.discrepancyType === 'MISSING_MANDATORY' ||
+                  inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+                const isHighlighted = highlightedIncidentId === inc.id
+                const photoSrc = inc.snapshotUrl || cameraImage
+
+                return (
+                  <article
+                    key={inc.id}
+                    id={`report-item-${inc.id}`}
+                    className={`report-incident-card ${isHighlighted ? 'highlighted' : ''}`}
+                  >
+                    {/* Thumbnail */}
+                    <div
+                      style={{
+                        position: 'relative',
+                        width: '140px',
+                        height: '84px',
+                        background: '#0b0d10',
+                        borderRadius: '6px',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                      onClick={() => setSelectedPhoto(photoSrc)}
+                      title="Кликните для просмотра полноразмерного снимка"
+                    >
+                      <img
+                        src={photoSrc}
+                        alt={inc.title}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: '4px',
+                          right: '4px',
+                          background: 'rgba(0,0,0,0.7)',
+                          color: '#94a3b8',
+                          fontSize: '9px',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          fontFamily: 'monospace',
+                        }}
+                      >
+                        {inc.time}
+                      </div>
+                    </div>
+
+                    {/* Incident Details */}
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                        <span
+                          style={{
+                            background: isError ? 'rgba(220,38,38,0.2)' : 'rgba(234,179,8,0.2)',
+                            color: isError ? '#f87171' : '#fbbf24',
+                            border: `1px solid ${isError ? 'rgba(220,38,38,0.4)' : 'rgba(234,179,8,0.4)'}`,
+                            fontSize: '9.5px',
+                            fontWeight: 800,
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          {isError ? 'ОШИБКА (ERROR)' : 'ПРЕДУПРЕЖДЕНИЕ (WARNING)'}
+                        </span>
+                        <strong style={{ fontSize: '11px', color: '#94a3b8' }}>{inc.id}</strong>
+                        <span style={{ fontSize: '11px', color: 'var(--muted)' }}>• {inc.time}</span>
+                        {inc.stageName && (
+                          <span style={{ fontSize: '10.5px', color: '#cf9d3d', background: 'rgba(207,157,61,0.1)', padding: '1px 6px', borderRadius: '3px' }}>
+                            Этап: {inc.stageName}
+                          </span>
+                        )}
+                        <Status tone={inc.status === 'Устранено' ? 'success' : isError ? 'critical' : 'warning'}>
+                          {inc.status}
+                        </Status>
+                      </div>
+
+                      <h4 style={{ margin: '0 0 4px', fontSize: '13px', color: '#fff', fontWeight: 700 }}>
+                        {inc.title}
+                      </h4>
+
+                      <p style={{ margin: '0 0 6px', fontSize: '11.5px', color: '#cbd5e1', lineHeight: 1.45 }}>
+                        {inc.note}
+                      </p>
+
+                      <div style={{ display: 'flex', gap: '14px', fontSize: '10.5px', color: 'var(--muted)', flexWrap: 'wrap' }}>
+                        <span>Участок: <strong style={{ color: '#f1f5f9' }}>{inc.zone}</strong></span>
+                        <span>Камера: <strong style={{ color: '#f1f5f9' }}>{inc.camera}</strong></span>
+                        <span>Ответственный: <strong style={{ color: '#f1f5f9' }}>{inc.assignee}</strong></span>
+                      </div>
+                    </div>
+
+                    {/* Navigation Link to Photo Archive */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', justifyContent: 'center' }}>
+                      <button
+                        className="button primary"
+                        style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
+                        onClick={() => {
+                          onNavigateToArchive(inc.id)
+                          toast(`Переход к фотофиксации ${inc.id} в фотоархиве`)
+                        }}
+                        title="Открыть данный кадр в фотоархиве"
+                      >
+                        Смотреть в фотоархиве ↗
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* Modal: Fullscreen Photo */}
+        {selectedPhoto && (
+          <div className="modal-backdrop" onClick={() => setSelectedPhoto(null)} style={{ zIndex: 1300 }}>
+            <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
+              <img src={selectedPhoto} alt="Фотофиксация нарушения" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }} />
+              <button
+                className="button"
+                style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.8)', color: '#fff' }}
+                onClick={() => setSelectedPhoto(null)}
+              >
+                ✕ Закрыть
+              </button>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )
@@ -1694,6 +2177,8 @@ function Settings({
   onAddCamera,
   onEditCamera,
   onDeleteCamera,
+  violationWindowSeconds = 30,
+  onUpdateViolationWindow,
   toast,
 }: {
   activeProject?: ProjectItem
@@ -1713,6 +2198,8 @@ function Settings({
   onAddCamera: () => void
   onEditCamera: (camera: CameraItem) => void
   onDeleteCamera: (camera: CameraItem) => void
+  violationWindowSeconds?: number
+  onUpdateViolationWindow?: (seconds: number) => Promise<void>
   toast: (s: string) => void
 }) {
   const [activeTab, setActiveTab] = useState<'general' | 'zones' | 'cameras'>('general')
@@ -1723,6 +2210,14 @@ function Settings({
   const [address, setAddress] = useState(activeProject?.address || '')
   const [objectKind, setObjectKind] = useState(activeProject?.object_kind || 'Жильё')
   const [isSaving, setIsSaving] = useState(false)
+
+  // Violation window setting state
+  const [windowInput, setWindowInput] = useState<number>(violationWindowSeconds)
+  const [isSavingWindow, setIsSavingWindow] = useState(false)
+
+  useEffect(() => {
+    setWindowInput(violationWindowSeconds)
+  }, [violationWindowSeconds])
 
   // Synchronize when activeProject changes
   useEffect(() => {
@@ -1889,6 +2384,59 @@ function Settings({
                 </select>
               </label>
             </form>
+
+            {/* Violation Evaluation Period Settings Card */}
+            <div
+              style={{
+                marginTop: '28px',
+                paddingTop: '22px',
+                borderTop: '1px solid #2e3035',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                <div style={{ maxWidth: '560px' }}>
+                  <span className="section-kicker">РЕГЛАМЕНТ И АВТОМАТИЧЕСКИЙ КОНТРОЛЬ</span>
+                  <h3 style={{ margin: '4px 0 6px', fontSize: '15px', color: '#fff' }}>
+                    Период фиксации нарушений спецтехники
+                  </h3>
+                  <p style={{ color: 'var(--muted)', fontSize: '12px', lineHeight: 1.5, margin: 0 }}>
+                    Временной интервал непрерывного наблюдения (по умолчанию 30 сек). Если в течение данного интервала
+                    не зафиксирована обязательная или рекомендованная техника, либо зафиксирована нехарактерная (лишняя) техника —
+                    генерируется ошибка (ERROR) или предупреждение (WARNING), формируется фотофиксация в фотоархиве и запись в отчёте.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <label style={{ margin: 0, width: '130px' }}>
+                    Период (сек)
+                    <input
+                      type="number"
+                      min={5}
+                      max={600}
+                      value={windowInput}
+                      onChange={(e) => setWindowInput(parseInt(e.target.value, 10) || 30)}
+                      style={{ width: '100%', height: '36px' }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="button primary"
+                    disabled={isSavingWindow}
+                    style={{ height: '36px', alignSelf: 'flex-end', whiteSpace: 'nowrap' }}
+                    onClick={async () => {
+                      if (!onUpdateViolationWindow) return
+                      setIsSavingWindow(true)
+                      try {
+                        await onUpdateViolationWindow(windowInput)
+                      } finally {
+                        setIsSavingWindow(false)
+                      }
+                    }}
+                  >
+                    {isSavingWindow ? 'Сохранение...' : 'Сохранить интервал'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </>
         )}
 
@@ -2012,7 +2560,19 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [globalSearch, setGlobalSearch] = useState('')
   const [toastText, setToastText] = useState<string | null>(null)
-  const [incidents] = useState<Incident[]>(incidentsSeed)
+  const [incidentsList, setIncidentsList] = useState<Incident[]>(incidentsSeed)
+  const [violationWindowSeconds, setViolationWindowSeconds] = useState<number>(30)
+  const [highlightedIncidentId, setHighlightedIncidentId] = useState<string | null>(null)
+  const [activeViolationAlert, setActiveViolationAlert] = useState<{
+    id: string
+    title: string
+    desc: string
+    severity: 'ERROR' | 'WARNING'
+    snapshotUrl?: string
+  } | null>(null)
+
+  const recentObservationsRef = useRef<{ timestamp: number; detectedLabels: string[] }[]>([])
+  const violationCooldownRef = useRef<Record<string, number>>({})
 
   // Hierarchy: Projects -> Zones -> Cameras
   const [projectsList, setProjectsList] = useState<ProjectItem[]>([])
@@ -2048,7 +2608,7 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null)
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false)
 
-  // Check active user session on startup
+  // Check active user session and violation config on startup
   useEffect(() => {
     fetchCurrentUser().then((user) => {
       if (user) {
@@ -2057,6 +2617,41 @@ export default function App() {
         setIsAuthModalOpen(true)
       }
     })
+
+    fetchIncidentConfig()
+      .then((cfg) => {
+        if (cfg && typeof cfg.violation_evaluation_window_seconds === 'number') {
+          setViolationWindowSeconds(cfg.violation_evaluation_window_seconds)
+        }
+      })
+      .catch(() => {})
+
+    fetchIncidents()
+      .then((apiIncs) => {
+        if (apiIncs && apiIncs.length > 0) {
+          const mapped: Incident[] = apiIncs.map((item) => ({
+            id: item.code,
+            type: 'Техника',
+            title: item.title || 'Нарушение регламента',
+            zone: item.zone_name || 'Основная площадка',
+            camera: item.camera_name || 'Камера 1',
+            time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '14:30',
+            age: 'Недавно',
+            priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
+            status: (item.status === 'open' ? 'Требует проверки' : item.status === 'in_progress' ? 'В работе' : 'Устранено') as IncidentStatus,
+            assignee: 'Не назначен',
+            sla: item.severity === 'ERROR' ? '15 мин' : '45 мин',
+            confidence: 95,
+            note: item.description || '',
+            severity: item.severity,
+            snapshotUrl: item.snapshot_url || undefined,
+            stageName: undefined,
+            discrepancyType: item.discrepancy_type,
+          }))
+          setIncidentsList(mapped)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -2394,6 +2989,163 @@ export default function App() {
     }
   }
 
+  // Handle Violation Window Setting change
+  const handleUpdateViolationWindow = async (seconds: number) => {
+    try {
+      const res = await updateIncidentConfig(seconds)
+      setViolationWindowSeconds(res.violation_evaluation_window_seconds)
+      toast(`Интервал оценки нарушений установлен: ${res.violation_evaluation_window_seconds} сек`)
+    } catch {
+      setViolationWindowSeconds(seconds)
+      toast(`Интервал оценки нарушений сохранён: ${seconds} сек`)
+    }
+  }
+
+  // Realtime Frame Analysis & 30s Violation Window Evaluator
+  const handleFrameAnalysis = useCallback(
+    (snapshotDataUrl: string, dets: LiveDetectionInfo[], timeSeconds: number) => {
+      const nowSec = Date.now() / 1000
+      const effectiveTime = timeSeconds > 0 ? timeSeconds : nowSec
+      const detectedLabels = Array.from(new Set(dets.map((d) => d.label)))
+
+      // 1. Record frame observation
+      recentObservationsRef.current.push({
+        timestamp: effectiveTime,
+        detectedLabels,
+      })
+
+      // Purge entries older than violationWindowSeconds
+      const windowSec = violationWindowSeconds || 30
+      recentObservationsRef.current = recentObservationsRef.current.filter(
+        (obs) => effectiveTime - obs.timestamp <= windowSec
+      )
+
+      const oldestTime = recentObservationsRef.current[0]?.timestamp ?? effectiveTime
+      const timeSpan = effectiveTime - oldestTime
+
+      // 2. Resolve active stage & machinery rules
+      const activeStage = getCurrentStageByDate(stages) || stages[0]
+      const stageName = activeStage?.name || 'Монолитные конструкции'
+      const rules = getStageMachineryRules(stageName)
+
+      // Set of all machinery observed in the window
+      const allObservedInWindow = new Set<string>()
+      for (const obs of recentObservationsRef.current) {
+        for (const l of obs.detectedLabels) {
+          allObservedInWindow.add(l)
+        }
+      }
+
+      const activeZoneObj = activeZones.find((z) => z.id === activeZoneId) || activeZones[0]
+      const curCam = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
+      const zoneName = activeZoneObj?.name || 'Основная площадка'
+      const camName = curCam?.name || 'Камера 1 (Обзор)'
+
+      const triggerViolation = (
+        severity: 'ERROR' | 'WARNING',
+        discrepancyType: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT',
+        title: string,
+        note: string,
+        key: string
+      ) => {
+        const lastTrigger = violationCooldownRef.current[key] || 0
+        if (nowSec - lastTrigger < 45) return
+        violationCooldownRef.current[key] = nowSec
+
+        const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
+        const nowStr = new Date().toLocaleTimeString('ru-RU').slice(0, 5)
+
+        const newIncident: Incident = {
+          id: newId,
+          type: 'Техника',
+          title,
+          zone: zoneName,
+          camera: camName,
+          time: nowStr,
+          age: 'Только что',
+          priority: severity === 'ERROR' ? 'Критический' : 'Средний',
+          status: 'Требует проверки',
+          assignee: 'Не назначен',
+          sla: severity === 'ERROR' ? '15 мин' : '45 мин',
+          confidence: 96,
+          note,
+          severity,
+          snapshotUrl: snapshotDataUrl,
+          stageName,
+          discrepancyType,
+        }
+
+        setIncidentsList((prev) => [newIncident, ...prev])
+        setActiveViolationAlert({
+          id: newId,
+          title,
+          desc: note,
+          severity,
+          snapshotUrl: snapshotDataUrl,
+        })
+
+        setTimeout(() => {
+          setActiveViolationAlert((prev) => (prev?.id === newId ? null : prev))
+        }, 10000)
+
+        // Asynchronously persist to backend DB & snapshot storage
+        createIncident({
+          title,
+          description: note,
+          severity,
+          discrepancy_type: discrepancyType,
+          zone_name: zoneName,
+          camera_name: camName,
+          stage_name: stageName,
+          frame_snapshot_base64: snapshotDataUrl,
+        }).catch((e) => console.warn('Failed to persist incident:', e))
+      }
+
+      // 3. Check Uncharacteristic (forbidden / extra) machinery in current frame -> ERROR
+      for (const label of detectedLabels) {
+        if (rules.uncharacteristic.some((u) => u.toLowerCase() === label.toLowerCase())) {
+          triggerViolation(
+            'ERROR',
+            'UNCHARACTERISTIC_PRESENT',
+            `Обнаружена нехарактерная (лишняя) техника: ${label}`,
+            `На этапе «${stageName}» зафиксирована лишняя/нехарактерная техника «${label}», не предусмотренная технологической картой.`,
+            `uncharacteristic_${label}`
+          )
+        }
+      }
+
+      // 4. Check Missing Machinery only after continuous window is evaluated (>= windowSec)
+      if (timeSpan >= windowSec) {
+        // Missing Mandatory -> ERROR
+        for (const mandatory of rules.mandatory) {
+          if (!allObservedInWindow.has(mandatory)) {
+            triggerViolation(
+              'ERROR',
+              'MISSING_MANDATORY',
+              `Отсутствует обязательная техника: ${mandatory}`,
+              `В течение контрольного периода ${windowSec} сек на этапе «${stageName}» в рабочей зоне не зафиксировано присутствие обязательной техники (${mandatory}).`,
+              `missing_mandatory_${mandatory}`
+            )
+          }
+        }
+
+        // Missing Recommended -> WARNING
+        for (const rec of rules.recommended) {
+          if (!allObservedInWindow.has(rec)) {
+            triggerViolation(
+              'WARNING',
+              'MISSING_RECOMMENDED',
+              `Отсутствует рекомендованная техника: ${rec}`,
+              `В течение контрольного периода ${windowSec} сек на этапе «${stageName}» не зафиксирована рекомендованная техника (${rec}).`,
+              `missing_recommended_${rec}`
+            )
+          }
+        }
+      }
+    },
+    [violationWindowSeconds, stages, activeZones, activeZoneId, camerasList, selectedCameraId]
+  )
+
   const title = titles[page] ?? titles.monitoring
 
   const pageBody = useMemo(() => {
@@ -2417,11 +3169,23 @@ export default function App() {
               if (open) setEditingCamera(null)
               setIsCameraModalOpen(open)
             }}
+            onFrameAnalysis={handleFrameAnalysis}
             toast={toast}
           />
         )
       case 'archive':
-        return <Archive toast={toast} />
+        return (
+          <PhotoArchive
+            incidents={incidentsList}
+            violationWindowSeconds={violationWindowSeconds}
+            highlightedIncidentId={highlightedIncidentId}
+            onNavigateToReport={(id) => {
+              setHighlightedIncidentId(id)
+              setPage('reports')
+            }}
+            toast={toast}
+          />
+        )
       case 'progress':
         return (
           <Progress
@@ -2432,9 +3196,20 @@ export default function App() {
           />
         )
       case 'analytics':
-        return <Analytics stages={stages} navigate={setPage} />
+        return <Analytics stages={stages} navigate={setPage} toast={toast} />
       case 'reports':
-        return <Reports activeProject={activeProject} incidents={incidents} toast={toast} />
+        return (
+          <Reports
+            activeProject={activeProject}
+            incidents={incidentsList}
+            highlightedIncidentId={highlightedIncidentId}
+            onNavigateToArchive={(id) => {
+              setHighlightedIncidentId(id)
+              setPage('archive')
+            }}
+            toast={toast}
+          />
+        )
       case 'settings':
         return (
           <Settings
@@ -2464,13 +3239,31 @@ export default function App() {
               setIsCameraModalOpen(true)
             }}
             onDeleteCamera={handleDeleteCamera}
+            violationWindowSeconds={violationWindowSeconds}
+            onUpdateViolationWindow={handleUpdateViolationWindow}
             toast={toast}
           />
         )
       default:
         return null
     }
-  }, [page, stages, activeProject, projectsList, activeZones, camerasList, selectedCameraId, uploadedVideoUrl, uploadedVideoName, videoTimestamp, activeProjectId])
+  }, [
+    page,
+    stages,
+    activeProject,
+    projectsList,
+    activeZones,
+    camerasList,
+    selectedCameraId,
+    uploadedVideoUrl,
+    uploadedVideoName,
+    videoTimestamp,
+    activeProjectId,
+    incidentsList,
+    violationWindowSeconds,
+    highlightedIncidentId,
+    handleFrameAnalysis,
+  ])
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
@@ -3120,6 +3913,80 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Active Realtime Violation Alert Banner */}
+      {activeViolationAlert && (
+        <div
+          role="alert"
+          style={{
+            position: 'fixed',
+            top: '72px',
+            right: '24px',
+            zIndex: 1500,
+            maxWidth: '460px',
+            background: activeViolationAlert.severity === 'ERROR' ? '#881337' : '#78350f',
+            border: `1px solid ${activeViolationAlert.severity === 'ERROR' ? '#f43f5e' : '#f59e0b'}`,
+            boxShadow: '0 12px 32px rgba(0,0,0,0.7)',
+            borderRadius: '8px',
+            padding: '14px 16px',
+            color: '#fff',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'flex-start',
+            animation: 'fadeIn 0.25s ease',
+          }}
+        >
+          <div style={{ flexShrink: 0, marginTop: '2px', color: activeViolationAlert.severity === 'ERROR' ? '#fca5a5' : '#fde047' }}>
+            <Icon name="alert" size={22} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <strong style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', color: activeViolationAlert.severity === 'ERROR' ? '#fecdd3' : '#fef08a' }}>
+                {activeViolationAlert.severity === 'ERROR' ? '🔴 Ошибка (ERROR)' : '⚠️ Предупреждение (WARNING)'}
+              </strong>
+              <button
+                type="button"
+                onClick={() => setActiveViolationAlert(null)}
+                style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '15px', padding: '0 4px', lineHeight: 1 }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '4px', color: '#fff' }}>
+              {activeViolationAlert.title}
+            </div>
+            <p style={{ fontSize: '11px', opacity: 0.92, margin: '0 0 10px', lineHeight: 1.45, color: '#f1f5f9' }}>
+              {activeViolationAlert.desc}
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className="button"
+                style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
+                onClick={() => {
+                  setHighlightedIncidentId(activeViolationAlert.id)
+                  setPage('archive')
+                  setActiveViolationAlert(null)
+                }}
+              >
+                В фотоархив ↗
+              </button>
+              <button
+                type="button"
+                className="button"
+                style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
+                onClick={() => {
+                  setHighlightedIncidentId(activeViolationAlert.id)
+                  setPage('reports')
+                  setActiveViolationAlert(null)
+                }}
+              >
+                В отчёт ↗
+              </button>
+            </div>
           </div>
         </div>
       )}
