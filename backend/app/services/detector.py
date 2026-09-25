@@ -78,7 +78,60 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
     "motor_grader": "grader",
     "backhoe_loader": "backhoe_loader",
     "backhoe": "backhoe_loader",
+    "telehandler": "loader",
+    "skid_steer": "loader",
+    "crawler_crane": "truck_crane",
+    "mobile_crane": "truck_crane",
 }
+
+
+def _box_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
+    """Compute IoU between two normalized boxes (x1, y1, x2, y2)."""
+    xa1, ya1, xa2, ya2 = box_a
+    xb1, yb1, xb2, yb2 = box_b
+    inter_x1 = max(xa1, xb1)
+    inter_y1 = max(ya1, yb1)
+    inter_x2 = min(xa2, xb2)
+    inter_y2 = min(ya2, yb2)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    area_a = (xa2 - xa1) * (ya2 - ya1)
+    area_b = (xb2 - xb1) * (yb2 - yb1)
+    union_area = area_a + area_b - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def _nms(detections: list[DetectionResult], iou_threshold: float = 0.45) -> list[DetectionResult]:
+    """Non-maximum suppression across combined full-frame and tiled slice detections."""
+    if not detections:
+        return []
+    sorted_dets = sorted(detections, key=lambda d: d.confidence, reverse=True)
+    kept: list[DetectionResult] = []
+    for cand in sorted_dets:
+        cand_box = (cand.x1, cand.y1, cand.x2, cand.y2)
+        should_keep = True
+        for exist in kept:
+            exist_box = (exist.x1, exist.y1, exist.x2, exist.y2)
+            iou = _box_iou(cand_box, exist_box)
+            if cand.canonical_code == exist.canonical_code and iou > iou_threshold:
+                should_keep = False
+                break
+            # Suppress if candidate box is substantially enveloped by existing same-category box
+            if cand.canonical_code == exist.canonical_code:
+                cand_area = (cand.x2 - cand.x1) * (cand.y2 - cand.y1)
+                inter_x1 = max(cand.x1, exist.x1)
+                inter_y1 = max(cand.y1, exist.y1)
+                inter_x2 = min(cand.x2, exist.x2)
+                inter_y2 = min(cand.y2, exist.y2)
+                if inter_x2 > inter_x1 and inter_y2 > inter_y1 and cand_area > 0:
+                    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                    if (inter_area / cand_area) > 0.85:
+                        should_keep = False
+                        break
+        if should_keep:
+            kept.append(cand)
+    return kept
 
 
 @dataclass
@@ -100,7 +153,7 @@ class MachineryDetector:
     """YOLO-based detection service for specialized construction machinery."""
 
     def __init__(
-        self, weights_path: Path | str | None = None, conf_threshold: float = 0.25
+        self, weights_path: Path | str | None = None, conf_threshold: float = 0.20
     ):
         self.conf_threshold = conf_threshold
         self._custom_weights_requested = weights_path is not None
@@ -119,8 +172,13 @@ class MachineryDetector:
             return Path(custom_path)
 
         env_path = os.getenv("YOLO_WEIGHTS_PATH")
-        if env_path:
+        if env_path and Path(env_path).exists():
             return Path(env_path)
+
+        # Standard direct weights location in app/backend
+        app_weights = Path(__file__).resolve().parents[2] / "weights" / "construction_machinery.pt"
+        if app_weights.exists():
+            return app_weights
 
         # Standard cache location in storage
         base_dir = Path(__file__).resolve().parents[2] / "var" / "storage" / "weights"
@@ -132,6 +190,10 @@ class MachineryDetector:
         best_weights = base_dir / "best.pt"
         if best_weights.exists():
             return best_weights
+
+        # Fallback to env path even if not yet created
+        if env_path:
+            return Path(env_path)
 
         # Standard fallback to yolov8n.pt in storage, app or backend root
         storage_yolo = base_dir / "yolov8n.pt"
@@ -212,10 +274,13 @@ class MachineryDetector:
         return CLASS_BY_RAW_LABEL[canonical_label]
 
     def detect_frame(
-        self, image_input: Any, stage_name: str | None = None
+        self,
+        image_input: Any,
+        stage_name: str | None = None,
+        enable_slicing: bool = True,
     ) -> list[DetectionResult]:
-        """Run YOLO only; never synthesize detections when the model is unavailable."""
-        del stage_name  # Construction stage must not influence visual classification.
+        """Run YOLO inference with adaptive tiled slicing (SAHI) for detecting small/distant machinery."""
+        del stage_name
         if self.model is None:
             return []
 
@@ -223,47 +288,97 @@ class MachineryDetector:
             import io
             from PIL import Image
 
+            img: Image.Image | None = None
             if isinstance(image_input, (bytes, bytearray)):
                 try:
-                    image_input = Image.open(io.BytesIO(image_input)).convert("RGB")
+                    img = Image.open(io.BytesIO(image_input)).convert("RGB")
                 except Exception as decode_err:
                     logger.debug("Image bytes decoding skipped: %s", decode_err)
+                    img = None
+            elif isinstance(image_input, Image.Image):
+                img = image_input.convert("RGB")
 
-            results = self.model.predict(
-                source=image_input, conf=self.conf_threshold, verbose=False
-            )
-            detections: list[DetectionResult] = []
+            if img is None:
+                # Direct prediction on source
+                results = self.model.predict(
+                    source=image_input, conf=self.conf_threshold, verbose=False
+                )
+                return self._extract_detections(results[0]) if results else []
 
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
-                    continue
+            w, h = img.size
 
-                for box in boxes:
-                    source_class_id = int(box.cls[0].item())
-                    meta = self._class_metadata(result, source_class_id)
-                    if meta is None:
+            # Adaptive tiled slicing (2x2 grid with ~16% overlap) for high-res frames to catch small objects
+            if enable_slicing and w >= 600 and h >= 450:
+                tw = int(w * 0.58)
+                th = int(h * 0.58)
+                slices_meta = [
+                    (img, 0, 0, w, h),  # full frame for large machinery
+                    (img.crop((0, 0, tw, th)), 0, 0, tw, th),  # top-left
+                    (img.crop((w - tw, 0, w, th)), w - tw, 0, tw, th),  # top-right
+                    (img.crop((0, h - th, tw, h)), 0, h - th, tw, th),  # bottom-left
+                    (img.crop((w - tw, h - th, w, h)), w - tw, h - th, tw, th),  # bottom-right
+                ]
+
+                # Batched prediction for maximum speed in single tensor pass
+                batch_images = [s[0] for s in slices_meta]
+                batch_results = self.model.predict(
+                    source=batch_images,
+                    batch=len(batch_images),
+                    conf=self.conf_threshold,
+                    verbose=False,
+                )
+
+                all_detections: list[DetectionResult] = []
+                for idx, res in enumerate(batch_results):
+                    _, off_x, off_y, crop_w, crop_h = slices_meta[idx]
+                    boxes = res.boxes
+                    if boxes is None:
                         continue
-                    class_id, raw_label, label_ru, canonical_code = meta
-                    confidence = float(box.conf[0].item())
-                    xyxyn = box.xyxyn[0].tolist()
-                    x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in xyxyn)
-                    if x2 <= x1 or y2 <= y1:
-                        continue
+                    for box in boxes:
+                        source_class_id = int(box.cls[0].item())
+                        meta = self._class_metadata(res, source_class_id)
+                        if meta is None:
+                            continue
+                        class_id, raw_label, label_ru, canonical_code = meta
+                        confidence = float(box.conf[0].item())
+                        xyxyn = box.xyxyn[0].tolist()
+                        bx1, by1, bx2, by2 = xyxyn
 
-                    detections.append(
-                        DetectionResult(
-                            class_id=class_id,
-                            raw_label=raw_label,
-                            label_ru=label_ru,
-                            canonical_code=canonical_code,
-                            confidence=confidence,
-                            x1=x1,
-                            y1=y1,
-                            x2=x2,
-                            y2=y2,
+                        # Map back to global frame coordinates
+                        abs_x1 = off_x + bx1 * crop_w
+                        abs_y1 = off_y + by1 * crop_h
+                        abs_x2 = off_x + bx2 * crop_w
+                        abs_y2 = off_y + by2 * crop_h
+
+                        gx1 = max(0.0, min(1.0, abs_x1 / w))
+                        gy1 = max(0.0, min(1.0, abs_y1 / h))
+                        gx2 = max(0.0, min(1.0, abs_x2 / w))
+                        gy2 = max(0.0, min(1.0, abs_y2 / h))
+
+                        if gx2 <= gx1 or gy2 <= gy1:
+                            continue
+
+                        all_detections.append(
+                            DetectionResult(
+                                class_id=class_id,
+                                raw_label=raw_label,
+                                label_ru=label_ru,
+                                canonical_code=canonical_code,
+                                confidence=confidence,
+                                x1=gx1,
+                                y1=gy1,
+                                x2=gx2,
+                                y2=gy2,
+                            )
                         )
-                    )
+
+                # Merge duplicates using Non-Maximum Suppression
+                detections = _nms(all_detections, iou_threshold=0.45)
+            else:
+                results = self.model.predict(
+                    source=img, conf=self.conf_threshold, verbose=False
+                )
+                detections = self._extract_detections(results[0]) if results else []
 
             self.status = "ready"
             self.status_message = None
@@ -273,6 +388,38 @@ class MachineryDetector:
             self.status_message = f"YOLO inference failed: {error}"
             logger.exception(self.status_message)
             return []
+
+    def _extract_detections(self, result: Any) -> list[DetectionResult]:
+        detections: list[DetectionResult] = []
+        boxes = getattr(result, "boxes", None)
+        if boxes is None:
+            return detections
+
+        for box in boxes:
+            source_class_id = int(box.cls[0].item())
+            meta = self._class_metadata(result, source_class_id)
+            if meta is None:
+                continue
+            class_id, raw_label, label_ru, canonical_code = meta
+            confidence = float(box.conf[0].item())
+            xyxyn = box.xyxyn[0].tolist()
+            x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in xyxyn)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            detections.append(
+                DetectionResult(
+                    class_id=class_id,
+                    raw_label=raw_label,
+                    label_ru=label_ru,
+                    canonical_code=canonical_code,
+                    confidence=confidence,
+                    x1=x1,
+                    y1=y1,
+                    x2=x2,
+                    y2=y2,
+                )
+            )
+        return detections
 
     def export_onnx(self) -> Path | None:
         """Export model to ONNX format for lightweight CPU inference."""

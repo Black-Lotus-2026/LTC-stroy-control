@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
+import anyio
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -139,7 +140,9 @@ async def detect_video_frame(
     """Детектировать строительную технику на кадре видео с помощью AI / Computer Vision."""
     contents = await file.read()
     detector = get_machinery_detector()
-    results = detector.detect_frame(contents, stage_name=stage_name)
+    results = await anyio.to_thread.run_sync(
+        detector.detect_frame, contents, stage_name, True
+    )
 
     items = [
         DetectionBoxItem(
