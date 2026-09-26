@@ -1180,6 +1180,12 @@ function PhotoArchive({
                       src={photoSrc}
                       alt={r.title}
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      onError={(e) => {
+                        const target = e.currentTarget
+                        if (!target.src.includes('construction-camera')) {
+                          target.src = cameraImage
+                        }
+                      }}
                     />
                     <div
                       style={{
@@ -1276,7 +1282,17 @@ function PhotoArchive({
       {selectedPhoto && (
         <div className="modal-backdrop" onClick={() => setSelectedPhoto(null)} style={{ zIndex: 1300 }}>
           <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-            <img src={selectedPhoto} alt="Фотофиксация нарушения" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }} />
+            <img
+              src={selectedPhoto}
+              alt="Фотофиксация нарушения"
+              style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }}
+              onError={(e) => {
+                const target = e.currentTarget
+                if (!target.src.includes('construction-camera')) {
+                  target.src = cameraImage
+                }
+              }}
+            />
             <button
               className="button"
               style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.8)', color: '#fff' }}
@@ -2356,6 +2372,12 @@ function Reports({
                           src={inc.snapshotUrl}
                           alt={inc.title}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onError={(e) => {
+                            const target = e.currentTarget
+                            if (!target.src.includes('construction-camera')) {
+                              target.src = cameraImage
+                            }
+                          }}
                         />
                         <div
                           style={{
@@ -2469,7 +2491,17 @@ function Reports({
         {selectedPhoto && (
           <div className="modal-backdrop" onClick={() => setSelectedPhoto(null)} style={{ zIndex: 1300 }}>
             <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-              <img src={selectedPhoto} alt="Фотофиксация нарушения" style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }} />
+              <img
+                src={selectedPhoto}
+                alt="Фотофиксация нарушения"
+                style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '8px', border: '1px solid #4a4d53' }}
+                onError={(e) => {
+                  const target = e.currentTarget
+                  if (!target.src.includes('construction-camera')) {
+                    target.src = cameraImage
+                  }
+                }}
+              />
               <button
                 className="button"
                 style={{ position: 'absolute', top: '12px', right: '12px', background: 'rgba(0,0,0,0.8)', color: '#fff' }}
@@ -3584,7 +3616,15 @@ export default function App() {
             const serverUrl = normalizeSnapshotUrl(saved.frame_snapshot_url || saved.snapshot_url)
             if (serverUrl) {
               setIncidentsList((prev) =>
-                prev.map((i) => (i.id === newId ? { ...i, snapshotUrl: serverUrl } : i))
+                prev.map((i) => {
+                  if (i.id === newId) {
+                    return {
+                      ...i,
+                      snapshotUrl: i.snapshotUrl || serverUrl,
+                    }
+                  }
+                  return i
+                })
               )
             }
           })

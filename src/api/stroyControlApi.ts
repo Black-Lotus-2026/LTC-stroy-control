@@ -167,12 +167,28 @@ export const API_PREFIX = `${API_BASE_URL}/api/v1`
 
 export function normalizeSnapshotUrl(url?: string | null): string | undefined {
   if (!url) return undefined
-  const trimmed = url.trim()
+  let trimmed = url.trim()
   if (!trimmed) return undefined
+  // Clean up any double-protocol prefixes like httphttp:// or httpshttps://
+  trimmed = trimmed.replace(/^https?https?:\/\//i, 'http://')
   if (trimmed.startsWith('data:')) return trimmed
   if (trimmed.startsWith('/media')) return `${API_BASE_URL}${trimmed}`
-  if (trimmed.includes('://localhost:8000')) {
-    return trimmed.replace('://localhost:8000', `${API_BASE_URL}`)
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.pathname.startsWith('/media')) {
+      return `${API_BASE_URL}${parsed.pathname}${parsed.search}`
+    }
+    return parsed.toString()
+  } catch {
+    if (trimmed.startsWith('http://localhost:8000')) {
+      return trimmed.replace('http://localhost:8000', API_BASE_URL)
+    }
+    if (trimmed.startsWith('http://127.0.0.1:8000')) {
+      return trimmed.replace('http://127.0.0.1:8000', API_BASE_URL)
+    }
+    if (trimmed.includes('://localhost:8000')) {
+      return trimmed.replace(/^https?:\/\/localhost:8000/, API_BASE_URL)
+    }
   }
   return trimmed
 }
