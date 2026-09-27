@@ -36,9 +36,16 @@ vite.config.d.ts
 .agents
 .specify
 specs
-# Media & Large Datasets
+# Media & Large Datasets (demo videos kept locally)
 *.MOV
 *.mov
 *.mp4
+*.avi
+*.mkv
+*.webm
 *.zip
 *.pt
+
+# Demo work plan / schedule (kept locally for demo / testing)
+demo_schedule_single_object.xlsx
+**/demo_schedule_single_object.xlsx
