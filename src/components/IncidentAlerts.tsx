@@ -2,17 +2,26 @@ import React, { useEffect, useState } from 'react'
 import {
   IncidentAlertItem,
   fetchIncidents,
-  verifyIncidentVlm,
+  updateIncidentStatus,
+  toRussianMachineryName,
 } from '../api/stroyControlApi'
 
 interface IncidentAlertsProps {
   onSelectIncident?: (incident: IncidentAlertItem) => void
+  onOpenAlbum?: (incidentId: string) => void
 }
 
-export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident }) => {
+const mapStatusToLabel = (status?: string | null): 'Ожидает обработки' | 'Подтверждено' | 'Проблемы нет' => {
+  if (!status) return 'Ожидает обработки'
+  const s = status.toLowerCase()
+  if (s === 'confirmed' || s === 'подтверждено') return 'Подтверждено'
+  if (s === 'false_positive' || s === 'проблемы нет' || s === 'dismissed') return 'Проблемы нет'
+  return 'Ожидает обработки'
+}
+
+export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident, onOpenAlbum }) => {
   const [incidents, setIncidents] = useState<IncidentAlertItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [verifyingId, setVerifyingId] = useState<string | null>(null)
   const [filterSeverity, setFilterSeverity] = useState<'ALL' | 'ERROR' | 'WARNING'>('ALL')
 
   const loadIncidentsList = async () => {
@@ -34,27 +43,16 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
     return () => clearInterval(interval)
   }, [])
 
-  const handleVerify = async (incident: IncidentAlertItem, e: React.MouseEvent) => {
+  const handleStatusChange = async (incidentId: string, newLabel: string, e: React.ChangeEvent<HTMLSelectElement>) => {
     e.stopPropagation()
-    setVerifyingId(incident.id)
+    const apiStatus = newLabel === 'Подтверждено' ? 'confirmed' : newLabel === 'Проблемы нет' ? 'false_positive' : 'pending'
+    setIncidents((prev) =>
+      prev.map((item) => (item.id === incidentId ? { ...item, status: apiStatus } : item))
+    )
     try {
-      const res = await verifyIncidentVlm(incident.id)
-      setIncidents((prev) =>
-        prev.map((item) =>
-          item.id === incident.id
-            ? {
-                ...item,
-                is_vlm_verified: !res.fallback_used,
-                vlm_summary: res.compact_alert_text || res.reasoning,
-              }
-            : item
-        )
-      )
+      await updateIncidentStatus(incidentId, apiStatus)
     } catch (err) {
-      console.error('Verification failed:', err)
-      alert('Ошибка VLM-верификации. Проверьте соединение с API.')
-    } finally {
-      setVerifyingId(null)
+      console.error('Failed to update incident status:', err)
     }
   }
 
@@ -77,10 +75,10 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
-              Инциденты и VLM-Алерты
+              Инциденты и нарушения СМР
             </h3>
             <span className="text-[11px] text-slate-400">
-              Двухуровневый контроль (YOLO + Google Gemini Vision)
+              Мультикамерный контроль техники по графику
             </span>
           </div>
         </div>
@@ -141,19 +139,26 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
         ) : (
           filteredIncidents.map((incident) => {
             const isError = incident.severity === 'ERROR'
-            const isVerifying = verifyingId === incident.id
+            const primaryPhoto = incident.snapshot_url || incident.frame_snapshot_url
+            const totalCameraCount = incident.album_photos?.length || (primaryPhoto ? 1 : 0)
 
             return (
               <div
                 key={incident.id}
-                onClick={() => onSelectIncident?.(incident)}
+                onClick={() => {
+                  if (onOpenAlbum) {
+                    onOpenAlbum(incident.id)
+                  } else if (onSelectIncident) {
+                    onSelectIncident(incident)
+                  }
+                }}
                 className={`p-3.5 rounded-lg border transition cursor-pointer ${
                   isError
                     ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-700/60'
                     : 'bg-amber-950/20 border-amber-900/40 hover:border-amber-700/60'
                 }`}
               >
-                {/* Top Row: Code, Severity & Verification Badge */}
+                {/* Top Row: Code, Severity & Status */}
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <div className="flex items-center gap-2">
                     <span
@@ -167,37 +172,62 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
                     </span>
 
                     <span className="text-xs font-semibold text-slate-200">
-                      {incident.machinery_type}
+                      {toRussianMachineryName(incident.machinery_type)}
                     </span>
                   </div>
 
-                  {/* VLM Verification Badge */}
-                  <div>
-                    {incident.is_vlm_verified ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 shadow-sm">
-                        <svg className="w-3 h-3 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                        Gemini VLM подтверждено
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                        <svg className="w-2.5 h-2.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                        Без VLM-верификации
-                      </span>
-                    )}
+                  <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={mapStatusToLabel(incident.status)}
+                      onChange={(e) => handleStatusChange(incident.id, e.target.value, e)}
+                      aria-label="Статус инцидента"
+                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-pointer border outline-none transition ${
+                        mapStatusToLabel(incident.status) === 'Подтверждено'
+                          ? 'bg-rose-950 text-rose-300 border-rose-700'
+                          : mapStatusToLabel(incident.status) === 'Проблемы нет'
+                          ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                          : 'bg-amber-950 text-amber-300 border-amber-700'
+                      }`}
+                    >
+                      <option value="Ожидает обработки" className="bg-slate-900 text-amber-300">⏳ Ожидает обработки</option>
+                      <option value="Подтверждено" className="bg-slate-900 text-rose-300">✓ Подтверждено</option>
+                      <option value="Проблемы нет" className="bg-slate-900 text-emerald-300">✕ Проблемы нет</option>
+                    </select>
+
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                      YOLO
+                    </span>
                   </div>
                 </div>
 
-                {/* Compact 1-2 sentence operator description */}
+                {/* Primary photo preview & album thumbnail row */}
+                {primaryPhoto && (
+                  <div className="flex items-center gap-3 my-2 p-1.5 rounded bg-slate-950/60 border border-slate-800">
+                    <img
+                      src={primaryPhoto}
+                      alt={incident.title || 'Первое фото инцидента'}
+                      className="w-16 h-11 object-cover rounded border border-slate-700 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-medium text-slate-300 truncate">
+                        Первое фото инцидента
+                      </div>
+                      <div className="text-[10px] text-sky-400 flex items-center gap-1 mt-0.5">
+                        <span>📷</span>
+                        <span>{totalCameraCount > 1 ? `В архиве альбом: ${totalCameraCount} камер` : 'Фотоархив'}</span>
+                        <span className="text-slate-500">· клик для перехода</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Operator description */}
                 <p className="text-xs text-slate-300 leading-relaxed font-sans mb-2.5">
-                  {incident.vlm_summary ||
+                  {incident.description ||
                     `На этапе «${incident.stage_name || 'СМР'}» зафиксировано несоответствие: ${incident.discrepancy_type}.`}
                 </p>
 
-                {/* Footer with stage context, probability & re-verify action */}
+                {/* Footer with stage context, probability & open album action */}
                 <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
                   <div className="flex items-center gap-2 truncate">
                     <span className="truncate">
@@ -210,19 +240,21 @@ export const IncidentAlerts: React.FC<IncidentAlertsProps> = ({ onSelectIncident
                   </div>
 
                   <button
-                    onClick={(e) => handleVerify(incident, e)}
-                    disabled={isVerifying}
-                    className="shrink-0 ml-2 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition text-[11px] border border-slate-700 disabled:opacity-50"
-                    title="Запустить повторную валидацию через Google Gemini Vision"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (onOpenAlbum) {
+                        onOpenAlbum(incident.id)
+                      } else if (onSelectIncident) {
+                        onSelectIncident(incident)
+                      }
+                    }}
+                    className="shrink-0 ml-2 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 hover:text-white transition text-[11px] border border-slate-700"
+                    title="Перейти в фотоархив и открыть альбом ошибки со всех камер"
                   >
-                    {isVerifying ? (
-                      <span className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin mr-1" />
-                    ) : (
-                      <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                    )}
-                    {isVerifying ? 'Анализ сцены...' : 'VLM-проверка'}
+                    <svg className="w-3 h-3 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Альбом ошибки
                   </button>
                 </div>
               </div>

@@ -15,6 +15,52 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
+MACHINERY_NAME_RU_MAP: dict[str, str] = {
+    "dump_truck": "Самосвал",
+    "excavator": "Экскаватор",
+    "bulldozer": "Бульдозер",
+    "loader": "Погрузчик",
+    "wheel_loader": "Погрузчик",
+    "roller": "Каток",
+    "backhoe_loader": "Экскаватор-погрузчик",
+    "truck_crane": "Автокран",
+    "concrete_mixer": "Автобетоносмеситель",
+    "tower_crane": "Башенный кран",
+    "grader": "Автогрейдер",
+    "concrete_pump": "Бетононасос",
+    "aerial_lift": "Автогидроподъемник",
+    "asphalt_paver": "Асфальтоукладчик",
+    "MACHINERY_DUMP_TRUCK": "Самосвал",
+    "MACHINERY_EXCAVATOR": "Экскаватор",
+    "MACHINERY_BULLDOZER": "Бульдозер",
+    "MACHINERY_LOADER": "Погрузчик",
+    "MACHINERY_WHEEL_LOADER": "Погрузчик",
+    "MACHINERY_ROLLER": "Каток",
+    "MACHINERY_BACKHOE_LOADER": "Экскаватор-погрузчик",
+    "MACHINERY_TRUCK_CRANE": "Автокран",
+    "MACHINERY_CONCRETE_MIXER": "Автобетоносмеситель",
+    "MACHINERY_TOWER_CRANE": "Башенный кран",
+    "MACHINERY_GRADER": "Автогрейдер",
+    "MACHINERY_CONCRETE_PUMP": "Бетононасос",
+    "MACHINERY_AERIAL_LIFT": "Автогидроподъемник",
+    "MACHINERY_ASPHALT_PAVER": "Асфальтоукладчик",
+}
+
+
+def to_russian_machinery_name(name: str) -> str:
+    """Нормализовать английские или кодовые названия техники в русский язык."""
+    clean = name.strip()
+    if clean in MACHINERY_NAME_RU_MAP:
+        return MACHINERY_NAME_RU_MAP[clean]
+    lower = clean.lower()
+    if lower in MACHINERY_NAME_RU_MAP:
+        return MACHINERY_NAME_RU_MAP[lower]
+    stripped = lower.removeprefix("machinery_")
+    if stripped in MACHINERY_NAME_RU_MAP:
+        return MACHINERY_NAME_RU_MAP[stripped]
+    return clean
+
+
 @dataclass
 class RuleEvaluationResult:
     machinery_name: str
@@ -48,6 +94,15 @@ class RuleEngine:
 
         return results
 
+    def evaluate_stage_machinery_unified(
+        self,
+        probabilities: dict[str, float],
+        unified_detected_classes: set[str],
+    ) -> list[RuleEvaluationResult]:
+        """Evaluate a unified set of detected machinery across all connected cameras against stage probabilities."""
+        detected_counts = {cls_name: 1 for cls_name in unified_detected_classes}
+        return self.evaluate_stage_machinery(probabilities, detected_counts)
+
     def evaluate_single_equipment(
         self,
         machinery_name: str,
@@ -55,6 +110,7 @@ class RuleEngine:
         observed_count: int,
     ) -> RuleEvaluationResult:
         """Evaluate a single machine according to multi-tier thresholds."""
+        machinery_name = to_russian_machinery_name(machinery_name)
         p = round(probability, 2)
 
         # Tier 1: Mandatory

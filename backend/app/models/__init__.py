@@ -24,7 +24,7 @@ from app.models.enums import (
     UserRole,
     ZoneRiskLevel,
 )
-from app.models.incident import Incident, IncidentEvent, IncidentEvidence, VlmVerification
+from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.project import (
     Camera,
     CameraHealthEvent,
@@ -62,7 +62,6 @@ __all__ = [
     "Incident",
     "IncidentEvent",
     "IncidentEvidence",
-    "VlmVerification",
     "VideoAsset",
     "User",
     # Перечисления

@@ -8,8 +8,8 @@ from app.services.rule_engine import RuleEngine
 
 
 def test_machinery_classes_count_and_mapping() -> None:
-    """Verify all 10 specialized machinery classes are present in detector taxonomy."""
-    assert len(MACHINERY_CLASSES) == 10
+    """Verify specialized machinery classes are present in detector taxonomy."""
+    assert len(MACHINERY_CLASSES) >= 11
     classes = [v[1] for v in MACHINERY_CLASSES.values()]
     assert "Экскаватор" in classes
     assert "Бульдозер" in classes
@@ -21,6 +21,7 @@ def test_machinery_classes_count_and_mapping() -> None:
     assert "Каток" in classes
     assert "Автогрейдер" in classes
     assert "Экскаватор-погрузчик" in classes
+    assert "Бетононасос" in classes
 
 
 def test_rule_threshold_tier1_mandatory_missing() -> None:

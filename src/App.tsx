@@ -52,6 +52,9 @@ import {
   createIncident,
   IncidentAlertItem,
   normalizeSnapshotUrl,
+  updateIncidentStatus,
+  toRussianMachineryName,
+  cleanViolationText,
 } from './api/stroyControlApi'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
@@ -180,18 +183,18 @@ export function getStageMachineryRules(stageName?: string): StageMachineryRules 
       uncharacteristic: ['Асфальтоукладчик', 'Каток', 'Автогрейдер'],
     }
   }
-  if (s.includes('монолит') || s.includes('каркас') || s.includes('стен') || s.includes('колонн') || s.includes('перекрыт')) {
-    return {
-      mandatory: ['Башенный кран', 'Бетононасос'],
-      recommended: ['Автобетоносмеситель', 'Автокран'],
-      uncharacteristic: ['Бульдозер', 'Асфальтоукладчик', 'Каток', 'Автогрейдер'],
-    }
-  }
-  if (s.includes('кладк') || s.includes('перегород')) {
+  if (s.includes('кладк') || s.includes('перегород') || s.includes('кирпич') || s.includes('блок')) {
     return {
       mandatory: ['Башенный кран'],
       recommended: ['Автобетоносмеситель', 'Погрузчик', 'Автокран'],
       uncharacteristic: ['Асфальтоукладчик', 'Каток', 'Автогрейдер', 'Бульдозер'],
+    }
+  }
+  if (s.includes('монолит') || s.includes('каркас') || s.includes('колонн') || s.includes('перекрыт') || s.includes('пилон')) {
+    return {
+      mandatory: ['Башенный кран', 'Бетононасос'],
+      recommended: ['Автобетоносмеситель', 'Автокран'],
+      uncharacteristic: ['Бульдозер', 'Асфальтоукладчик', 'Каток', 'Автогрейдер'],
     }
   }
   if (s.includes('фасад') || s.includes('витраж') || s.includes('остеклен')) {
@@ -222,47 +225,54 @@ export function getStageMachineryRules(stageName?: string): StageMachineryRules 
   }
 }
 
-const MACHINERY_CODE_TO_RU: Record<string, string> = {
-  dump_truck: 'Самосвал',
-  excavator: 'Экскаватор',
-  tower_crane: 'Башенный кран',
-  truck_crane: 'Автокран',
-  concrete_mixer: 'Автобетоносмеситель',
-  concrete_pump: 'Бетононасос',
-  bulldozer: 'Бульдозер',
-  wheel_loader: 'Погрузчик',
-  roller: 'Каток',
-  aerial_lift: 'Автогидроподъемник',
-}
-
 function getEffectiveStageRules(stage?: StageItem | null): {
   mandatory: string[]
   recommended: string[]
   uncharacteristic: string[]
 } {
   const base = getStageMachineryRules(stage?.name)
-  if (!stage) return base
-
-  const overrides = getStageCustomOverrides(stage.id)
-  if (!overrides || Object.keys(overrides).length === 0) {
-    return base
+  if (!stage) {
+    return {
+      mandatory: base.mandatory.map((m) => toRussianMachineryName(m)),
+      recommended: base.recommended.map((m) => toRussianMachineryName(m)),
+      uncharacteristic: base.uncharacteristic.map((m) => toRussianMachineryName(m)),
+    }
   }
 
-  const mandatory = new Set<string>(base.mandatory)
-  const recommended = new Set<string>(base.recommended)
-  const uncharacteristic = new Set<string>(base.uncharacteristic)
+  const overrides = getStageCustomOverrides(stage.id, stage.name)
+  if (!overrides || Object.keys(overrides).length === 0) {
+    return {
+      mandatory: base.mandatory.map((m) => toRussianMachineryName(m)),
+      recommended: base.recommended.map((m) => toRussianMachineryName(m)),
+      uncharacteristic: base.uncharacteristic.map((m) => toRussianMachineryName(m)),
+    }
+  }
+
+  const mandatory = new Set<string>(base.mandatory.map((m) => toRussianMachineryName(m)))
+  const recommended = new Set<string>(base.recommended.map((m) => toRussianMachineryName(m)))
+  const uncharacteristic = new Set<string>(base.uncharacteristic.map((m) => toRussianMachineryName(m)))
 
   for (const [code, status] of Object.entries(overrides)) {
-    const labelRu = MACHINERY_CODE_TO_RU[code] || code
-    mandatory.delete(labelRu)
-    recommended.delete(labelRu)
-    uncharacteristic.delete(labelRu)
+    const labelRu = toRussianMachineryName(code)
+    if (!labelRu) continue
 
-    if (status === 'MANDATORY') {
+    // Delete existing entries (case-insensitive)
+    for (const item of Array.from(mandatory)) {
+      if (item.toLowerCase() === labelRu.toLowerCase()) mandatory.delete(item)
+    }
+    for (const item of Array.from(recommended)) {
+      if (item.toLowerCase() === labelRu.toLowerCase()) recommended.delete(item)
+    }
+    for (const item of Array.from(uncharacteristic)) {
+      if (item.toLowerCase() === labelRu.toLowerCase()) uncharacteristic.delete(item)
+    }
+
+    const st = String(status).toUpperCase()
+    if (st === 'MANDATORY' || st === 'ОБЯЗАТЕЛЬНАЯ') {
       mandatory.add(labelRu)
-    } else if (status === 'RECOMMENDED') {
+    } else if (st === 'RECOMMENDED' || st === 'РЕКОМЕНДОВАННАЯ') {
       recommended.add(labelRu)
-    } else if (status === 'UNCHARACTERISTIC') {
+    } else if (st === 'UNCHARACTERISTIC' || st === 'НЕ ДОПУСКАЕТСЯ') {
       uncharacteristic.add(labelRu)
     }
   }
@@ -301,7 +311,7 @@ function CameraFrame({
   activeStageName?: string
   onSelectClass?: (label: string) => void
   onDetectionsUpdate?: (dets: LiveDetectionInfo[]) => void
-  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string) => void
   onStreamStatusChange?: (online: boolean) => void
 }) {
   const [currentTime, setCurrentTime] = useState(0)
@@ -403,14 +413,72 @@ function CameraFrame({
         canvas.width = video.videoWidth || 640
         canvas.height = video.videoHeight || 360
         const ctx = canvas.getContext('2d')
-        ctx?.drawImage(video, 0, 0, canvas.width, canvas.height)
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+          ctx.save()
+          ctx.fillStyle = 'rgba(10, 14, 20, 0.82)'
+          ctx.fillRect(10, 10, 240, 36)
+          ctx.strokeStyle = '#38bdf8'
+          ctx.lineWidth = 1
+          ctx.strokeRect(10, 10, 240, 36)
+          ctx.fillStyle = '#ffffff'
+          ctx.font = 'bold 11px "Segoe UI", sans-serif'
+          ctx.fillText(streamName, 18, 25)
+          ctx.fillStyle = '#38bdf8'
+          ctx.font = '10px monospace'
+          ctx.fillText(`ВИДЕОЗАПИСЬ · ${currentTime.toFixed(1)} с`, 18, 39)
+          ctx.restore()
+        }
       } else if (imgRef.current && imgRef.current.complete) {
         const img = imgRef.current
         canvas = document.createElement('canvas')
         canvas.width = img.naturalWidth || 640
         canvas.height = img.naturalHeight || 360
         const ctx = canvas.getContext('2d')
-        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height)
+        if (ctx) {
+          const w = canvas.width
+          const h = canvas.height
+
+          // Multi-camera angle distinction: ensure photos from each camera are distinct perspectives
+          const sUpper = streamName.toUpperCase()
+          if (sUpper.includes('02') || sUpper.includes('КОТЛОВАН') || sUpper.includes('РАКУРС 2')) {
+            // Camera 2: Lower-left perspective (Excavation / Groundwork focus)
+            ctx.drawImage(img, 0, Math.floor(h * 0.15), Math.floor(w * 0.82), Math.floor(h * 0.85), 0, 0, w, h)
+          } else if (sUpper.includes('03') || sUpper.includes('ВЪЕЗД') || sUpper.includes('КРАН') || sUpper.includes('РАКУРС 3')) {
+            // Camera 3: Upper-right perspective (Cranes / Materials / Gate focus)
+            ctx.drawImage(img, Math.floor(w * 0.18), 0, Math.floor(w * 0.82), Math.floor(h * 0.85), 0, 0, w, h)
+          } else {
+            // Camera 1 / Overview: Full wide-angle shot
+            ctx.drawImage(img, 0, 0, w, h)
+          }
+
+          // Camera telemetry & angle watermark overlay
+          ctx.save()
+          ctx.fillStyle = 'rgba(10, 14, 20, 0.85)'
+          ctx.fillRect(10, 10, 260, 42)
+          ctx.strokeStyle = '#38bdf8'
+          ctx.lineWidth = 1.5
+          ctx.strokeRect(10, 10, 260, 42)
+
+          ctx.fillStyle = '#ef4444'
+          ctx.beginPath()
+          ctx.arc(20, 24, 4, 0, 2 * Math.PI)
+          ctx.fill()
+
+          ctx.fillStyle = '#ffffff'
+          ctx.font = 'bold 12px "Segoe UI", sans-serif'
+          ctx.fillText(streamName, 30, 28)
+
+          ctx.fillStyle = '#94a3b8'
+          ctx.font = '10px monospace'
+          const angleTag = sUpper.includes('02') || sUpper.includes('КОТЛОВАН')
+            ? 'РАКУРС 2 · ЗОНА КОТЛОВАНА'
+            : sUpper.includes('03') || sUpper.includes('ВЪЕЗД')
+            ? 'РАКУРС 3 · КРАНЫ И МАТЕРИАЛЫ'
+            : 'РАКУРС 1 · ОБЩИЙ ПЛАН'
+          ctx.fillText(`LIVE · ${angleTag}`, 16, 44)
+          ctx.restore()
+        }
       }
 
       if (!canvas) return
@@ -446,7 +514,7 @@ function CameraFrame({
           setRealDetections(mapped)
           onDetectionsUpdate?.(validDets)
           if (snapshotDataUrl) {
-            onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime)
+            onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime, streamName, streamName)
           }
         } catch (err) {
           console.warn('Real AI detection error:', err)
@@ -740,7 +808,7 @@ function Monitoring({
   setUploadedVideoName: (name: string | null) => void
   setIsUploadModalOpen: (b: boolean) => void
   setIsCameraModalOpen: (b: boolean) => void
-  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string) => void
   onStreamStatusChange?: (online: boolean) => void
   toast: (s: string) => void
 }) {
@@ -903,9 +971,36 @@ function Monitoring({
               activeStageName={activeStage?.name}
               onSelectClass={(eq) => setActiveEquipment((prev) => (prev === eq ? null : eq))}
               onDetectionsUpdate={setLiveDetections}
-              onFrameAnalysis={onFrameAnalysis}
+              onFrameAnalysis={(snap, dets, time) => {
+                const sId = uploadedVideoUrl ? 'video-source' : currentCamera?.id || 'cam-01'
+                const sName = uploadedVideoName
+                  ? `Видео · ${uploadedVideoName}`
+                  : currentCamera
+                  ? `${currentCamera.code} · ${currentCamera.name}`
+                  : 'Камера 1'
+                onFrameAnalysis?.(snap, dets, time, sId, sName)
+              }}
               onStreamStatusChange={onStreamStatusChange}
             />
+
+            {/* Concurrent Multi-camera processing: run frame analysis for all other connected cameras */}
+            <div style={{ display: 'none' }} aria-hidden="true">
+              {camerasList
+                .filter((c) => (uploadedVideoUrl ? true : c.id !== (selectedCameraId || camerasList[0]?.id)))
+                .map((c) => (
+                  <CameraFrame
+                    key={c.id}
+                    boxes={false}
+                    compact={true}
+                    streamUrl={c.stream_url || null}
+                    streamName={`${c.code} · ${c.name}`}
+                    activeStageName={activeStage?.name}
+                    onFrameAnalysis={(snap, dets, time) => {
+                      onFrameAnalysis?.(snap, dets, time, c.id, `${c.code} · ${c.name}`)
+                    }}
+                  />
+                ))}
+            </div>
 
             <div className="analysis-tabs" role="tablist">
               {['Техника', 'Люди', 'СИЗ', 'Опасные зоны', 'Прогресс'].map((m) => (
@@ -1041,20 +1136,35 @@ function PhotoArchive({
   violationWindowSeconds,
   highlightedIncidentId,
   onNavigateToReport,
+  onStatusChange,
   toast,
 }: {
   incidents: Incident[]
   violationWindowSeconds: number
   highlightedIncidentId?: string | null
   onNavigateToReport: (incidentId: string) => void
+  onStatusChange?: (incidentId: string, newStatus: IncidentStatus) => void
   toast: (s: string) => void
 }) {
   const [filterSeverity, setFilterSeverity] = useState<'all' | 'ERROR' | 'WARNING'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
+  const [selectedAlbumIncident, setSelectedAlbumIncident] = useState<Incident | null>(null)
+  const [activeAlbumPhotoIndex, setActiveAlbumPhotoIndex] = useState<number>(0)
+
+  // Automatically open error album when navigated with highlightedIncidentId
+  useEffect(() => {
+    if (highlightedIncidentId) {
+      const match = incidents.find((i) => i.id === highlightedIncidentId)
+      if (match) {
+        setSelectedAlbumIncident(match)
+        setActiveAlbumPhotoIndex(0)
+      }
+    }
+  }, [highlightedIncidentId, incidents])
 
   const incidentsWithPhotos = useMemo(() => {
-    return incidents.filter((inc) => Boolean(inc.snapshotUrl))
+    return incidents.filter((inc) => Boolean(inc.snapshotUrl || (inc.albumPhotos && inc.albumPhotos.length > 0)))
   }, [incidents])
 
   const filteredIncidents = useMemo(() => {
@@ -1084,7 +1194,7 @@ function PhotoArchive({
         <h1>Фотофиксация нарушений спецтехники</h1>
         <p style={{ color: 'var(--muted)', fontSize: '13px', margin: '4px 0 16px', maxWidth: '750px' }}>
           Автоматическая фотофиксация участков стройплощадки при обнаружении несоответствий календарному плану
-          (окно контроля: {violationWindowSeconds} сек). Каждое зафиксированное фото сопровождается датой, временем и ссылкой на запись в отчёте.
+          (окно контроля: {violationWindowSeconds} сек). При фиксации ошибки в фотоархив добавляются ракурсы <strong>со всех подключенных камер</strong> в виде альбома ошибки. В суточный отчёт передается только первое фото.
         </p>
 
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1104,7 +1214,7 @@ function PhotoArchive({
               onClick={() => setFilterSeverity('all')}
               style={{ fontSize: '11px', height: '36px' }}
             >
-              Все фото ({incidentsWithPhotos.length})
+              Все альбомы ({incidentsWithPhotos.length})
             </button>
             <button
               className={`button ${filterSeverity === 'ERROR' ? 'primary' : ''}`}
@@ -1127,8 +1237,8 @@ function PhotoArchive({
       <section className="archive-results panel">
         <div className="panel-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <span className="section-kicker">ФОТОСНИМКИ УЧАСТКОВ С НАРУШЕНИЯМИ</span>
-            <h2>Найдено {filteredIncidents.length} фотофиксаций</h2>
+            <span className="section-kicker">АЛЬБОМЫ ОШИБОК И ФОТОФИКСАЦИЙ</span>
+            <h2>Найдено {filteredIncidents.length} альбомов нарушений</h2>
           </div>
           <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
             Окно фиксации нарушений: <strong>{violationWindowSeconds} сек</strong>
@@ -1138,7 +1248,7 @@ function PhotoArchive({
         {filteredIncidents.length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--muted)' }}>
             Фотофиксаций нарушений пока нет. При воспроизведении видео или трансляции система автоматически
-            зафиксирует кадр участка из видео при нарушении регламента.
+            зафиксирует кадры участка со всех камер при нарушении регламента.
           </div>
         ) : (
           <div className="photo-archive-grid">
@@ -1148,7 +1258,10 @@ function PhotoArchive({
                 r.priority === 'Критический' ||
                 r.discrepancyType === 'MISSING_MANDATORY' ||
                 r.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
-              const photoSrc = r.snapshotUrl!
+              const album = r.albumPhotos && r.albumPhotos.length > 0
+                ? r.albumPhotos
+                : [{ url: r.snapshotUrl || '', cameraName: r.camera || 'Камера 1', isPrimary: true }]
+              const primaryPhoto = album.find((p) => p.isPrimary)?.url || album[0]?.url || r.snapshotUrl || ''
               const isHighlighted = highlightedIncidentId === r.id
 
               return (
@@ -1173,11 +1286,14 @@ function PhotoArchive({
                       overflow: 'hidden',
                       cursor: 'pointer',
                     }}
-                    onClick={() => setSelectedPhoto(photoSrc)}
-                    title="Нажмите для увеличения фото"
+                    onClick={() => {
+                      setSelectedAlbumIncident(r)
+                      setActiveAlbumPhotoIndex(0)
+                    }}
+                    title="Нажмите, чтобы открыть альбом ошибки"
                   >
                     <img
-                      src={photoSrc}
+                      src={primaryPhoto}
                       alt={r.title}
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       onError={(e) => {
@@ -1194,6 +1310,7 @@ function PhotoArchive({
                         left: '8px',
                         display: 'flex',
                         gap: '6px',
+                        flexWrap: 'wrap',
                       }}
                     >
                       <span
@@ -1223,6 +1340,26 @@ function PhotoArchive({
                       </span>
                     </div>
 
+                    {/* Badge: Number of camera angles in album */}
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: '8px',
+                        left: '8px',
+                        background: 'rgba(2,132,199,0.85)',
+                        color: '#fff',
+                        fontSize: '10px',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span>📷 Альбом: {album.length} {album.length === 1 ? 'ракурс' : album.length < 5 ? 'ракурса' : 'ракурсов'}</span>
+                    </div>
+
                     <div
                       style={{
                         position: 'absolute',
@@ -1240,10 +1377,117 @@ function PhotoArchive({
                     </div>
                   </div>
 
+                  {/* Album camera thumbnails row if more than 1 camera */}
+                  {album.length > 1 && (
+                    <div
+                      style={{
+                        padding: '8px 14px 0',
+                        display: 'flex',
+                        gap: '6px',
+                        overflowX: 'auto',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span style={{ fontSize: '10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>Ракурсы:</span>
+                      {album.map((photo, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            setSelectedAlbumIncident(r)
+                            setActiveAlbumPhotoIndex(idx)
+                          }}
+                          style={{
+                            width: '48px',
+                            height: '30px',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            border: photo.isPrimary ? '1.5px solid #38bdf8' : '1px solid #374151',
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                            position: 'relative',
+                            background: '#0b0d10',
+                          }}
+                          title={`Камера: ${photo.cameraName || `Ракурс ${idx + 1}`}`}
+                        >
+                          <img
+                            src={photo.url}
+                            alt=""
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            onError={(e) => {
+                              const target = e.currentTarget
+                              if (!target.src.includes('construction-camera')) {
+                                target.src = cameraImage
+                              }
+                            }}
+                          />
+                          {photo.isPrimary && (
+                            <span style={{ position: 'absolute', bottom: '1px', left: '1px', background: '#0284c7', color: '#fff', fontSize: '6px', padding: '0 2px', borderRadius: '1px', fontWeight: 700 }}>
+                              Осн
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', flex: 1, gap: '8px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--muted)' }}>
-                      <span>Участок: <strong style={{ color: '#fff' }}>{r.zone}</strong></span>
-                      <span>Камера: <strong style={{ color: '#fff' }}>{r.camera}</strong></span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--muted)', flexWrap: 'wrap', gap: '6px' }}>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <span>Участок: <strong style={{ color: '#fff' }}>{r.zone}</strong></span>
+                        <span>Камера: <strong style={{ color: '#fff' }}>{r.camera}</strong></span>
+                      </div>
+
+                      {/* Status Tag Selector */}
+                      {r.type === 'Видеопоток' || r.discrepancyType?.startsWith('STREAM_') || r.title?.toLowerCase().includes('видеопоток') || r.note?.toLowerCase().includes('видеопоток') ? (
+                        <span style={{ fontSize: '10px', color: '#94a3b8', background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.25)', padding: '1px 6px', borderRadius: '4px' }}>
+                          Видеопоток
+                        </span>
+                      ) : (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--muted)', fontWeight: 600 }}>Тег:</span>
+                          <select
+                            value={
+                              r.status === 'Подтверждено'
+                                ? 'Подтверждено'
+                                : r.status === 'Проблемы нет'
+                                ? 'Проблемы нет'
+                                : 'Ожидает обработки'
+                            }
+                            onChange={(e) => onStatusChange?.(r.id, e.target.value as IncidentStatus)}
+                            style={{
+                              fontSize: '10px',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                              background:
+                                r.status === 'Подтверждено'
+                                  ? 'rgba(239, 68, 68, 0.25)'
+                                  : r.status === 'Проблемы нет'
+                                  ? 'rgba(16, 185, 129, 0.25)'
+                                  : 'rgba(245, 158, 11, 0.25)',
+                              color:
+                                r.status === 'Подтверждено'
+                                  ? '#fca5a5'
+                                  : r.status === 'Проблемы нет'
+                                  ? '#6ee7b7'
+                                  : '#fde047',
+                              border: `1px solid ${
+                                r.status === 'Подтверждено'
+                                  ? '#ef4444'
+                                  : r.status === 'Проблемы нет'
+                                  ? '#10b981'
+                                  : '#f59e0b'
+                              }`,
+                            }}
+                            title="Поменять тег ошибки вручную"
+                          >
+                            <option value="Ожидает обработки">⏳ Ожидает обработки</option>
+                            <option value="Подтверждено">🔴 Подтверждено</option>
+                            <option value="Проблемы нет">🛡️ Проблемы нет</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
 
                     <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#fff' }}>
@@ -1254,10 +1498,20 @@ function PhotoArchive({
                       {r.note}
                     </p>
 
-                    <div style={{ paddingTop: '8px', borderTop: '1px solid #282a2e', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '10px', color: 'var(--muted)' }}>
-                        Фиксация за {violationWindowSeconds} сек
-                      </span>
+                    <div style={{ paddingTop: '8px', borderTop: '1px solid #282a2e', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="button"
+                        style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(56,189,248,0.12)', color: '#38bdf8', borderColor: 'rgba(56,189,248,0.3)' }}
+                        onClick={() => {
+                          setSelectedAlbumIncident(r)
+                          setActiveAlbumPhotoIndex(0)
+                        }}
+                        title="Открыть альбом ошибки со всеми камерами"
+                      >
+                        📷 Альбом ошибки ({album.length})
+                      </button>
+
                       <button
                         className="button primary"
                         style={{ fontSize: '11px', padding: '4px 10px', height: '28px' }}
@@ -1277,6 +1531,211 @@ function PhotoArchive({
           </div>
         )}
       </section>
+
+      {/* Modal: Interactive Error Album (Альбом ошибки со всеми ракурсами) */}
+      {selectedAlbumIncident && (
+        <div className="modal-backdrop" onClick={() => setSelectedAlbumIncident(null)} style={{ zIndex: 1250 }}>
+          <div
+            className="modal-box"
+            style={{
+              maxWidth: '900px',
+              width: '92vw',
+              maxHeight: '92vh',
+              background: '#131518',
+              border: '1px solid #2e3035',
+              borderRadius: '10px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #22252a', paddingBottom: '12px' }}>
+              <div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      background: selectedAlbumIncident.severity === 'ERROR' ? 'rgba(220,38,38,0.2)' : 'rgba(234,179,8,0.2)',
+                      color: selectedAlbumIncident.severity === 'ERROR' ? '#f87171' : '#fbbf24',
+                      border: `1px solid ${selectedAlbumIncident.severity === 'ERROR' ? '#ef4444' : '#f59e0b'}`,
+                      fontSize: '10px',
+                      fontWeight: 800,
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    {selectedAlbumIncident.severity === 'ERROR' ? 'ОШИБКА (ERROR)' : 'ПРЕДУПРЕЖДЕНИЕ (WARNING)'}
+                  </span>
+                  <strong style={{ color: '#fff', fontSize: '13px' }}>{selectedAlbumIncident.id}</strong>
+                  <span style={{ color: 'var(--muted)', fontSize: '12px' }}>• {selectedAlbumIncident.time}</span>
+                  {selectedAlbumIncident.stageName && (
+                    <span style={{ fontSize: '11px', color: '#cf9d3d', background: 'rgba(207,157,61,0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                      Этап: {selectedAlbumIncident.stageName}
+                    </span>
+                  )}
+                </div>
+                <h2 style={{ margin: 0, fontSize: '16px', color: '#fff' }}>Альбом ошибки: {selectedAlbumIncident.title}</h2>
+                <p style={{ margin: '6px 0 0', color: '#94a3b8', fontSize: '12px', lineHeight: 1.5 }}>{selectedAlbumIncident.note}</p>
+              </div>
+              <button
+                className="button"
+                onClick={() => setSelectedAlbumIncident(null)}
+                style={{ fontSize: '14px', width: '32px', height: '32px', padding: 0 }}
+                title="Закрыть альбом"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Album Multi-Camera Switcher and Gallery */}
+            {(() => {
+              const album = selectedAlbumIncident.albumPhotos && selectedAlbumIncident.albumPhotos.length > 0
+                ? selectedAlbumIncident.albumPhotos
+                : [{ url: selectedAlbumIncident.snapshotUrl || '', cameraName: selectedAlbumIncident.camera || 'Камера 1', isPrimary: true }]
+              const curPhoto = album[activeAlbumPhotoIndex] || album[0]
+
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>Ракурсы камер:</span>
+                    {album.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className={`button ${idx === activeAlbumPhotoIndex ? 'primary' : ''}`}
+                        style={{
+                          fontSize: '11px',
+                          padding: '4px 12px',
+                          height: '32px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          whiteSpace: 'nowrap',
+                        }}
+                        onClick={() => setActiveAlbumPhotoIndex(idx)}
+                      >
+                        <span>📷 {p.cameraName || `Камера ${idx + 1}`}</span>
+                        {p.isPrimary && (
+                          <span style={{ fontSize: '9px', background: 'rgba(255,255,255,0.2)', padding: '1px 5px', borderRadius: '3px' }}>
+                            Основной (в отчёте)
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Active Camera Large View */}
+                  <div
+                    style={{
+                      position: 'relative',
+                      background: '#07080a',
+                      borderRadius: '8px',
+                      overflow: 'hidden',
+                      aspectRatio: '16/9',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      border: '1px solid #22252a',
+                      cursor: 'zoom-in',
+                    }}
+                    onClick={() => setSelectedPhoto(curPhoto?.url || '')}
+                    title="Нажмите для полноэкранного просмотра"
+                  >
+                    <img
+                      src={curPhoto?.url}
+                      alt={curPhoto?.cameraName}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      onError={(e) => {
+                        const target = e.currentTarget
+                        if (!target.src.includes('construction-camera')) {
+                          target.src = cameraImage
+                        }
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '10px',
+                        left: '10px',
+                        background: 'rgba(0,0,0,0.8)',
+                        color: '#fff',
+                        fontSize: '11px',
+                        padding: '4px 10px',
+                        borderRadius: '4px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      <span>🎥 {curPhoto?.cameraName || `Ракурс ${activeAlbumPhotoIndex + 1}`}</span>
+                      {curPhoto?.isPrimary && (
+                        <span style={{ background: '#0284c7', fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 700 }}>
+                          В отчёте
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Thumbnails strip */}
+                  <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', padding: '4px 0' }}>
+                    {album.map((p, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => setActiveAlbumPhotoIndex(idx)}
+                        style={{
+                          width: '80px',
+                          height: '50px',
+                          borderRadius: '4px',
+                          overflow: 'hidden',
+                          border: idx === activeAlbumPhotoIndex ? '2px solid #38bdf8' : '1px solid #334155',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                          position: 'relative',
+                          background: '#07080a',
+                        }}
+                      >
+                        <img
+                          src={p.url}
+                          alt=""
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onError={(e) => {
+                            const target = e.currentTarget
+                            if (!target.src.includes('construction-camera')) {
+                              target.src = cameraImage
+                            }
+                          }}
+                        />
+                        <span style={{ position: 'absolute', bottom: '2px', left: '2px', background: 'rgba(0,0,0,0.7)', color: '#cbd5e1', fontSize: '8px', padding: '1px 3px', borderRadius: '2px' }}>
+                          {p.cameraName || `К${idx + 1}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Modal Footer Actions */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px', borderTop: '1px solid #22252a', flexWrap: 'wrap', gap: '10px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                      Всего камер в альбоме: <strong>{album.length}</strong> · В отчёт включён <strong>только первый (основной)</strong> ракурс
+                    </span>
+                    <button
+                      className="button primary"
+                      onClick={() => {
+                        onNavigateToReport(selectedAlbumIncident.id)
+                        setSelectedAlbumIncident(null)
+                        toast(`Переход к записи ${selectedAlbumIncident.id} в отчёте`)
+                      }}
+                    >
+                      Перейти к записи в отчёте →
+                    </button>
+                  </div>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Fullscreen Photo Modal */}
       {selectedPhoto && (
@@ -1902,7 +2361,7 @@ function Analytics({
 
     // 2. Persist to API
     try {
-      const res = await updateStageProbabilities(selectedStageId, { [machineryCode]: validStatus })
+      const res = await updateStageProbabilities(selectedStageId, { [machineryCode]: validStatus }, selectedStage?.name)
       setHasCustomOverride(Boolean(res.has_custom_override ?? true))
       onStageOverridesUpdated?.(selectedStageId)
       toast?.(`Статус техники обновлён: «${meta.level}»`)
@@ -1916,7 +2375,7 @@ function Analytics({
   const handleResetProbabilities = async () => {
     setIsLoading(true)
     try {
-      const res = await resetStageProbabilities(selectedStageId)
+      const res = await resetStageProbabilities(selectedStageId, selectedStage?.name)
       setProbItems(res.probabilities || [])
       setHasCustomOverride(false)
       onStageOverridesUpdated?.(selectedStageId)
@@ -1971,7 +2430,7 @@ function Analytics({
                     </span>
                   )}
                 </div>
-                <h2>Вероятностное распределение строительной техники (10 классов)</h2>
+                <h2>Вероятностное распределение строительной техники</h2>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
@@ -2190,12 +2649,14 @@ function Reports({
   incidents,
   highlightedIncidentId,
   onNavigateToArchive,
+  onStatusChange,
   toast,
 }: {
   activeProject?: ProjectItem
   incidents: Incident[]
   highlightedIncidentId?: string | null
   onNavigateToArchive: (incidentId: string) => void
+  onStatusChange?: (incidentId: string, newStatus: IncidentStatus) => void
   toast: (s: string) => void
 }) {
   const [filterSeverity, setFilterSeverity] = useState<'ALL' | 'ERROR' | 'WARNING'>('ALL')
@@ -2442,10 +2903,90 @@ function Reports({
                             Этап: {inc.stageName}
                           </span>
                         )}
-                        {inc.status && inc.status !== 'Устранено' && (
-                          <Status tone={inc.status === 'В работе' ? 'warning' : isError ? 'critical' : 'warning'}>
-                            {inc.status}
-                          </Status>
+                        {!isStreamIncident ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '10px', color: 'var(--muted)', fontWeight: 600 }}>Тег:</span>
+                            <select
+                              value={
+                                inc.status === 'Подтверждено'
+                                  ? 'Подтверждено'
+                                  : inc.status === 'Проблемы нет'
+                                  ? 'Проблемы нет'
+                                  : 'Ожидает обработки'
+                              }
+                              onChange={(e) => onStatusChange?.(inc.id, e.target.value as IncidentStatus)}
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontWeight: 700,
+                                background:
+                                  inc.status === 'Подтверждено'
+                                    ? 'rgba(239, 68, 68, 0.25)'
+                                    : inc.status === 'Проблемы нет'
+                                    ? 'rgba(16, 185, 129, 0.25)'
+                                    : 'rgba(245, 158, 11, 0.25)',
+                                color:
+                                  inc.status === 'Подтверждено'
+                                    ? '#fca5a5'
+                                    : inc.status === 'Проблемы нет'
+                                    ? '#6ee7b7'
+                                    : '#fde047',
+                                border: `1px solid ${
+                                  inc.status === 'Подтверждено'
+                                    ? '#ef4444'
+                                    : inc.status === 'Проблемы нет'
+                                    ? '#10b981'
+                                    : '#f59e0b'
+                                }`,
+                              }}
+                              title="Сменить тег ошибки: Ожидает обработки, Проблемы нет или Подтверждено"
+                            >
+                              <option value="Ожидает обработки">⏳ Ожидает обработки</option>
+                              <option value="Подтверждено">🔴 Подтверждено</option>
+                              <option value="Проблемы нет">🛡️ Проблемы нет</option>
+                            </select>
+
+                            {Boolean(inc.manual_override) && (
+                              <span
+                                style={{
+                                  fontSize: '9.5px',
+                                  padding: '2px 6px',
+                                  borderRadius: '3px',
+                                  background: 'rgba(148, 163, 184, 0.15)',
+                                  color: '#cbd5e1',
+                                  border: '1px solid #475569',
+                                }}
+                                title="Тег изменен пользователем вручную"
+                              >
+                                Ручной тег
+                              </span>
+                            )}
+
+                            {inc.albumPhotos && inc.albumPhotos.length > 1 && (
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  background: 'rgba(2, 132, 199, 0.2)',
+                                  color: '#38bdf8',
+                                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                }}
+                                title={`В фотоархиве сохранён альбом с ${inc.albumPhotos.length} ракурсов`}
+                              >
+                                📷 Альбом: {inc.albumPhotos.length} ракурсов
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '10.5px', color: '#94a3b8', background: 'rgba(148, 163, 184, 0.1)', border: '1px solid rgba(148, 163, 184, 0.3)', padding: '2px 8px', borderRadius: '4px' }}>
+                            Видеопоток / Связь
+                          </span>
                         )}
                       </div>
 
@@ -2464,7 +3005,7 @@ function Reports({
                       </div>
                     </div>
 
-                    {/* Navigation Link to Photo Archive only if real snapshot exists */}
+                    {/* Navigation Link to Photo Archive error album (first photo in report) */}
                     {hasSnapshot && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', justifyContent: 'center' }}>
                         <button
@@ -2472,11 +3013,11 @@ function Reports({
                           style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
                           onClick={() => {
                             onNavigateToArchive(inc.id)
-                            toast(`Переход к фотофиксации ${inc.id} в фотоархиве`)
+                            toast(`Переход к альбому ошибки ${inc.id} в фотоархиве`)
                           }}
-                          title="Открыть данный кадр в фотоархиве"
+                          title="Открыть альбом данной ошибки со всеми камерами в фотоархиве"
                         >
-                          Смотреть в фотоархиве ↗
+                          Смотреть альбом в архиве ↗
                         </button>
                       </div>
                     )}
@@ -2912,6 +3453,16 @@ function Settings({
 // ----------------------------------------------------------------------------
 // Main Application Component
 // ----------------------------------------------------------------------------
+function mapApiStatus(rawStatus?: string | null): IncidentStatus {
+  if (!rawStatus) return 'Ожидает обработки'
+  const s = rawStatus.toLowerCase()
+  if (s === 'confirmed' || s.includes('подтвержд')) return 'Подтверждено'
+  if (s === 'false_positive' || s.includes('проблемы нет') || s.includes('ложное') || s.includes('no_problem')) return 'Проблемы нет'
+  if (s === 'in_progress' || s.includes('в работе')) return 'В работе'
+  if (s === 'resolved' || s.includes('устранен')) return 'Устранено'
+  return 'Ожидает обработки'
+}
+
 export default function App() {
   const [page, setPage] = useState<PageKey>('monitoring')
   const [collapsed, setCollapsed] = useState(false)
@@ -2934,6 +3485,18 @@ export default function App() {
   const streamStartTimeRef = useRef<number | null>(null)
   const detectedLabelsInWindowRef = useRef<Set<string>>(new Set())
   const latestSnapshotRef = useRef<string | null>(null)
+  const sourcesStateRef = useRef<
+    Map<
+      string,
+      {
+        sourceId: string
+        sourceName: string
+        snapshotUrl: string
+        detectedLabels: Set<string>
+        lastTimestamp: number
+      }
+    >
+  >(new Map())
 
   // Hierarchy: Projects -> Zones -> Cameras
   const [projectsList, setProjectsList] = useState<ProjectItem[]>([])
@@ -2999,8 +3562,6 @@ export default function App() {
       .then((apiIncs) => {
         if (apiIncs && apiIncs.length > 0) {
           const mapped: Incident[] = apiIncs.map((item) => {
-            const rawStatus = (item.status || '').toLowerCase()
-            const resolvedStatus = rawStatus === 'in_progress' ? 'В работе' : 'Требует проверки'
             return {
               id: item.code,
               type: 'Техника',
@@ -3010,15 +3571,32 @@ export default function App() {
               time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '14:30',
               age: 'Недавно',
               priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
-              status: resolvedStatus as IncidentStatus,
+              status: mapApiStatus(item.status),
               assignee: 'Не назначен',
               sla: item.severity === 'ERROR' ? '15 мин' : '45 мин',
               confidence: 95,
               note: item.description || '',
               severity: item.severity,
               snapshotUrl: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url),
+              albumPhotos: item.album_photos && item.album_photos.length > 0
+                ? item.album_photos.map((p) => ({
+                    url: normalizeSnapshotUrl(p.url) || p.url,
+                    cameraName: p.camera_name,
+                    isPrimary: p.is_primary,
+                    capturedAt: p.captured_at,
+                  }))
+                : (item.frame_snapshot_url || item.snapshot_url)
+                ? [
+                    {
+                      url: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url) || '',
+                      cameraName: item.camera_name || 'Камера 1',
+                      isPrimary: true,
+                    },
+                  ]
+                : [],
               stageName: item.stage_name || undefined,
               discrepancyType: item.discrepancy_type,
+              manual_override: Boolean(item.manual_override),
             }
           })
           setIncidentsList(mapped)
@@ -3377,6 +3955,19 @@ export default function App() {
     }
   }
 
+  // Handle manual incident status change ("Ожидает обработки", "Проблемы нет", "Подтверждено")
+  const handleIncidentStatusChange = async (incidentId: string, newStatus: IncidentStatus) => {
+    setIncidentsList((prev) =>
+      prev.map((i) => (i.id === incidentId ? { ...i, status: newStatus, manual_override: true } : i))
+    )
+    toast(`Тег инцидента изменен: «${newStatus}»`)
+    try {
+      await updateIncidentStatus(incidentId, newStatus)
+    } catch {
+      // already updated in UI
+    }
+  }
+
   // Reset detection observations when video or camera switches
   useEffect(() => {
     recentObservationsRef.current = []
@@ -3412,7 +4003,7 @@ export default function App() {
           time: nowStr,
           age: 'Только что',
           priority: 'Средний',
-          status: 'Требует проверки',
+          status: 'В работе',
           assignee: 'Дежурный инженер',
           sla: '30 мин',
           confidence: 100,
@@ -3483,7 +4074,7 @@ export default function App() {
         time: nowStr,
         age: 'Только что',
         priority: 'Высокий',
-        status: 'Требует проверки',
+        status: 'В работе',
         assignee: 'Дежурный инженер',
         sla: '15 мин',
         confidence: 100,
@@ -3504,9 +4095,15 @@ export default function App() {
     }
   }, [isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, toast])
 
-  // Realtime Frame Analysis & 30s Violation Window Evaluator
+  // Realtime Frame Analysis & Multi-Camera Violation Evaluator
   const handleFrameAnalysis = useCallback(
-    (snapshotDataUrl: string, dets: LiveDetectionInfo[], timeSeconds: number) => {
+    (
+      snapshotDataUrl: string,
+      dets: LiveDetectionInfo[],
+      timeSeconds: number,
+      sourceId?: string,
+      sourceName?: string
+    ) => {
       // Do not run violation detection or create alerts when video stream is offline
       if (!isStreamOnline) {
         streamStartTimeRef.current = null
@@ -3519,42 +4116,119 @@ export default function App() {
         streamStartTimeRef.current = nowSec
       }
 
-      // Save latest frame snapshot from video
+      const sId = sourceId || (uploadedVideoUrl ? 'video-source' : selectedCameraId || 'cam-01')
+      const sName = sourceName || (uploadedVideoName ? `Видео · ${uploadedVideoName}` : curCam?.name || 'Камера 1')
+
+      let sState = sourcesStateRef.current.get(sId)
+      if (!sState) {
+        sState = {
+          sourceId: sId,
+          sourceName: sName,
+          snapshotUrl: snapshotDataUrl,
+          detectedLabels: new Set<string>(),
+          lastTimestamp: Date.now(),
+        }
+        sourcesStateRef.current.set(sId, sState)
+      }
       if (snapshotDataUrl) {
+        sState.snapshotUrl = snapshotDataUrl
+        sState.lastTimestamp = Date.now()
         latestSnapshotRef.current = snapshotDataUrl
       }
-
-      // Remember confident machinery from YOLO (conf >= 60, identical to bounding box display)
       for (const d of dets) {
         if (d.conf >= 60 && d.label) {
-          detectedLabelsInWindowRef.current.add(d.label)
+          sState.detectedLabels.add(d.label)
         }
       }
 
       const windowSec = violationWindowSeconds || 30
       const elapsedSec = nowSec - streamStartTimeRef.current
 
-      // Check after 30 seconds have elapsed
+      // Check after windowSec seconds have elapsed
       if (elapsedSec < windowSec) {
         return
       }
 
-      // 30 seconds elapsed: reset window start timer for the next 30-second cycle
+      // Reset window start timer for the next observation cycle
       streamStartTimeRef.current = nowSec
 
       // Resolve active stage & analytical assumption (what machinery should be present)
       const activeStage = getCurrentStageByDate(stages) || stages[0]
       const stageName = activeStage?.name || 'Монолитные конструкции'
       const rules = getEffectiveStageRules(activeStage)
-      const observedMachinery = new Set(detectedLabelsInWindowRef.current)
-      // Clear remembered labels for the next 30-second observation cycle
-      detectedLabelsInWindowRef.current.clear()
+
+      // ALL found objects from ALL connected cameras/sources are recorded into ONE set for this stage!
+      const unifiedObservedMachinery = new Set<string>()
+      for (const src of sourcesStateRef.current.values()) {
+        for (const label of src.detectedLabels) {
+          unifiedObservedMachinery.add(label)
+        }
+        src.detectedLabels.clear()
+      }
 
       const activeZoneObj = activeZones.find((z) => z.id === activeZoneId) || activeZones[0]
-      const curCam = camerasList.find((c) => c.id === selectedCameraId) || camerasList[0]
       const zoneName = activeZoneObj?.name || 'Основная площадка'
       const camName = curCam?.name || 'Камера 1 (Обзор)'
       const effectiveSnapshot = snapshotDataUrl || latestSnapshotRef.current || ''
+
+      // Prepare multi-camera album snapshots from ALL connected cameras / sources
+      // The report must specifically take the snapshot from the FIRST camera (camerasList[0])!
+      const firstCamera = camerasList[0]
+      const firstCameraId = firstCamera?.id || 'cam-01'
+
+      const albumPhotos: { url: string; cameraName: string; isPrimary: boolean; capturedAt: string }[] = []
+      const processedSources = new Set<string>()
+
+      // 1. Add connected cameras in canonical project camerasList order (Camera 1 is primary)
+      camerasList.forEach((cam, idx) => {
+        const state =
+          sourcesStateRef.current.get(cam.id) ||
+          sourcesStateRef.current.get(cam.code) ||
+          Array.from(sourcesStateRef.current.values()).find(
+            (s) =>
+              s.sourceId === cam.id ||
+              s.sourceName.includes(cam.code) ||
+              s.sourceName.includes(cam.name)
+          )
+        if (state?.snapshotUrl) {
+          processedSources.add(state.sourceId)
+          albumPhotos.push({
+            url: state.snapshotUrl,
+            cameraName: `${cam.code} · ${cam.name}`,
+            isPrimary: idx === 0,
+            capturedAt: new Date().toISOString(),
+          })
+        }
+      })
+
+      // 2. Add any additional active stream or uploaded video source
+      for (const src of sourcesStateRef.current.values()) {
+        if (!processedSources.has(src.sourceId) && src.snapshotUrl) {
+          albumPhotos.push({
+            url: src.snapshotUrl,
+            cameraName: src.sourceName,
+            isPrimary: albumPhotos.length === 0,
+            capturedAt: new Date().toISOString(),
+          })
+        }
+      }
+
+      if (albumPhotos.length === 0 && effectiveSnapshot) {
+        albumPhotos.push({
+          url: effectiveSnapshot,
+          cameraName: camName,
+          isPrimary: true,
+          capturedAt: new Date().toISOString(),
+        })
+      }
+
+      // Explicitly take snapshot from the FIRST camera for the report
+      const firstCameraPhoto =
+        albumPhotos.find((p) => p.isPrimary)?.url ||
+        sourcesStateRef.current.get(firstCameraId)?.snapshotUrl ||
+        albumPhotos[0]?.url ||
+        effectiveSnapshot ||
+        undefined
 
       const emitViolation = (
         severity: 'ERROR' | 'WARNING',
@@ -3565,23 +4239,27 @@ export default function App() {
       ) => {
         const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
         const nowStr = new Date().toLocaleTimeString('ru-RU').slice(0, 5)
+        const cleanTitle = cleanViolationText(title)
+        const cleanNote = cleanViolationText(note)
+        const cleanMachinery = toRussianMachineryName(machineryName)
 
         const newIncident: Incident = {
           id: newId,
           type: 'Техника',
-          title,
+          title: cleanTitle,
           zone: zoneName,
-          camera: camName,
+          camera: firstCamera ? `${firstCamera.code} · ${firstCamera.name}` : camName,
           time: nowStr,
           age: 'Только что',
           priority: severity === 'ERROR' ? 'Критический' : 'Средний',
-          status: 'Требует проверки',
+          status: 'Ожидает обработки',
           assignee: 'Не назначен',
           sla: severity === 'ERROR' ? '15 мин' : '45 мин',
           confidence: 96,
-          note,
+          note: cleanNote,
           severity,
-          snapshotUrl: effectiveSnapshot || undefined,
+          snapshotUrl: firstCameraPhoto, // In report: strictly photo from the first camera!
+          albumPhotos, // In photo archive: album with photos from all cameras
           stageName,
           discrepancyType,
         }
@@ -3589,38 +4267,49 @@ export default function App() {
         setIncidentsList((prev) => [newIncident, ...prev])
         setActiveViolationAlert({
           id: newId,
-          title,
-          desc: note,
+          title: cleanTitle,
+          desc: cleanNote,
           severity,
-          snapshotUrl: effectiveSnapshot || undefined,
+          snapshotUrl: firstCameraPhoto,
         })
-        toast(severity === 'ERROR' ? `🔴 ${title}` : `⚠️ ${title}`)
+        toast(severity === 'ERROR' ? `🔴 ${cleanTitle}` : `⚠️ ${cleanTitle}`)
 
         setTimeout(() => {
           setActiveViolationAlert((prev) => (prev?.id === newId ? null : prev))
         }, 12000)
 
-        // Asynchronously persist to backend DB & snapshot storage
+        // Asynchronously persist to backend DB & snapshot storage with album_snapshots
         createIncident({
-          title,
-          description: note,
+          title: cleanTitle,
+          description: cleanNote,
           severity,
           discrepancy_type: discrepancyType,
-          machinery_type: machineryName,
+          machinery_type: cleanMachinery,
           zone_name: zoneName,
-          camera_name: camName,
+          camera_name: firstCamera ? `${firstCamera.code} · ${firstCamera.name}` : camName,
           stage_name: stageName,
-          frame_snapshot_base64: effectiveSnapshot || null,
+          frame_snapshot_base64: firstCameraPhoto || null,
+          album_snapshots: albumPhotos.map((p) => ({
+            snapshot_base64: p.url,
+            camera_name: p.cameraName,
+          })),
         })
           .then((saved) => {
             const serverUrl = normalizeSnapshotUrl(saved.frame_snapshot_url || saved.snapshot_url)
-            if (serverUrl) {
+            const serverAlbum = saved.album_photos?.map((p) => ({
+              url: normalizeSnapshotUrl(p.url) || p.url,
+              cameraName: p.camera_name,
+              isPrimary: p.is_primary,
+              capturedAt: p.captured_at,
+            }))
+            if (serverUrl || (serverAlbum && serverAlbum.length > 0)) {
               setIncidentsList((prev) =>
                 prev.map((i) => {
                   if (i.id === newId) {
                     return {
                       ...i,
                       snapshotUrl: i.snapshotUrl || serverUrl,
+                      albumPhotos: (serverAlbum && serverAlbum.length > 0) ? serverAlbum : i.albumPhotos,
                     }
                   }
                   return i
@@ -3632,34 +4321,37 @@ export default function App() {
       }
 
       // 1. Нет необходимой техники (ERROR)
-      for (const mandatory of rules.mandatory) {
-        if (!observedMachinery.has(mandatory)) {
+      for (const rawMandatory of rules.mandatory) {
+        const mandatory = toRussianMachineryName(rawMandatory)
+        if (!unifiedObservedMachinery.has(mandatory)) {
           emitViolation(
             'ERROR',
             'MISSING_MANDATORY',
             mandatory,
             `Нет необходимой техники: ${mandatory}`,
-            `Причина: нет необходимой техники (${mandatory}). За 30 секунд анализа видеопотока на этапе «${stageName}» техника не зафиксирована в кадре.`
+            `Причина: нет необходимой техники (${mandatory}). За ${windowSec} сек анализа со всех подключенных камер на этапе «${stageName}» техника не зафиксирована ни на одном из ракурсов.`
           )
         }
       }
 
       // 2. Нет рекомендованной техники (WARNING)
-      for (const rec of rules.recommended) {
-        if (!observedMachinery.has(rec)) {
+      for (const rawRec of rules.recommended) {
+        const rec = toRussianMachineryName(rawRec)
+        if (!unifiedObservedMachinery.has(rec)) {
           emitViolation(
             'WARNING',
             'MISSING_RECOMMENDED',
             rec,
             `Нет рекомендованной техники: ${rec}`,
-            `Причина: нет рекомендованной техники (${rec}). За 30 секунд анализа видеопотока на этапе «${stageName}» техника не зафиксирована в кадре.`
+            `Причина: нет рекомендованной техники (${rec}). За ${windowSec} сек анализа со всех подключенных камер на этапе «${stageName}» техника не зафиксирована ни на одном из ракурсов.`
           )
         }
       }
 
       // 3. Есть лишняя техника (ERROR)
-      for (const label of observedMachinery) {
-        if (rules.uncharacteristic.some((u) => u.toLowerCase() === label.toLowerCase())) {
+      for (const rawLabel of unifiedObservedMachinery) {
+        const label = toRussianMachineryName(rawLabel)
+        if (rules.uncharacteristic.some((u) => toRussianMachineryName(u).toLowerCase() === label.toLowerCase())) {
           emitViolation(
             'ERROR',
             'UNCHARACTERISTIC_PRESENT',
@@ -3670,7 +4362,19 @@ export default function App() {
         }
       }
     },
-    [isStreamOnline, violationWindowSeconds, stages, stageOverridesVersion, activeZones, activeZoneId, camerasList, selectedCameraId, toast]
+    [
+      isStreamOnline,
+      violationWindowSeconds,
+      stages,
+      stageOverridesVersion,
+      activeZones,
+      activeZoneId,
+      camerasList,
+      selectedCameraId,
+      uploadedVideoUrl,
+      uploadedVideoName,
+      toast,
+    ]
   )
 
   const title = titles[page] ?? titles.monitoring
@@ -3711,6 +4415,7 @@ export default function App() {
               setHighlightedIncidentId(id)
               setPage('reports')
             }}
+            onStatusChange={handleIncidentStatusChange}
             toast={toast}
           />
         )
@@ -3743,6 +4448,7 @@ export default function App() {
               setHighlightedIncidentId(id)
               setPage('archive')
             }}
+            onStatusChange={handleIncidentStatusChange}
             toast={toast}
           />
         )
@@ -3846,7 +4552,7 @@ export default function App() {
             <span />
             <div>
               <strong>Система активна</strong>
-              <small>YOLO 10 классов · VLM</small>
+              <small>YOLO 10 классов · Мультикамеры</small>
             </div>
           </div>
         </div>
@@ -4458,98 +5164,56 @@ export default function App() {
         </div>
       )}
 
-      {/* Active Realtime Violation Alert Banner */}
+      {/* Active Realtime Violation Alert Banner (Compact, No photo, No section navigation buttons) */}
       {activeViolationAlert && (
         <div
           role="alert"
           style={{
             position: 'fixed',
             top: '72px',
-            right: '24px',
+            right: '20px',
             zIndex: 1500,
-            maxWidth: '460px',
+            maxWidth: '320px',
             background: activeViolationAlert.severity === 'ERROR' ? '#881337' : '#78350f',
             border: `1px solid ${activeViolationAlert.severity === 'ERROR' ? '#f43f5e' : '#f59e0b'}`,
-            boxShadow: '0 12px 32px rgba(0,0,0,0.7)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
             borderRadius: '8px',
-            padding: '14px 16px',
+            padding: '10px 12px',
             color: '#fff',
             display: 'flex',
-            gap: '12px',
+            gap: '10px',
             alignItems: 'flex-start',
             animation: 'fadeIn 0.25s ease',
           }}
         >
           <div style={{ flexShrink: 0, marginTop: '2px', color: activeViolationAlert.severity === 'ERROR' ? '#fca5a5' : '#fde047' }}>
-            <Icon name="alert" size={22} />
+            <Icon name="alert" size={18} />
           </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <strong style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px', color: activeViolationAlert.severity === 'ERROR' ? '#fecdd3' : '#fef08a' }}>
-                {activeViolationAlert.severity === 'ERROR' ? '🔴 Ошибка (ERROR)' : '⚠️ Предупреждение (WARNING)'}
-              </strong>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <strong style={{ fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.4px', color: activeViolationAlert.severity === 'ERROR' ? '#fecdd3' : '#fef08a' }}>
+                  {activeViolationAlert.severity === 'ERROR' ? '🔴 Ошибка' : '⚠️ Внимание'}
+                </strong>
+                <span style={{ fontSize: '9px', background: 'rgba(255,255,255,0.18)', padding: '1px 5px', borderRadius: '3px', color: '#fef08a', fontWeight: 600 }}>
+                  Ожидает обработки
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setActiveViolationAlert(null)}
-                style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '15px', padding: '0 4px', lineHeight: 1 }}
+                style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}
+                title="Закрыть"
               >
                 ✕
               </button>
             </div>
-            <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '4px', color: '#fff' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '2px', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {activeViolationAlert.title}
             </div>
-            <p style={{ fontSize: '11px', opacity: 0.92, margin: '0 0 8px', lineHeight: 1.45, color: '#f1f5f9' }}>
+            <p style={{ fontSize: '10.5px', opacity: 0.9, margin: 0, lineHeight: 1.35, color: '#f1f5f9' }}>
               {activeViolationAlert.desc}
             </p>
-
-            {/* Frame snapshot from video for problem alerts */}
-            {activeViolationAlert.snapshotUrl && (
-              <div
-                style={{
-                  margin: '0 0 10px',
-                  borderRadius: '6px',
-                  overflow: 'hidden',
-                  background: '#090b0e',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                }}
-              >
-                <img
-                  src={activeViolationAlert.snapshotUrl}
-                  alt="Кадр нарушения из видео"
-                  style={{ width: '100%', height: '140px', objectFit: 'contain', display: 'block' }}
-                />
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {activeViolationAlert.snapshotUrl && (
-                <button
-                  type="button"
-                  className="button"
-                  style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
-                  onClick={() => {
-                    setHighlightedIncidentId(activeViolationAlert.id)
-                    setPage('archive')
-                    setActiveViolationAlert(null)
-                  }}
-                >
-                  В фотоархив ↗
-                </button>
-              )}
-              <button
-                type="button"
-                className="button"
-                style={{ fontSize: '11px', padding: '4px 10px', height: '28px', background: 'rgba(255,255,255,0.18)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
-                onClick={() => {
-                  setHighlightedIncidentId(activeViolationAlert.id)
-                  setPage('reports')
-                  setActiveViolationAlert(null)
-                }}
-              >
-                В отчёт ↗
-              </button>
-            </div>
           </div>
         </div>
       )}

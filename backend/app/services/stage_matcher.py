@@ -238,11 +238,11 @@ class StageCatalogIndex:
 # Mapping of catalog freeform equipment to specialized 10 YOLO classes
 CATALOG_TO_YOLO_MAP: dict[str, str] = {
     "автобетоносмеситель": "concrete_mixer",
-    "автобетононасос": "concrete_mixer",
-    "бетононасос": "concrete_mixer",
+    "автобетононасос": "concrete_pump",
+    "бетононасос": "concrete_pump",
+    "растворонасос": "concrete_pump",
     "бетономешалка": "concrete_mixer",
     "машина для подачи раствора": "concrete_mixer",
-    "растворонасос": "concrete_mixer",
     "растворосмеситель": "concrete_mixer",
     "бетонолитное оборудование": "concrete_mixer",
     "самосвал": "dump_truck",
@@ -284,6 +284,7 @@ YOLO_RAW_TO_RU: dict[str, str] = {
     "roller": "каток",
     "grader": "автогрейдер",
     "backhoe_loader": "экскаватор-погрузчик",
+    "concrete_pump": "бетононасос",
 }
 
 STAGE_DOMAIN_PRIORS: list[tuple[list[str], dict[str, float]]] = [
@@ -299,6 +300,7 @@ STAGE_DOMAIN_PRIORS: list[tuple[list[str], dict[str, float]]] = [
     (["монолит", "каркас", "перекрыти", "колонн", "пилон", "лестниц"], {
         "tower_crane": 0.96,
         "concrete_mixer": 0.94,
+        "concrete_pump": 0.92,
         "truck_crane": 0.65,
         "dump_truck": 0.60,
         "loader": 0.55,
@@ -322,6 +324,7 @@ STAGE_DOMAIN_PRIORS: list[tuple[list[str], dict[str, float]]] = [
     # Foundations, base slab:
     (["фундамент", "бетонн.*подготовк", "плит.*основан"], {
         "concrete_mixer": 0.94,
+        "concrete_pump": 0.94,
         "truck_crane": 0.82,
         "tower_crane": 0.78,
         "dump_truck": 0.65,

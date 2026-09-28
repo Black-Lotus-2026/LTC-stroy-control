@@ -1,5 +1,12 @@
 export type PageKey = 'monitoring' | 'archive' | 'progress' | 'analytics' | 'reports' | 'settings'
-export type IncidentStatus = 'Требует проверки' | 'Подтверждено' | 'В работе' | 'Устранено' | 'Ложное срабатывание'
+export type IncidentStatus =
+  | 'Ожидает обработки'
+  | 'Подтверждено'
+  | 'Проблемы нет'
+  | 'Требует проверки'
+  | 'В работе'
+  | 'Устранено'
+  | 'Ложное срабатывание'
 export type Priority = 'Критический' | 'Высокий' | 'Средний' | 'Низкий'
 
 export interface Camera {
@@ -28,8 +35,10 @@ export interface Incident {
   note: string
   severity?: 'ERROR' | 'WARNING' | 'NEUTRAL'
   snapshotUrl?: string
+  albumPhotos?: { url: string; cameraName?: string; isPrimary?: boolean; capturedAt?: string }[]
   stageName?: string
   discrepancyType?: string
+  manual_override?: boolean
 }
 
 export const projects = [
@@ -39,11 +48,11 @@ export const projects = [
 export const cameras: Camera[] = []
 
 export const incidentsSeed: Incident[] = [
-  { id: 'INC-247', type: 'Техника', title: 'Отсутствует обязательная техника: Экскаватор', zone: 'A-03 · Котлован', camera: 'CAM-03', time: '14:18', age: '22 мин', priority: 'Критический', status: 'Требует проверки', assignee: 'Алексей Морозов', sla: '15 мин', confidence: 96, note: 'В течение 30 сек в рабочей зоне не зафиксировано присутствие обязательной техники (Экскаватор) на этапе «Разработка котлована».', severity: 'ERROR', discrepancyType: 'MISSING_MANDATORY', stageName: 'Разработка котлована' },
-  { id: 'INC-248', type: 'СИЗ', title: 'Рабочий без каски', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: '14:32', age: '8 мин', priority: 'Высокий', status: 'Требует проверки', assignee: 'Не назначен', sla: '22 мин', confidence: 94, grouped: 3, note: 'Три последовательные детекции одного человека. Лицо не идентифицируется.', severity: 'WARNING' },
+  { id: 'INC-247', type: 'Техника', title: 'Отсутствует обязательная техника: Экскаватор', zone: 'A-03 · Котлован', camera: 'CAM-03', time: '14:18', age: '22 мин', priority: 'Критический', status: 'Ожидает обработки', assignee: 'Алексей Морозов', sla: '15 мин', confidence: 96, note: 'В течение 30 сек в рабочей зоне не зафиксировано присутствие обязательной техники (Экскаватор) на этапе «Разработка котлована».', severity: 'ERROR', discrepancyType: 'MISSING_MANDATORY', stageName: 'Разработка котлована' },
+  { id: 'INC-248', type: 'СИЗ', title: 'Рабочий без каски', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: '14:32', age: '8 мин', priority: 'Высокий', status: 'Ожидает обработки', assignee: 'Не назначен', sla: '22 мин', confidence: 94, grouped: 3, note: 'Три последовательные детекции одного человека. Лицо не идентифицируется.', severity: 'WARNING' },
   { id: 'INC-245', type: 'Безопасность', title: 'Вход в опасную зону', zone: 'A-03 · Котлован', camera: 'CAM-03', time: '13:51', age: '49 мин', priority: 'Критический', status: 'В работе', assignee: 'Ирина Соколова', sla: 'Просрочено 19 мин', confidence: 97, grouped: 2, note: 'Человек пересёк границу активной зоны работы техники.', severity: 'ERROR' },
   { id: 'INC-241', type: 'Техника', title: 'Отсутствует рекомендованная техника: Автобетоносмеситель', zone: 'C-02 · Корпус 2', camera: 'CAM-02', time: '11:44', age: '2 ч 56 мин', priority: 'Средний', status: 'В работе', assignee: 'Алексей Морозов', sla: '45 мин', confidence: 88, note: 'В течение 30 сек не зафиксировано присутствие рекомендованной техники (Автобетоносмеситель) на этапе «Монолитные конструкции».', severity: 'WARNING', discrepancyType: 'MISSING_RECOMMENDED', stageName: 'Монолитные конструкции' },
-  { id: 'INC-226', type: 'Техника', title: 'Обнаружена нехарактерная (лишняя) техника: Асфальтоукладчик', zone: 'B-01 · Складирование', camera: 'CAM-07', time: 'Вчера, 15:02', age: '23 ч', priority: 'Критический', status: 'Требует проверки', assignee: 'Денис Волков', sla: '15 мин', confidence: 95, note: 'На этапе «Устройство фундаментной плиты» зафиксирована нехарактерная техника «Асфальтоукладчик», не предусмотренная технологической картой.', severity: 'ERROR', discrepancyType: 'UNCHARACTERISTIC_PRESENT', stageName: 'Устройство фундаментной плиты' },
+  { id: 'INC-226', type: 'Техника', title: 'Обнаружена нехарактерная (лишняя) техника: Асфальтоукладчик', zone: 'B-01 · Складирование', camera: 'CAM-07', time: 'Вчера, 15:02', age: '23 ч', priority: 'Критический', status: 'Ожидает обработки', assignee: 'Денис Волков', sla: '15 мин', confidence: 95, note: 'На этапе «Устройство фундаментной плиты» зафиксирована нехарактерная техника «Асфальтоукладчик», не предусмотренная технологической картой.', severity: 'ERROR', discrepancyType: 'UNCHARACTERISTIC_PRESENT', stageName: 'Устройство фундаментной плиты' },
   { id: 'INC-243', type: 'Камера', title: 'Камера вне сети', zone: 'B-01 · Складирование', camera: 'CAM-09', time: '12:26', age: '2 ч 14 мин', priority: 'Средний', status: 'Подтверждено', assignee: 'Денис Волков', sla: 'Просрочено 74 мин', confidence: 100, note: 'Нет кадров и телеметрии. Последний успешный heartbeat в 12:25.', severity: 'WARNING' },
   { id: 'INC-238', type: 'СИЗ', title: 'Нет сигнального жилета', zone: 'D-01 · Периметр', camera: 'CAM-05', time: '10:16', age: '4 ч 24 мин', priority: 'Средний', status: 'В работе', assignee: 'Ирина Соколова', sla: '18 мин', confidence: 91, note: 'Нарушение зафиксировано в рабочей зоне. Требуется инструктаж.', severity: 'WARNING' },
   { id: 'INC-234', type: 'Безопасность', title: 'Опасное сближение с техникой', zone: 'A-03 · Котлован', camera: 'CAM-03', time: '09:18', age: '5 ч 22 мин', priority: 'Высокий', status: 'В работе', assignee: 'Ирина Соколова', sla: '11 мин', confidence: 96, note: 'Дистанция между человеком и самосвалом менее 3 м.', severity: 'ERROR' },

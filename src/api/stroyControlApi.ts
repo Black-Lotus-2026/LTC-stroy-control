@@ -5,7 +5,7 @@
  * 1. Schedule & Gantt management (upload, demo load, inline edit, cascade delay shift)
  * 2. Video streams & Demo video upload with absolute recording start timestamp
  * 3. Stage machinery probability analytics (StageMachineryService)
- * 4. Incidents & Google Gemini Vision VLM verification alerts
+ * 4. Incidents & Multi-camera error albums
  */
 
 export interface StageItem {
@@ -84,8 +84,8 @@ export interface IncidentAlertItem {
   observed_count?: number
   frame_snapshot_url?: string | null
   snapshot_url?: string | null
-  is_vlm_verified?: boolean
-  vlm_summary?: string | null
+  album_photos?: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
+  manual_override?: boolean
   created_at?: string
 }
 
@@ -103,18 +103,17 @@ export interface IncidentCreatePayload {
   title: string
   description: string
   frame_snapshot_base64?: string | null
+  album_snapshots?: { camera_name: string; snapshot_base64: string; is_primary?: boolean }[]
 }
 
-export interface VlmVerificationResult {
+export interface IncidentAlbumData {
   incident_id: string
-  is_violation_confirmed: boolean
-  is_occluded: boolean
-  confidence: number
-  reasoning: string
-  compact_alert_text: string
-  fallback_used: boolean
-  latency_ms: number
-  status: string
+  code: string
+  title: string
+  stage_name?: string | null
+  severity: string
+  primary_photo_url?: string | null
+  photos: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
 }
 
 export interface ZoneItem {
@@ -836,9 +835,15 @@ function applyLocalOverridesToResponse(resp: StageProbabilityResponse, stageId: 
   })
 }
 
-export function getStageCustomOverrides(stageId?: string): Record<string, string> {
-  if (!stageId) return {}
-  return LOCAL_PROBABILITY_OVERRIDES[stageId] || {}
+export function getStageCustomOverrides(stageId?: string, stageName?: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  if (stageName && LOCAL_PROBABILITY_OVERRIDES[stageName]) {
+    Object.assign(result, LOCAL_PROBABILITY_OVERRIDES[stageName])
+  }
+  if (stageId && LOCAL_PROBABILITY_OVERRIDES[stageId]) {
+    Object.assign(result, LOCAL_PROBABILITY_OVERRIDES[stageId])
+  }
+  return result
 }
 
 export async function fetchStageProbabilities(stageId: string): Promise<StageProbabilityResponse> {
@@ -875,7 +880,8 @@ export async function fetchStageProbabilities(stageId: string): Promise<StagePro
 
 export async function updateStageProbabilities(
   stageId: string,
-  overrides: Record<string, string | number>
+  overrides: Record<string, string | number>,
+  stageName?: string
 ): Promise<StageProbabilityResponse> {
   const stringOverrides: Record<string, string> = {}
   for (const [k, v] of Object.entries(overrides)) {
@@ -884,6 +890,12 @@ export async function updateStageProbabilities(
   LOCAL_PROBABILITY_OVERRIDES[stageId] = {
     ...(LOCAL_PROBABILITY_OVERRIDES[stageId] || {}),
     ...stringOverrides,
+  }
+  if (stageName && stageName !== stageId) {
+    LOCAL_PROBABILITY_OVERRIDES[stageName] = {
+      ...(LOCAL_PROBABILITY_OVERRIDES[stageName] || {}),
+      ...stringOverrides,
+    }
   }
   saveLocalOverrides()
 
@@ -906,9 +918,13 @@ export async function updateStageProbabilities(
 }
 
 export async function resetStageProbabilities(
-  stageId: string
+  stageId: string,
+  stageName?: string
 ): Promise<StageProbabilityResponse> {
   delete LOCAL_PROBABILITY_OVERRIDES[stageId]
+  if (stageName) {
+    delete LOCAL_PROBABILITY_OVERRIDES[stageName]
+  }
   saveLocalOverrides()
 
   try {
@@ -927,7 +943,7 @@ export async function resetStageProbabilities(
 }
 
 // ----------------------------------------------------------------------------
-// Incidents & VLM Verification API
+// Incidents & Multi-camera Albums API
 // ----------------------------------------------------------------------------
 
 export async function fetchIncidentConfig(): Promise<{ violation_evaluation_window_seconds: number }> {
@@ -962,24 +978,115 @@ export async function createIncident(data: IncidentCreatePayload): Promise<Incid
   return await res.json()
 }
 
+export const MACHINERY_CODE_TO_RU: Record<string, string> = {
+  // Lowercase & snake_case
+  dump_truck: 'Самосвал',
+  dumptruck: 'Самосвал',
+  truck: 'Самосвал',
+  excavator: 'Экскаватор',
+  digger: 'Экскаватор',
+  tower_crane: 'Башенный кран',
+  towercrane: 'Башенный кран',
+  truck_crane: 'Автокран',
+  crane: 'Автокран',
+  concrete_mixer: 'Автобетоносмеситель',
+  mixer: 'Автобетоносмеситель',
+  concrete_pump: 'Бетононасос',
+  pump: 'Бетононасос',
+  bulldozer: 'Бульдозер',
+  dozer: 'Бульдозер',
+  wheel_loader: 'Погрузчик',
+  loader: 'Погрузчик',
+  roller: 'Каток',
+  aerial_lift: 'Автогидроподъемник',
+  grader: 'Автогрейдер',
+  backhoe_loader: 'Экскаватор-погрузчик',
+  asphalt_paver: 'Асфальтоукладчик',
+
+  // Uppercase enum constants (MACHINERY_*)
+  MACHINERY_DUMP_TRUCK: 'Самосвал',
+  MACHINERY_EXCAVATOR: 'Экскаватор',
+  MACHINERY_TOWER_CRANE: 'Башенный кран',
+  MACHINERY_TRUCK_CRANE: 'Автокран',
+  MACHINERY_CONCRETE_MIXER: 'Автобетоносмеситель',
+  MACHINERY_CONCRETE_PUMP: 'Бетононасос',
+  MACHINERY_BULLDOZER: 'Бульдозер',
+  MACHINERY_LOADER: 'Погрузчик',
+  MACHINERY_WHEEL_LOADER: 'Погрузчик',
+  MACHINERY_ROLLER: 'Каток',
+  MACHINERY_AERIAL_LIFT: 'Автогидроподъемник',
+  MACHINERY_GRADER: 'Автогрейдер',
+  MACHINERY_BACKHOE_LOADER: 'Экскаватор-погрузчик',
+  MACHINERY_ASPHALT_PAVER: 'Асфальтоукладчик',
+}
+
+export function toRussianMachineryName(raw?: string | null): string {
+  if (!raw) return ''
+  const trimmed = raw.trim()
+  if (MACHINERY_CODE_TO_RU[trimmed]) {
+    return MACHINERY_CODE_TO_RU[trimmed]
+  }
+  const lower = trimmed.toLowerCase()
+  if (MACHINERY_CODE_TO_RU[lower]) {
+    return MACHINERY_CODE_TO_RU[lower]
+  }
+  const stripped = lower.replace(/^machinery_/, '')
+  if (MACHINERY_CODE_TO_RU[stripped]) {
+    return MACHINERY_CODE_TO_RU[stripped]
+  }
+  return trimmed
+}
+
+export function cleanViolationText(text?: string | null): string {
+  if (!text) return ''
+  let cleaned = text
+  for (const [code, ru] of Object.entries(MACHINERY_CODE_TO_RU)) {
+    if (cleaned.includes(code)) {
+      cleaned = cleaned.split(code).join(ru)
+    }
+  }
+  return cleaned
+}
+
+function normalizeIncidentItem(item: IncidentAlertItem): IncidentAlertItem {
+  return {
+    ...item,
+    title: cleanViolationText(item.title),
+    description: cleanViolationText(item.description),
+    machinery_type: item.machinery_type ? toRussianMachineryName(item.machinery_type) : item.machinery_type,
+  }
+}
+
 export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
   try {
     const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
     const res = await fetch(url)
-    if (res.ok) return await res.json()
+    if (res.ok) {
+      const data: IncidentAlertItem[] = await res.json()
+      return data.map(normalizeIncidentItem)
+    }
   } catch {
     // Return mock incidents
   }
-  return getFallbackIncidents()
+  return getFallbackIncidents().map(normalizeIncidentItem)
 }
 
-export async function verifyIncidentVlm(incidentId: string): Promise<VlmVerificationResult> {
-  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/verify-vlm`, {
-    method: 'POST',
+export async function fetchIncidentAlbum(incidentId: string): Promise<IncidentAlbumData> {
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`)
+  if (!res.ok) throw new Error('Ошибка получения альбома инцидента')
+  return await res.json()
+}
+
+export async function updateIncidentStatus(
+  incidentId: string,
+  status: string
+): Promise<IncidentAlertItem> {
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
   })
-  if (!res.ok) {
-    throw new Error(`Сервис VLM недоступен: HTTP ${res.status}`)
-  }
+  if (!res.ok) throw new Error('Ошибка обновления статуса инцидента')
   return await res.json()
 }
 
@@ -998,7 +1105,7 @@ function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
     stage_name: isExcavation ? 'Выемка грунта котлована под фундамент' : 'Строительный этап СМР',
     matched_catalog_stage: isExcavation ? 'Выемка грунта котлована' : 'Общестроительные работы',
     similarity_confidence: 0.98,
-    top_machinery: isExcavation ? ['Экскаватор', 'Самосвал', 'Бульдозер'] : ['Башенный кран', 'Автобетоносмеситель'],
+    top_machinery: isExcavation ? ['Экскаватор', 'Самосвал', 'Бульдозер'] : ['Башенный кран', 'Бетононасос', 'Автобетоносмеситель'],
     probabilities: [
       {
         machinery_code: 'MACHINERY_EXCAVATOR',
@@ -1064,6 +1171,13 @@ function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
         requirement_level: isExcavation ? 'Не допускается' : 'Обязательная',
       },
       {
+        machinery_code: 'MACHINERY_CONCRETE_PUMP',
+        machinery_name_ru: 'Бетононасос',
+        probability: isExcavation ? 0.05 : 0.92,
+        classification: isExcavation ? 'UNCHARACTERISTIC' : 'MANDATORY',
+        requirement_level: isExcavation ? 'Не допускается' : 'Обязательная',
+      },
+      {
         machinery_code: 'MACHINERY_GRADER',
         machinery_name_ru: 'Автогрейдер',
         probability: 0.06,
@@ -1086,8 +1200,11 @@ function getFallbackIncidents(): IncidentAlertItem[] {
       machinery_type: 'Экскаватор',
       stage_probability: 0.96,
       observed_count: 0,
-      is_vlm_verified: true,
-      vlm_summary: 'На этапе выемки грунта отсутствует обязательный экскаватор. Камера подтверждает отсутствие техники на площадке.',
+      snapshot_url: '/media/snapshots/inc_042.jpg',
+      album_photos: [
+        { url: '/media/snapshots/inc_042.jpg', camera_name: 'CAM-03 · Котлован (основной ракурс)', is_primary: true },
+        { url: '/media/snapshots/inc_042_cam2.jpg', camera_name: 'CAM-01 · Въезд на стройплощадку', is_primary: false },
+      ],
       created_at: new Date().toISOString(),
     },
     {
@@ -1100,8 +1217,7 @@ function getFallbackIncidents(): IncidentAlertItem[] {
       machinery_type: 'Погрузчик',
       stage_probability: 0.72,
       observed_count: 0,
-      is_vlm_verified: false,
-      vlm_summary: 'Рекомендованный погрузчик не зафиксирован на кадрах рабочей смены.',
+      album_photos: [],
       created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
     },
   ]

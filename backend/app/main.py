@@ -6,14 +6,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
@@ -27,7 +28,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(logging.DEBUG if settings.debug else logging.INFO)
     logger.info("Запуск %s (окружение: %s)", settings.app_name, settings.environment)
+
     yield
+
     logger.info("Остановка %s", settings.app_name)
 
 
@@ -56,12 +59,8 @@ app.add_middleware(
 register_exception_handlers(app)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-# Кадры и доказательства отдаются как статика: на прототипе этого достаточно.
-# При переезде на S3/MinIO маршрут просто исчезнет — публичный URL формирует
-# слой хранилища, а не это приложение.
+# Кадры и доказательства отдаются как статика
 if settings.storage_backend == "local":
-    # Обращение к get_storage() здесь не случайно: конструктор LocalStorage
-    # создаёт каталог, а StaticFiles при монтировании требует, чтобы он уже был.
     get_storage()
     app.mount(
         "/media",

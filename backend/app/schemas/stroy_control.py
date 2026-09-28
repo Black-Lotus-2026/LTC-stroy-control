@@ -4,7 +4,7 @@ Defines schemas for:
 - Schedule upload, Gantt tasks, cascade delay shift
 - Video upload with absolute recording start timestamp and playback synchronization
 - Stage machinery probability profiles from StageMachineryService
-- Incident reports, multi-tier discrepancy rule evaluations, and Gemini VLM alerts
+- Incident reports, multi-tier discrepancy rule evaluations, and multi-camera error albums
 """
 
 from __future__ import annotations
@@ -152,8 +152,15 @@ class StageMachineryOverrideRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Incidents & VLM Verification Models
+# Incidents & Multi-Camera Photo Archive Models
 # ---------------------------------------------------------------------------
+
+
+class IncidentPhotoItem(BaseModel):
+    url: str
+    camera_name: str | None = None
+    is_primary: bool = False
+    captured_at: str | None = None
 
 
 class IncidentResponse(BaseModel):
@@ -172,12 +179,27 @@ class IncidentResponse(BaseModel):
     discrepancy_type: str
     machinery_type: str | None = None
     stage_probability: float | None = None
+    status: str = "pending"
     observed_count: int = 0
     frame_snapshot_url: str | None = None
     snapshot_url: str | None = None
-    is_vlm_verified: bool = False
-    vlm_summary: str | None = None
+    album_photos: list[IncidentPhotoItem] = Field(default_factory=list)
+    manual_override: bool = False
     created_at: datetime
+
+
+class IncidentAlbumResponse(BaseModel):
+    incident_id: uuid.UUID
+    code: str
+    title: str
+    stage_name: str | None = None
+    severity: str = "ERROR"
+    primary_photo_url: str | None = None
+    photos: list[IncidentPhotoItem] = Field(default_factory=list)
+
+
+class IncidentStatusUpdateRequest(BaseModel):
+    status: str = Field(..., description="Статус инцидента: pending / confirmed / false_positive или русские эквиваленты")
 
 
 class IncidentCreateRequest(BaseModel):
@@ -194,6 +216,7 @@ class IncidentCreateRequest(BaseModel):
     title: str
     description: str
     frame_snapshot_base64: str | None = None
+    album_snapshots: list[dict[str, Any]] | None = None
 
 
 class IncidentConfigResponse(BaseModel):
@@ -202,18 +225,6 @@ class IncidentConfigResponse(BaseModel):
 
 class IncidentConfigUpdate(BaseModel):
     violation_evaluation_window_seconds: int = Field(..., ge=1, le=3600)
-
-
-class VlmVerificationResponse(BaseModel):
-    incident_id: uuid.UUID
-    is_violation_confirmed: bool
-    is_occluded: bool
-    confidence: float
-    reasoning: str
-    compact_alert_text: str
-    fallback_used: bool = False
-    latency_ms: int = 0
-    status: str = "completed"
 
 
 # ---------------------------------------------------------------------------

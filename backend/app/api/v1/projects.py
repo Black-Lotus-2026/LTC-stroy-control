@@ -441,6 +441,12 @@ def update_camera(
     db: DbSession,
 ) -> CameraItem:
     """Обновить настройки камеры (название, поток, зону, статус)."""
+    target_pid = None
+    try:
+        target_pid = uuid.UUID(str(project_id))
+    except (ValueError, TypeError):
+        pass
+
     target_cid = None
     try:
         target_cid = uuid.UUID(str(camera_id))
@@ -449,9 +455,12 @@ def update_camera(
 
     camera = None
     if target_cid:
-        camera = db.scalars(select(Camera).where(Camera.id == target_cid)).first()
-    if not camera:
-        camera = db.scalars(select(Camera)).first()
+        if target_pid:
+            camera = db.scalars(
+                select(Camera).where(Camera.id == target_cid, Camera.project_id == target_pid)
+            ).first()
+        else:
+            camera = db.scalars(select(Camera).where(Camera.id == target_cid)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
@@ -489,15 +498,30 @@ def delete_camera(
     db: DbSession,
 ) -> None:
     """Удалить камеру с объекта строительства."""
+    target_pid = None
+    try:
+        target_pid = uuid.UUID(str(project_id))
+    except (ValueError, TypeError):
+        pass
+
     target_cid = None
     try:
         target_cid = uuid.UUID(str(camera_id))
     except (ValueError, TypeError):
         pass
 
+    camera = None
     if target_cid:
-        camera = db.scalars(select(Camera).where(Camera.id == target_cid)).first()
-        if camera:
-            db.delete(camera)
-            db.commit()
+        if target_pid:
+            camera = db.scalars(
+                select(Camera).where(Camera.id == target_cid, Camera.project_id == target_pid)
+            ).first()
+        else:
+            camera = db.scalars(select(Camera).where(Camera.id == target_cid)).first()
+
+    if not camera:
+        raise HTTPException(status_code=404, detail="Камера не найдена")
+
+    db.delete(camera)
+    db.commit()
     return None

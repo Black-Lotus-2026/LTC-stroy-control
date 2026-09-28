@@ -36,6 +36,7 @@ MACHINERY_CLASSES: dict[int, tuple[str, str, str]] = {
     7: ("roller", "Каток", "MACHINERY_ROLLER"),
     8: ("grader", "Автогрейдер", "MACHINERY_GRADER"),
     9: ("backhoe_loader", "Экскаватор-погрузчик", "MACHINERY_BACKHOE_LOADER"),
+    10: ("concrete_pump", "Бетононасос", "MACHINERY_CONCRETE_PUMP"),
 }
 
 CLASS_BY_RAW_LABEL = {
@@ -65,6 +66,13 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
     "concrete_truck": "concrete_mixer",
     "cement_mixer": "concrete_mixer",
     "mixer": "concrete_mixer",
+    "concrete_pump": "concrete_pump",
+    "pump": "concrete_pump",
+    "pump_truck": "concrete_pump",
+    "concrete_pump_truck": "concrete_pump",
+    "pumper": "concrete_pump",
+    "autobetononasos": "concrete_pump",
+    "betononasos": "concrete_pump",
     "loader": "loader",
     "wheel_loader": "loader",
     "bucket_loader": "loader",

@@ -3,34 +3,120 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api.deps import DbSession
 from app.core.config import settings
 from app.models.enums import (
     IncidentCategory,
+    IncidentEventType,
     IncidentPriority,
     IncidentStatus,
     IncidentType,
 )
-from app.models.incident import Incident, VlmVerification
+from app.models.incident import Incident, IncidentEvent
 from app.models.project import Project
 from app.schemas.stroy_control import (
+    IncidentAlbumResponse,
     IncidentConfigResponse,
     IncidentConfigUpdate,
     IncidentCreateRequest,
+    IncidentPhotoItem,
     IncidentResponse,
     IncidentSeverity,
-    VlmVerificationResponse,
+    IncidentStatusUpdateRequest,
 )
-from app.services.vlm_verifier import GeminiVlmVerifier
 from app.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/incidents", tags=["Инциденты и нарушения"])
 
+
+def _normalize_status(val: str | IncidentStatus | None) -> IncidentStatus:
+    if isinstance(val, IncidentStatus):
+        return val
+    raw = (val or "").strip().lower()
+    if raw in ("confirmed", "подтверждено", "подтвержден"):
+        return IncidentStatus.CONFIRMED
+    if raw in ("false_positive", "проблемы нет", "ложное", "ложное срабатывание", "no_problem"):
+        return IncidentStatus.FALSE_POSITIVE
+    if raw in ("in_progress", "в работе"):
+        return IncidentStatus.IN_PROGRESS
+    if raw in ("resolved", "устранено"):
+        return IncidentStatus.RESOLVED
+    return IncidentStatus.PENDING
+
+
+def _incident_to_response(inc: Incident) -> IncidentResponse:
+    exp = inc.explanation if isinstance(inc.explanation, dict) else {}
+    snapshot_url = exp.get("snapshot_url")
+    zone_name = exp.get("zone_name") or (inc.zone.name if inc.zone else None)
+    camera_name = exp.get("camera_name") or (inc.camera.name if inc.camera else None)
+    stage_name = inc.schedule_task.name if inc.schedule_task else exp.get("stage_name")
+
+    raw_album = exp.get("album_photos", [])
+    album_photos: list[IncidentPhotoItem] = []
+    if isinstance(raw_album, list) and raw_album:
+        for idx, item in enumerate(raw_album):
+            if isinstance(item, dict):
+                album_photos.append(
+                    IncidentPhotoItem(
+                        url=item.get("url", ""),
+                        camera_name=item.get("camera_name") or f"Камера {idx + 1}",
+                        is_primary=bool(item.get("is_primary", idx == 0)),
+                        captured_at=item.get("captured_at"),
+                    )
+                )
+    elif snapshot_url:
+        album_photos.append(
+            IncidentPhotoItem(
+                url=snapshot_url,
+                camera_name=camera_name or "Основная камера",
+                is_primary=True,
+                captured_at=inc.created_at.isoformat() if inc.created_at else None,
+            )
+        )
+
+    # First photo is primary
+    if album_photos and not snapshot_url:
+        snapshot_url = album_photos[0].url
+
+    sev = (
+        IncidentSeverity.ERROR
+        if (inc.priority and inc.priority.value == "critical") or exp.get("severity") == "error"
+        else IncidentSeverity.WARNING
+    )
+
+    status_str = inc.status.value if hasattr(inc.status, "value") else str(inc.status)
+
+    return IncidentResponse(
+        id=inc.id,
+        code=inc.code,
+        project_id=inc.project_id,
+        stage_id=inc.schedule_task_id,
+        stage_name=stage_name,
+        zone_name=zone_name,
+        camera_name=camera_name,
+        title=inc.title,
+        description=inc.description or exp.get("description"),
+        severity=sev,
+        discrepancy_type=inc.discrepancy_type or "MISSING_MANDATORY",
+        machinery_type=inc.machinery_type or "Экскаватор",
+        stage_probability=inc.stage_probability or 0.85,
+        status=status_str,
+        observed_count=inc.observation_count,
+        frame_snapshot_url=snapshot_url,
+        snapshot_url=snapshot_url,
+        album_photos=album_photos,
+        manual_override=bool(exp.get("is_manual_override", False)),
+        created_at=inc.created_at,
+    )
+
+
+# --- Endpoints ---
 
 @router.get("/config", response_model=IncidentConfigResponse)
 def get_incident_config() -> IncidentConfigResponse:
@@ -62,7 +148,6 @@ def get_incidents(
 
     incidents = db.scalars(query).all()
 
-    # If no incidents recorded in DB yet, generate initial demonstration violations
     if not incidents:
         return [
             IncidentResponse(
@@ -79,11 +164,22 @@ def get_incidents(
                 discrepancy_type="MISSING_MANDATORY",
                 machinery_type="Экскаватор",
                 stage_probability=0.96,
+                status="pending",
                 observed_count=0,
                 frame_snapshot_url="/media/snapshots/inc_042.jpg",
                 snapshot_url="/media/snapshots/inc_042.jpg",
-                is_vlm_verified=True,
-                vlm_summary="На этапе выемки грунта отсутствует обязательный экскаватор. Камера подтверждает отсутствие спецтехники на рабочей площадке.",
+                album_photos=[
+                    IncidentPhotoItem(
+                        url="/media/snapshots/inc_042.jpg",
+                        camera_name="CAM-03 · Котлован (основной ракурс)",
+                        is_primary=True,
+                    ),
+                    IncidentPhotoItem(
+                        url="/media/snapshots/inc_042_cam2.jpg",
+                        camera_name="CAM-01 · Въезд на стройплощадку",
+                        is_primary=False,
+                    ),
+                ],
                 created_at=datetime.now(),
             ),
             IncidentResponse(
@@ -100,53 +196,16 @@ def get_incidents(
                 discrepancy_type="MISSING_RECOMMENDED",
                 machinery_type="Погрузчик",
                 stage_probability=0.72,
+                status="pending",
                 observed_count=0,
                 frame_snapshot_url=None,
                 snapshot_url=None,
-                is_vlm_verified=False,
-                vlm_summary="Рекомендованный погрузчик не зафиксирован на кадрах рабочей смены.",
+                album_photos=[],
                 created_at=datetime.now(),
             ),
         ]
 
-    results: list[IncidentResponse] = []
-    for inc in incidents:
-        exp = inc.explanation if isinstance(inc.explanation, dict) else {}
-        snapshot_url = exp.get("snapshot_url")
-        zone_name = exp.get("zone_name") or (inc.zone.name if inc.zone else None)
-        camera_name = exp.get("camera_name") or (inc.camera.name if inc.camera else None)
-        stage_name = inc.schedule_task.name if inc.schedule_task else exp.get("stage_name")
-
-        sev = (
-            IncidentSeverity.ERROR
-            if (inc.priority and inc.priority.value == "critical") or exp.get("severity") == "error"
-            else IncidentSeverity.WARNING
-        )
-
-        results.append(
-            IncidentResponse(
-                id=inc.id,
-                code=inc.code,
-                project_id=inc.project_id,
-                stage_id=inc.schedule_task_id,
-                stage_name=stage_name,
-                zone_name=zone_name,
-                camera_name=camera_name,
-                title=inc.title,
-                description=inc.description or exp.get("description"),
-                severity=sev,
-                discrepancy_type=inc.discrepancy_type or "MISSING_MANDATORY",
-                machinery_type=inc.machinery_type or "Экскаватор",
-                stage_probability=inc.stage_probability or 0.85,
-                observed_count=inc.observation_count,
-                frame_snapshot_url=snapshot_url,
-                snapshot_url=snapshot_url,
-                is_vlm_verified=inc.is_vlm_verified,
-                vlm_summary=inc.vlm_summary,
-                created_at=inc.created_at,
-            )
-        )
-    return results
+    return [_incident_to_response(inc) for inc in incidents]
 
 
 @router.post("", response_model=IncidentResponse, status_code=201)
@@ -154,23 +213,64 @@ def create_incident(
     req: IncidentCreateRequest,
     db: DbSession,
 ) -> IncidentResponse:
-    """Зарегистрировать нарушение с фиксацией фотоснимка участка и описанием."""
+    """Зарегистрировать нарушение с фиксацией фотоснимков со всех подключенных камер (альбом ошибки)."""
     code = f"INC-{uuid.uuid4().hex[:4].upper()}"
     now = datetime.now(UTC)
+    storage = get_storage()
 
-    snapshot_url: str | None = None
-    if req.frame_snapshot_base64:
+    saved_album_photos: list[dict[str, Any]] = []
+    primary_snapshot_url: str | None = None
+
+    # 1. Process multi-camera album snapshots if supplied
+    if req.album_snapshots and isinstance(req.album_snapshots, list):
+        for idx, item in enumerate(req.album_snapshots):
+            raw_b64 = item.get("snapshot_base64") or item.get("frame_snapshot_base64")
+            cam_name = item.get("camera_name") or f"Камера {idx + 1}"
+            is_prim = bool(item.get("is_primary", idx == 0))
+
+            if raw_b64:
+                try:
+                    if "," in raw_b64:
+                        raw_b64 = raw_b64.split(",", 1)[1]
+                    img_bytes = base64.b64decode(raw_b64)
+                    clean_cam = "".join(c for c in cam_name if c.isalnum() or c in "-_")
+                    storage_key = f"snapshots/albums/{code.lower()}/cam_{idx}_{clean_cam}.jpg"
+                    storage.save(storage_key, img_bytes)
+                    pub_url = storage.public_url(storage_key)
+
+                    saved_album_photos.append(
+                        {
+                            "url": pub_url,
+                            "camera_name": cam_name,
+                            "is_primary": is_prim,
+                            "captured_at": now.isoformat(),
+                        }
+                    )
+                    if is_prim or primary_snapshot_url is None:
+                        primary_snapshot_url = pub_url
+                except Exception as e:
+                    logger.warning("Failed to save album camera snapshot: %s", e)
+
+    # 2. Process single frame snapshot if no multi-camera snapshots given
+    if not saved_album_photos and req.frame_snapshot_base64:
         try:
             raw_b64 = req.frame_snapshot_base64
             if "," in raw_b64:
                 raw_b64 = raw_b64.split(",", 1)[1]
             img_bytes = base64.b64decode(raw_b64)
-            storage = get_storage()
             storage_key = f"snapshots/{code.lower()}.jpg"
             storage.save(storage_key, img_bytes)
-            snapshot_url = storage.public_url(storage_key)
+            primary_snapshot_url = storage.public_url(storage_key)
+            saved_album_photos.append(
+                {
+                    "url": primary_snapshot_url,
+                    "camera_name": req.camera_name or "Основная камера",
+                    "is_primary": True,
+                    "captured_at": now.isoformat(),
+                }
+            )
         except Exception as e:
-            logger.warning("Failed to save incident snapshot: %s", e)
+            logger.warning("Failed to save incident primary snapshot: %s", e)
 
     priority = (
         IncidentPriority.CRITICAL
@@ -193,10 +293,7 @@ def create_incident(
         if proj:
             target_project_id = proj.id
         else:
-            proj = Project(
-                code="PRJ-DEFAULT",
-                name="Объект строительства",
-            )
+            proj = Project(code="PRJ-DEFAULT", name="Объект строительства")
             db.add(proj)
             db.flush()
             target_project_id = proj.id
@@ -219,7 +316,8 @@ def create_incident(
         first_seen_at=now,
         last_seen_at=now,
         explanation={
-            "snapshot_url": snapshot_url,
+            "snapshot_url": primary_snapshot_url,
+            "album_photos": saved_album_photos,
             "zone_name": req.zone_name,
             "camera_name": req.camera_name,
             "stage_name": req.stage_name,
@@ -231,94 +329,59 @@ def create_incident(
     db.commit()
     db.refresh(incident)
 
-    return IncidentResponse(
-        id=incident.id,
-        code=incident.code,
-        project_id=incident.project_id,
-        stage_id=incident.schedule_task_id,
-        stage_name=req.stage_name,
-        zone_name=req.zone_name,
-        camera_name=req.camera_name,
-        title=incident.title,
-        description=incident.description,
-        severity=req.severity,
-        discrepancy_type=req.discrepancy_type,
-        machinery_type=incident.machinery_type or req.machinery_type,
-        stage_probability=incident.stage_probability or req.stage_probability,
-        observed_count=incident.observation_count,
-        frame_snapshot_url=snapshot_url,
-        snapshot_url=snapshot_url,
-        is_vlm_verified=False,
-        vlm_summary=None,
-        created_at=incident.created_at,
-    )
+    return _incident_to_response(incident)
 
 
-@router.post("/{incident_id}/verify-vlm", response_model=VlmVerificationResponse)
-async def verify_incident_vlm(
+@router.get("/{incident_id}/album", response_model=IncidentAlbumResponse)
+def get_incident_album(
     incident_id: uuid.UUID,
     db: DbSession,
-) -> VlmVerificationResponse:
-    """Выполнить повторную или ручную верификацию инцидента через Google Gemini Vision."""
+) -> IncidentAlbumResponse:
+    """Получить альбом фотографий со всех камер для конкретной ошибки/инцидента."""
     incident = db.get(Incident, incident_id)
-    stage_name = (
-        incident.schedule_task.name
-        if incident and incident.schedule_task
-        else "Выемка грунта котлована"
-    )
-    discrepancy = (
-        incident.discrepancy_type
-        if incident and incident.discrepancy_type
-        else "MISSING_MANDATORY"
-    )
-    machinery = (
-        incident.machinery_type if incident and incident.machinery_type else "Экскаватор"
-    )
-    prob = (
-        incident.stage_probability
-        if incident and incident.stage_probability is not None
-        else 0.95
+    if not incident:
+        raise HTTPException(status_code=404, detail="Инцидент не найден")
+
+    resp = _incident_to_response(incident)
+    return IncidentAlbumResponse(
+        incident_id=resp.id,
+        code=resp.code,
+        title=resp.title or "Ошибка СМР",
+        stage_name=resp.stage_name,
+        severity=resp.severity.value if hasattr(resp.severity, "value") else str(resp.severity),
+        primary_photo_url=resp.snapshot_url,
+        photos=resp.album_photos,
     )
 
-    # 1x1 dummy jpeg bytes if no actual frame is loaded
-    dummy_jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
 
-    verifier = GeminiVlmVerifier()
-    outcome = await verifier.verify_incident(
-        image_bytes=dummy_jpeg,
-        stage_name=stage_name,
-        discrepancy_type=discrepancy,
-        target_machinery=machinery,
-        stage_probability=prob,
-        detected_summary="Спецтехника не обнаружена на рабочей захватке",
+@router.patch("/{incident_id}/status", response_model=IncidentResponse)
+def update_incident_status(
+    incident_id: uuid.UUID,
+    data: IncidentStatusUpdateRequest,
+    db: DbSession,
+) -> IncidentResponse:
+    """Вручную изменить статус инцидента."""
+    incident = db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Инцидент не найден")
+
+    old_status = incident.status
+    new_status = _normalize_status(data.status)
+
+    incident.status = new_status
+    exp = dict(incident.explanation or {})
+    exp["is_manual_override"] = True
+    incident.explanation = exp
+
+    event = IncidentEvent(
+        incident_id=incident.id,
+        event_type=IncidentEventType.STATUS_CHANGED,
+        old_status=old_status,
+        new_status=new_status,
+        comment=f"Ручная смена статуса: {old_status} -> {new_status}",
     )
+    db.add(event)
+    db.commit()
+    db.refresh(incident)
 
-    if incident:
-        incident.is_vlm_verified = not outcome.fallback_used
-        incident.vlm_summary = outcome.compact_alert_text
-        record = VlmVerification(
-            incident_id=incident.id,
-            frame_id=None,
-            prompt_sent=f"Verification for {discrepancy} on {stage_name}",
-            is_violation_confirmed=outcome.is_violation_confirmed,
-            is_occluded=outcome.is_occluded,
-            confidence=outcome.confidence,
-            reasoning=outcome.reasoning,
-            compact_alert_text=outcome.compact_alert_text,
-            latency_ms=outcome.latency_ms,
-            status=outcome.status.upper(),
-        )
-        db.add(record)
-        db.commit()
-
-    return VlmVerificationResponse(
-        incident_id=incident_id,
-        is_violation_confirmed=outcome.is_violation_confirmed,
-        is_occluded=outcome.is_occluded,
-        confidence=outcome.confidence,
-        reasoning=outcome.reasoning,
-        compact_alert_text=outcome.compact_alert_text,
-        fallback_used=outcome.fallback_used,
-        latency_ms=outcome.latency_ms,
-        status=outcome.status,
-    )
+    return _incident_to_response(incident)

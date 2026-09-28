@@ -89,10 +89,6 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     discrepancy_type: Mapped[str | None] = mapped_column(String(64), default=None)
     machinery_type: Mapped[str | None] = mapped_column(String(64), default=None)
     stage_probability: Mapped[float | None] = mapped_column(Float, default=None)
-    is_vlm_verified: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
-    vlm_summary: Mapped[str | None] = mapped_column(String(512), default=None)
 
     status: Mapped[IncidentStatus] = mapped_column(
         enum_column(IncidentStatus), default=IncidentStatus.PENDING, index=True
@@ -220,32 +216,3 @@ class IncidentEvidence(UUIDPrimaryKeyMixin, Base):
 
     incident: Mapped[Incident] = relationship(back_populates="evidence")
     frame: Mapped[Frame] = relationship()
-
-
-class VlmVerification(UUIDPrimaryKeyMixin, Base):
-    """Результат вторичной проверки инцидента через Google Gemini Vision."""
-
-    __tablename__ = "vlm_verifications"
-
-    incident_id: Mapped[uuid.UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("incidents.id", ondelete="CASCADE"), index=True
-    )
-    frame_id: Mapped[uuid.UUID | None] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("frames.id", ondelete="SET NULL"), default=None
-    )
-
-    prompt_sent: Mapped[str] = mapped_column(Text, default="")
-    is_violation_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_occluded: Mapped[bool] = mapped_column(Boolean, default=False)
-    confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    reasoning: Mapped[str] = mapped_column(Text, default="")
-    compact_alert_text: Mapped[str] = mapped_column(String(512), default="")
-    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(
-        String(32), default="COMPLETED", server_default="COMPLETED"
-    )
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-    incident: Mapped[Incident] = relationship()
-    frame: Mapped[Frame | None] = relationship()
