@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession
-from app.models.enums import CameraStatus, ZoneRiskLevel
+from app.api.deps import DbSession, OptionalUser
+from app.models.enums import CameraStatus, UserRole, ZoneRiskLevel
 from app.models.project import Camera, Project, Zone
 from app.models.schedule import ScheduleTask
 from app.schemas.stroy_control import (
@@ -28,16 +28,21 @@ router = APIRouter(prefix="/projects", tags=["Объекты и стройпло
 
 
 @router.get("", response_model=list[ProjectItem])
-def list_projects(db: DbSession) -> list[ProjectItem]:
-    """Получить список всех объектов строительства с их площадками и камерами."""
-    projects = (
-        db.scalars(
-            select(Project)
-            .options(selectinload(Project.zones), selectinload(Project.cameras))
-            .order_by(Project.created_at.asc())
-        )
-        .all()
+def list_projects(db: DbSession, current_user: OptionalUser = None) -> list[ProjectItem]:
+    """Получить список объектов строительства с разделением по рабочим областям пользователей."""
+    query = (
+        select(Project)
+        .options(selectinload(Project.zones), selectinload(Project.cameras))
+        .order_by(Project.created_at.asc())
     )
+
+    if current_user and current_user.role != UserRole.ADMIN:
+        query = query.where(
+            (Project.owner_username == current_user.username) |
+            (Project.owner_username.is_(None))
+        )
+
+    projects = db.scalars(query).all()
 
     result: list[ProjectItem] = []
     for p in projects:
@@ -57,6 +62,7 @@ def list_projects(db: DbSession) -> list[ProjectItem]:
                 address=p.address,
                 object_kind=p.object_kind,
                 status=p.status,
+                owner_username=getattr(p, "owner_username", None),
                 zones=[
                     ZoneItem(
                         id=z.id,
@@ -87,8 +93,8 @@ def list_projects(db: DbSession) -> list[ProjectItem]:
 
 
 @router.post("", response_model=ProjectItem, status_code=status.HTTP_201_CREATED)
-def create_project(data: ProjectCreate, db: DbSession) -> ProjectItem:
-    """Создать новый объект строительства."""
+def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUser = None) -> ProjectItem:
+    """Создать новый объект строительства с привязкой к текущему пользователю."""
     code = data.code.strip() if data.code and data.code.strip() else f"PRJ-{uuid.uuid4().hex[:6].upper()}"
 
     # Check unique code
@@ -96,11 +102,13 @@ def create_project(data: ProjectCreate, db: DbSession) -> ProjectItem:
     if existing:
         code = f"PRJ-{uuid.uuid4().hex[:6].upper()}"
 
+    owner = data.owner_username or (current_user.username if current_user else None)
     project = Project(
         code=code,
         name=data.name.strip(),
         address=data.address.strip() if data.address else None,
         object_kind=data.object_kind.strip() if data.object_kind else "Жильё",
+        owner_username=owner,
     )
     db.add(project)
     db.commit()
@@ -113,6 +121,7 @@ def create_project(data: ProjectCreate, db: DbSession) -> ProjectItem:
         address=project.address,
         object_kind=project.object_kind,
         status=project.status,
+        owner_username=getattr(project, "owner_username", None),
         zones=[],
         cameras=[],
         stages_count=0,
@@ -149,6 +158,7 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
         address=project.address,
         object_kind=project.object_kind,
         status=project.status,
+        owner_username=getattr(project, "owner_username", None),
         zones=[
             ZoneItem(
                 id=z.id,

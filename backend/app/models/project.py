@@ -46,6 +46,7 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     object_kind: Mapped[str | None] = mapped_column(String(64), default=None)
 
     status: Mapped[str] = mapped_column(String(32), default="active")
+    owner_username: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
 
     zones: Mapped[list[Zone]] = relationship(
         back_populates="project", cascade="all, delete-orphan"

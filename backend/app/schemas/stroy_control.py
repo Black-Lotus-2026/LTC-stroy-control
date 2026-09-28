@@ -312,6 +312,7 @@ class ProjectCreate(BaseModel):
     code: str | None = Field(None, description="Уникальный код объекта")
     address: str | None = Field(None, description="Адрес объекта")
     object_kind: str | None = Field("Жильё", description="Категория/тип объекта")
+    owner_username: str | None = Field(None, description="Владелец рабочей области")
 
 
 class ProjectUpdate(BaseModel):
@@ -334,6 +335,7 @@ class ProjectItem(BaseModel):
     zones: list[ZoneItem] = Field(default_factory=list)
     cameras: list[CameraItem] = Field(default_factory=list)
     stages_count: int = 0
+    owner_username: str | None = None
 
 
 class DetectionBoxItem(BaseModel):

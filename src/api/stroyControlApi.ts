@@ -145,6 +145,7 @@ export interface ProjectItem {
   zones: ZoneItem[]
   cameras: CameraItem[]
   stages_count: number
+  owner_username?: string | null
 }
 
 function getApiBaseUrl(): string {
@@ -302,7 +303,9 @@ export function logoutUser(): void {
 
 export async function fetchProjects(): Promise<ProjectItem[]> {
   try {
-    const res = await fetch(`${API_PREFIX}/projects`)
+    const res = await fetch(`${API_PREFIX}/projects`, {
+      headers: { ...getAuthHeaders() },
+    })
     if (res.ok) return await res.json()
   } catch {
     // offline fallback
@@ -315,10 +318,11 @@ export async function createProject(data: {
   code?: string
   address?: string
   object_kind?: string
+  owner_username?: string
 }): Promise<ProjectItem> {
   const res = await fetch(`${API_PREFIX}/projects`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {

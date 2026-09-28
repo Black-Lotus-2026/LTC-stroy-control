@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import {
-  archiveResults,
   incidentsSeed,
-  mockApi,
   type Incident,
   type IncidentStatus,
   type PageKey,
@@ -50,7 +48,6 @@ import {
   updateIncidentConfig,
   fetchIncidents,
   createIncident,
-  IncidentAlertItem,
   normalizeSnapshotUrl,
   updateIncidentStatus,
   toRussianMachineryName,
@@ -812,7 +809,6 @@ function Monitoring({
   onStreamStatusChange?: (online: boolean) => void
   toast: (s: string) => void
 }) {
-  const [mode, setMode] = useState('Техника')
   const [boxes, setBoxes] = useState(true)
   const [activeEquipment, setActiveEquipment] = useState<string | null>(null)
   const [liveDetections, setLiveDetections] = useState<LiveDetectionInfo[]>([])
@@ -1002,20 +998,6 @@ function Monitoring({
                 ))}
             </div>
 
-            <div className="analysis-tabs" role="tablist">
-              {['Техника', 'Люди', 'СИЗ', 'Опасные зоны', 'Прогресс'].map((m) => (
-                <button
-                  role="tab"
-                  aria-selected={mode === m}
-                  className={mode === m ? 'active' : ''}
-                  key={m}
-                  onClick={() => setMode(m)}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-            <Timeline />
           </section>
         )}
 
@@ -1025,7 +1007,7 @@ function Monitoring({
             <div className="panel-head">
               <div>
                 <span className="section-kicker">YOLO ДЕТЕКЦИЯ ТЕХНИКИ В КАДРЕ</span>
-                <h2>Распознанная спецтехника ({liveDetections.length} ед.) · {mode}</h2>
+                <h2>Распознанная спецтехника ({liveDetections.length} ед.)</h2>
               </div>
               <span className="muted">Кликните на карточку для динамической подсветки на видео</span>
             </div>
@@ -1097,30 +1079,6 @@ function Monitoring({
           Сформировать отчёт
         </button>
       </aside>
-    </div>
-  )
-}
-
-function Timeline() {
-  const [playing, setPlaying] = useState(true)
-  return (
-    <div className="timeline-panel">
-      <div className="timeline-toolbar">
-        <button className="icon-button" onClick={() => setPlaying(!playing)} aria-label={playing ? 'Пауза' : 'Воспроизведение'}>
-          {playing ? '⏸' : '▶'}
-        </button>
-        <span className="time-display">Синхронизация с графиком работ</span>
-        <div className="timeline-legend">
-          <span><i className="mark-work" />Смена</span>
-          <span><i className="mark-idle" />Отклонение</span>
-        </div>
-      </div>
-      <div className="timeline-track">
-        <div className="track-fill" style={{ width: '68%' }} />
-        <button style={{ left: '68%' }} aria-label="Ползунок времени" />
-        <span className="event-mark" style={{ left: '22%' }} title="Смена техники" />
-        <span className="event-mark warning" style={{ left: '54%' }} title="Простой техники" />
-      </div>
     </div>
   )
 }
@@ -2663,6 +2621,21 @@ function Reports({
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
 
+  // PDF Export Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false)
+  const [exportPreset, setExportPreset] = useState<'shift' | '24h' | 'week' | 'all' | 'custom'>('shift')
+  const [exportStartDate, setExportStartDate] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })
+  const [exportEndDate, setExportEndDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [exportSeverity, setExportSeverity] = useState<'ALL' | 'ERROR' | 'WARNING'>('ALL')
+  const [includePhotos, setIncludePhotos] = useState(true)
+  const [includeSignatures, setIncludeSignatures] = useState(true)
+  const [includeStats, setIncludeStats] = useState(true)
+  const [selectedIncidentIds, setSelectedIncidentIds] = useState<string[]>([])
+
   const errorsCount = incidents.filter(
     (i) =>
       i.severity === 'ERROR' ||
@@ -2692,6 +2665,615 @@ function Reports({
     return true
   })
 
+  // Range matching logic for PDF export
+  const rangeMatchedIncidents = useMemo(() => {
+    return incidents.filter((inc) => {
+      const isError =
+        inc.severity === 'ERROR' ||
+        inc.priority === 'Критический' ||
+        inc.discrepancyType === 'MISSING_MANDATORY' ||
+        inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+
+      if (exportSeverity === 'ERROR' && !isError) return false
+      if (exportSeverity === 'WARNING' && isError) return false
+
+      const timeStr = inc.time || ''
+      const isYesterday = timeStr.includes('Вчера')
+      const isOlder = timeStr.includes('сен') || timeStr.includes('д')
+
+      if (exportPreset === 'shift') {
+        if (isYesterday || isOlder) return false
+      } else if (exportPreset === '24h') {
+        if (isOlder) return false
+      } else if (exportPreset === 'week') {
+        return true
+      }
+      return true
+    })
+  }, [incidents, exportSeverity, exportPreset, exportStartDate, exportEndDate])
+
+  useEffect(() => {
+    setSelectedIncidentIds(rangeMatchedIncidents.map((i) => i.id))
+  }, [rangeMatchedIncidents])
+
+  const getRangeLabel = () => {
+    const todayStr = new Date().toLocaleDateString('ru-RU')
+    switch (exportPreset) {
+      case 'shift':
+        return `Текущая смена (08:00 – 20:00), ${todayStr}`
+      case '24h':
+        return `Суточный интервал (за последние 24 часа), на ${todayStr}`
+      case 'week':
+        return `Недельный интервал (за последние 7 дней), на ${todayStr}`
+      case 'custom':
+        return `Календарный период с ${exportStartDate} по ${exportEndDate}`
+      case 'all':
+      default:
+        return `Полный период ведения мониторинга на объекте`
+    }
+  }
+
+  const buildReportHtml = (itemsToExport: Incident[]) => {
+    const rangeLabel = getRangeLabel()
+    const todayDate = new Date().toLocaleDateString('ru-RU')
+    const todayTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    const actNumber = `СК-${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}/${String(new Date().getDate()).padStart(2, '0')}-${Math.floor(10 + Math.random() * 90)}`
+
+    const errCount = itemsToExport.filter(
+      (i) =>
+        i.severity === 'ERROR' ||
+        i.priority === 'Критический' ||
+        i.discrepancyType === 'MISSING_MANDATORY' ||
+        i.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+    ).length
+    const warnCount = itemsToExport.filter(
+      (i) => i.severity === 'WARNING' || i.discrepancyType === 'MISSING_RECOMMENDED'
+    ).length
+    const confirmedCount = itemsToExport.filter((i) => i.status === 'Подтверждено').length
+
+    const esc = (s?: string) =>
+      (s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+
+    return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Акт строительного контроля № ${esc(actNumber)}</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 12mm 14mm 12mm 14mm;
+    }
+    *, *::before, *::after {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      color: #0f172a;
+      background: #ffffff;
+      margin: 0;
+      padding: 0;
+      font-size: 10pt;
+      line-height: 1.4;
+    }
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #0f172a;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-badge {
+      width: 42px;
+      height: 42px;
+      background: #0f172a;
+      color: #cf9d3d;
+      font-weight: 900;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      border: 1.5px solid #cf9d3d;
+    }
+    .brand-text-title {
+      font-size: 12pt;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #0f172a;
+      text-transform: uppercase;
+      margin: 0;
+    }
+    .brand-text-sub {
+      font-size: 8pt;
+      color: #64748b;
+      margin: 2px 0 0;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+    .header-right {
+      text-align: right;
+      font-size: 8pt;
+      color: #475569;
+      line-height: 1.35;
+    }
+    .act-title-section {
+      text-align: center;
+      margin: 14px 0 12px;
+    }
+    .act-title {
+      font-size: 13.5pt;
+      font-weight: 800;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin: 0 0 4px;
+    }
+    .act-sub {
+      font-size: 9pt;
+      color: #475569;
+      margin: 0;
+    }
+    .meta-box {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      font-size: 9pt;
+    }
+    .meta-box td {
+      padding: 5px 8px;
+      border: 1px solid #cbd5e1;
+      vertical-align: middle;
+    }
+    .meta-lbl {
+      background: #f8fafc;
+      color: #475569;
+      font-weight: 600;
+      width: 24%;
+    }
+    .meta-val {
+      color: #0f172a;
+      font-weight: 500;
+      width: 76%;
+    }
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .stat-tile {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .stat-tile-val {
+      font-size: 15pt;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+    .stat-tile-lbl {
+      font-size: 7.5pt;
+      color: #64748b;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    .sec-heading {
+      font-size: 10pt;
+      font-weight: 700;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      border-bottom: 1.5px solid #0f172a;
+      padding-bottom: 3px;
+      margin: 16px 0 8px;
+    }
+    .table-incidents {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+      margin-bottom: 14px;
+    }
+    .table-incidents th {
+      background: #f1f5f9;
+      color: #1e293b;
+      font-weight: 700;
+      text-align: left;
+      padding: 6px 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 7.5pt;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .table-incidents td {
+      padding: 6px 8px;
+      border: 1px solid #cbd5e1;
+      vertical-align: top;
+    }
+    .row-inc {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    .tag-err {
+      display: inline-block;
+      padding: 2px 5px;
+      background: #fee2e2;
+      color: #991b1b;
+      border: 1px solid #f87171;
+      border-radius: 3px;
+      font-size: 7pt;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .tag-warn {
+      display: inline-block;
+      padding: 2px 5px;
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #facc15;
+      border-radius: 3px;
+      font-size: 7pt;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .tag-status {
+      display: inline-block;
+      padding: 2px 5px;
+      background: #f1f5f9;
+      color: #334155;
+      border-radius: 3px;
+      font-size: 7pt;
+      font-weight: 600;
+      margin-top: 3px;
+    }
+    .thumb-cell {
+      width: 130px;
+      text-align: center;
+    }
+    .thumb-wrap {
+      width: 120px;
+      height: 75px;
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid #cbd5e1;
+      background: #0f172a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .thumb-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .thumb-empty {
+      font-size: 7pt;
+      color: #94a3b8;
+      text-align: center;
+      padding: 4px;
+    }
+    .signatures-section {
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+      margin-top: 22px;
+      padding-top: 10px;
+      border-top: 1.5px solid #0f172a;
+    }
+    .sig-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 10px;
+    }
+    .sig-col {
+      font-size: 8pt;
+      color: #1e293b;
+    }
+    .sig-line {
+      margin-top: 32px;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      justify-content: space-between;
+      font-size: 7pt;
+      color: #64748b;
+      padding-bottom: 2px;
+    }
+    .stamp-box {
+      border: 1.5px dashed #94a3b8;
+      border-radius: 6px;
+      width: 70px;
+      height: 70px;
+      margin: 12px auto 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #94a3b8;
+      font-size: 8pt;
+      font-weight: 700;
+    }
+    .footer-note {
+      margin-top: 18px;
+      text-align: center;
+      font-size: 7.5pt;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header-bar">
+    <div class="brand-wrap">
+      <div class="brand-badge">СК</div>
+      <div>
+        <div class="brand-text-title">СТРОЙ-КОНТРОЛЬ</div>
+        <div class="brand-text-sub">Автоматизированная система строительного надзора</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <strong>АКТ № ${esc(actNumber)}</strong><br>
+      Дата: ${todayDate} ${todayTime}<br>
+      Система видеоаналитики v2.4
+    </div>
+  </div>
+
+  <div class="act-title-section">
+    <h1 class="act-title">АКТ СТРОИТЕЛЬНОГО КОНТРОЛЯ И МОНИТОРИНГА СПЕЦТЕХНИКИ</h1>
+    <p class="act-sub">Сводная ведомость соблюдения технологического регламента и присутствия спецтехники</p>
+  </div>
+
+  <table class="meta-box">
+    <tr>
+      <td class="meta-lbl">Объект строительства:</td>
+      <td class="meta-val"><strong>${esc(activeProject?.name || 'Строительный объект')}</strong></td>
+    </tr>
+    <tr>
+      <td class="meta-lbl">Адрес объекта:</td>
+      <td class="meta-val">${esc(activeProject?.address || 'г. Москва')}</td>
+    </tr>
+    <tr>
+      <td class="meta-lbl">Контролируемый диапазон:</td>
+      <td class="meta-val"><strong>${esc(rangeLabel)}</strong></td>
+    </tr>
+    <tr>
+      <td class="meta-lbl">Текущий этап СМР:</td>
+      <td class="meta-val">${esc(itemsToExport.find((i) => i.stageName)?.stageName || activeProject?.object_kind || 'Монолитные работы')}</td>
+    </tr>
+  </table>
+
+  ${
+    includeStats
+      ? `
+  <div class="stats-row">
+    <div class="stat-tile">
+      <div class="stat-tile-val">${itemsToExport.length}</div>
+      <div class="stat-tile-lbl">Всего событий</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-val" style="color: #b91c1c;">${errCount}</div>
+      <div class="stat-tile-lbl">Ошибок (ERROR)</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-val" style="color: #b45309;">${warnCount}</div>
+      <div class="stat-tile-lbl">Предупреждений</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-tile-val" style="color: #047857;">${confirmedCount}</div>
+      <div class="stat-tile-lbl">Подтверждено</div>
+    </div>
+  </div>
+  `
+      : ''
+  }
+
+  <div class="sec-heading">Журнал выявленных нарушений и несоответствий (${itemsToExport.length} записей)</div>
+
+  <table class="table-incidents">
+    <thead>
+      <tr>
+        <th style="width: 28px; text-align: center;">№</th>
+        ${includePhotos ? '<th style="width: 125px; text-align: center;">Фото с Камеры №1</th>' : ''}
+        <th style="width: 130px;">Время / Камера</th>
+        <th style="width: 125px;">Тип и Статус</th>
+        <th>Описание нарушения и замечания регламента</th>
+        <th style="width: 110px;">Ответственный</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsToExport
+        .map((inc, idx) => {
+          const isErr =
+            inc.severity === 'ERROR' ||
+            inc.priority === 'Критический' ||
+            inc.discrepancyType === 'MISSING_MANDATORY' ||
+            inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+
+          const photoSrc = inc.snapshotUrl || (inc.albumPhotos && inc.albumPhotos.length > 0 ? inc.albumPhotos[0].url : '')
+
+          return `
+      <tr class="row-inc">
+        <td style="text-align: center; font-weight: 700; color: #64748b;">${idx + 1}</td>
+        ${
+          includePhotos
+            ? `
+        <td class="thumb-cell">
+          <div class="thumb-wrap">
+            ${
+              photoSrc
+                ? `<img src="${photoSrc}" alt="Снимок с 1-й камеры" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"><div class="thumb-empty" style="display:none;">Фото недоступно</div>`
+                : `<div class="thumb-empty">Фото отсутствует<br>(Видеопоток)</div>`
+            }
+          </div>
+        </td>`
+            : ''
+        }
+        <td>
+          <strong>${esc(inc.time)}</strong><br>
+          <span style="color: #475569;">${esc(inc.camera)}</span><br>
+          <span style="color: #64748b; font-size: 7.5pt;">${esc(inc.zone)}</span>
+        </td>
+        <td>
+          <span class="${isErr ? 'tag-err' : 'tag-warn'}">${isErr ? 'ERROR' : 'WARNING'}</span><br>
+          <span class="tag-status">${esc(inc.status)}</span>
+          ${inc.stageName ? `<br><span style="color: #64748b; font-size: 7pt;">${esc(inc.stageName)}</span>` : ''}
+        </td>
+        <td>
+          <strong style="color: #0f172a; font-size: 9pt;">${esc(inc.title)}</strong>
+          <p style="margin: 4px 0 0; color: #334155; font-size: 8pt; line-height: 1.35;">${esc(inc.note)}</p>
+        </td>
+        <td style="color: #1e293b;">
+          ${esc(inc.assignee)}
+        </td>
+      </tr>
+      `
+        })
+        .join('')}
+    </tbody>
+  </table>
+
+  ${
+    includeSignatures
+      ? `
+  <div class="signatures-section">
+    <strong style="font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.4px;">Комиссия строительного контроля:</strong>
+    <div class="sig-grid">
+      <div class="sig-col">
+        <strong>Инженер строительного контроля:</strong><br>
+        <div class="sig-line"><span>(подпись)</span><span>/ ${esc(incidents[0]?.assignee || 'Морозов А.В.')} /</span></div>
+      </div>
+      <div class="sig-col">
+        <strong>Представитель генподрядчика:</strong><br>
+        <div class="sig-line"><span>(подпись)</span><span>/ Соколов И.П. /</span></div>
+      </div>
+      <div class="sig-col">
+        <strong>Ответственный за механизацию:</strong><br>
+        <div class="sig-line"><span>(подпись)</span><span>/ Волков Д.С. /</span></div>
+      </div>
+    </div>
+    <div class="stamp-box">М.П.</div>
+  </div>
+  `
+      : ''
+  }
+
+  <div class="footer-note">
+    Документ сгенерирован системой автоматизированного строительного контроля «СТРОЙ-КОНТРОЛЬ» · Дата формирования: ${todayDate} ${todayTime}
+  </div>
+</body>
+</html>`
+  }
+
+  const handlePrintPdf = () => {
+    const finalIncidents = incidents.filter((i) => selectedIncidentIds.includes(i.id))
+    if (finalIncidents.length === 0) {
+      toast('Не выбрано ни одной записи для включения в отчет')
+      return
+    }
+
+    const htmlContent = buildReportHtml(finalIncidents)
+    const iframe = document.createElement('iframe')
+    iframe.style.position = 'fixed'
+    iframe.style.right = '0'
+    iframe.style.bottom = '0'
+    iframe.style.width = '0'
+    iframe.style.height = '0'
+    iframe.style.border = '0'
+    document.body.appendChild(iframe)
+
+    const doc = iframe.contentWindow?.document
+    if (!doc) {
+      toast('Ошибка инициализации печати')
+      return
+    }
+
+    doc.open()
+    doc.write(htmlContent)
+    doc.close()
+
+    const triggerPrint = () => {
+      try {
+        iframe.contentWindow?.focus()
+        iframe.contentWindow?.print()
+        toast('Диалог сохранения отчета в PDF запущен')
+      } catch (e) {
+        console.error('Print trigger error', e)
+        toast('Ошибка вызова диалога печати')
+      } finally {
+        setTimeout(() => {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe)
+          }
+        }, 3000)
+      }
+    }
+
+    const imgs = Array.from(doc.images)
+    if (imgs.length === 0) {
+      setTimeout(triggerPrint, 300)
+    } else {
+      let loaded = 0
+      let done = false
+      const onImgDone = () => {
+        loaded++
+        if (loaded >= imgs.length && !done) {
+          done = true
+          setTimeout(triggerPrint, 350)
+        }
+      }
+      imgs.forEach((img) => {
+        if (img.complete) {
+          onImgDone()
+        } else {
+          img.onload = onImgDone
+          img.onerror = onImgDone
+        }
+      })
+      setTimeout(() => {
+        if (!done) {
+          done = true
+          triggerPrint()
+        }
+      }, 2500)
+    }
+
+    setIsExportModalOpen(false)
+  }
+
+  const handleOpenInNewTab = () => {
+    const finalIncidents = incidents.filter((i) => selectedIncidentIds.includes(i.id))
+    if (finalIncidents.length === 0) {
+      toast('Не выбрано ни одной записи для включения в отчет')
+      return
+    }
+    const htmlContent = buildReportHtml(finalIncidents)
+    const win = window.open('', '_blank')
+    if (win) {
+      win.document.open()
+      win.document.write(htmlContent)
+      win.document.close()
+      setTimeout(() => {
+        win.focus()
+        win.print()
+      }, 400)
+    }
+  }
+
   return (
     <div className="reports-page">
       <aside className="report-options panel">
@@ -2703,10 +3285,7 @@ function Reports({
           <input type="checkbox" defaultChecked />Наблюдаемый прогресс
         </label>
         <hr />
-        <button className="button full" onClick={() => toast('Ссылка на отчёт скопирована')}>
-          <Icon name="link" />Копировать ссылку
-        </button>
-        <button className="button primary full" onClick={() => toast('Отчёт подготовлен к экспорту в PDF')}>
+        <button className="button primary full" onClick={() => setIsExportModalOpen(true)}>
           <Icon name="download" />Экспорт PDF
         </button>
       </aside>
@@ -3050,6 +3629,300 @@ function Reports({
               >
                 ✕ Закрыть
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Export PDF with Range Selection */}
+        {isExportModalOpen && (
+          <div className="modal-backdrop" onClick={() => setIsExportModalOpen(false)} style={{ zIndex: 1300 }}>
+            <div
+              className="modal-panel"
+              style={{
+                width: '680px',
+                maxWidth: '94vw',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+                background: '#181a1f',
+                border: '1px solid #33363d',
+                borderRadius: '12px',
+                padding: '24px',
+                color: '#fff',
+                boxShadow: '0 24px 48px rgba(0,0,0,0.7)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', borderBottom: '1px solid #2e3035', paddingBottom: '12px' }}>
+                <div>
+                  <span className="section-kicker" style={{ color: '#cf9d3d' }}>ЭКСПОРТ ОТЧЕТА</span>
+                  <h3 style={{ margin: '4px 0 0', fontSize: '18px', fontWeight: 700 }}>Параметры выгрузки в PDF</h3>
+                  <small style={{ color: 'var(--muted)' }}>Настройте диапазон времени и состав акта строительного контроля</small>
+                </div>
+                <button
+                  className="icon-button"
+                  onClick={() => setIsExportModalOpen(false)}
+                  style={{ color: 'var(--muted)', fontSize: '18px', cursor: 'pointer' }}
+                  aria-label="Закрыть"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Range Selector */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: '#cbd5e1' }}>
+                  Временной диапазон отчета:
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                  {[
+                    { id: 'shift' as const, label: 'Текущая смена (08:00–20:00)' },
+                    { id: '24h' as const, label: 'За последние 24 часа' },
+                    { id: 'week' as const, label: 'За последнюю неделю' },
+                    { id: 'all' as const, label: 'За весь период' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`button ${exportPreset === p.id ? 'primary' : ''}`}
+                      style={{
+                        fontSize: '11.5px',
+                        padding: '8px 12px',
+                        justifyContent: 'flex-start',
+                        borderColor: exportPreset === p.id ? '#cf9d3d' : '#33363d',
+                        background: exportPreset === p.id ? 'rgba(207,157,61,0.2)' : '#121417',
+                        fontWeight: exportPreset === p.id ? 700 : 500,
+                      }}
+                      onClick={() => setExportPreset(p.id)}
+                    >
+                      {exportPreset === p.id ? '● ' : '○ '} {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className={`button ${exportPreset === 'custom' ? 'primary' : ''}`}
+                  style={{
+                    marginTop: '8px',
+                    width: '100%',
+                    fontSize: '11.5px',
+                    padding: '8px 12px',
+                    justifyContent: 'flex-start',
+                    borderColor: exportPreset === 'custom' ? '#cf9d3d' : '#33363d',
+                    background: exportPreset === 'custom' ? 'rgba(207,157,61,0.2)' : '#121417',
+                    fontWeight: exportPreset === 'custom' ? 700 : 500,
+                  }}
+                  onClick={() => setExportPreset('custom')}
+                >
+                  {exportPreset === 'custom' ? '● ' : '○ '} Произвольный календарный интервал
+                </button>
+
+                {exportPreset === 'custom' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '10px', background: '#121417', padding: '12px', borderRadius: '8px', border: '1px solid #2e3035' }}>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>С даты:</span>
+                      <input
+                        type="date"
+                        value={exportStartDate}
+                        onChange={(e) => setExportStartDate(e.target.value)}
+                        style={{ width: '100%', background: '#1c1e22', border: '1px solid #35373c', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>По дату:</span>
+                      <input
+                        type="date"
+                        value={exportEndDate}
+                        onChange={(e) => setExportEndDate(e.target.value)}
+                        style={{ width: '100%', background: '#1c1e22', border: '1px solid #35373c', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Severity filter */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: '#cbd5e1' }}>
+                  Фильтр по степени критичности:
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className={`button ${exportSeverity === 'ALL' ? 'primary' : ''}`}
+                    style={{ fontSize: '11px', flex: 1 }}
+                    onClick={() => setExportSeverity('ALL')}
+                  >
+                    Все нарушения ({incidents.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`button ${exportSeverity === 'ERROR' ? 'primary' : ''}`}
+                    style={{ fontSize: '11px', flex: 1, color: '#f87171' }}
+                    onClick={() => setExportSeverity('ERROR')}
+                  >
+                    Только ERROR ({errorsCount})
+                  </button>
+                  <button
+                    type="button"
+                    className={`button ${exportSeverity === 'WARNING' ? 'primary' : ''}`}
+                    style={{ fontSize: '11px', flex: 1, color: '#fbbf24' }}
+                    onClick={() => setExportSeverity('WARNING')}
+                  >
+                    Только WARNING ({warningsCount})
+                  </button>
+                </div>
+              </div>
+
+              {/* Content options */}
+              <div style={{ background: '#121417', padding: '12px 14px', borderRadius: '8px', border: '1px solid #2e3035', marginBottom: '16px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', display: 'block', marginBottom: '8px', textTransform: 'uppercase' }}>
+                  Состав печатного акта:
+                </span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={includePhotos}
+                      onChange={(e) => setIncludePhotos(e.target.checked)}
+                    />
+                    Фотофиксация (1-я камера)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={includeStats}
+                      onChange={(e) => setIncludeStats(e.target.checked)}
+                    />
+                    Сводные показатели KPI
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={includeSignatures}
+                      onChange={(e) => setIncludeSignatures(e.target.checked)}
+                    />
+                    Подписи комиссии СК
+                  </label>
+                </div>
+              </div>
+
+              {/* Incidents preview */}
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#cbd5e1' }}>
+                    Будет выгружено в PDF: <strong style={{ color: '#cf9d3d' }}>{selectedIncidentIds.length}</strong> из {rangeMatchedIncidents.length} записей
+                  </span>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: '#38bdf8', fontSize: '11px', cursor: 'pointer', padding: 0 }}
+                    onClick={() => {
+                      if (selectedIncidentIds.length === rangeMatchedIncidents.length) {
+                        setSelectedIncidentIds([])
+                      } else {
+                        setSelectedIncidentIds(rangeMatchedIncidents.map((i) => i.id))
+                      }
+                    }}
+                  >
+                    {selectedIncidentIds.length === rangeMatchedIncidents.length ? 'Снять все' : 'Выбрать все'}
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    maxHeight: '130px',
+                    overflowY: 'auto',
+                    background: '#121417',
+                    border: '1px solid #2e3035',
+                    borderRadius: '6px',
+                    padding: '4px 6px',
+                  }}
+                >
+                  {rangeMatchedIncidents.length === 0 ? (
+                    <div style={{ padding: '12px', textAlign: 'center', color: 'var(--muted)', fontSize: '11.5px' }}>
+                      Нет записей за выбранный диапазон
+                    </div>
+                  ) : (
+                    rangeMatchedIncidents.map((inc) => {
+                      const isChecked = selectedIncidentIds.includes(inc.id)
+                      const isErr =
+                        inc.severity === 'ERROR' ||
+                        inc.priority === 'Критический' ||
+                        inc.discrepancyType === 'MISSING_MANDATORY' ||
+                        inc.discrepancyType === 'UNCHARACTERISTIC_PRESENT'
+
+                      return (
+                        <div
+                          key={inc.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '4px 6px',
+                            borderBottom: '1px solid #1c1e22',
+                            fontSize: '11.5px',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedIncidentIds((prev) => [...prev, inc.id])
+                              } else {
+                                setSelectedIncidentIds((prev) => prev.filter((id) => id !== inc.id))
+                              }
+                            }}
+                          />
+                          <span style={{ color: isErr ? '#f87171' : '#fbbf24', fontWeight: 700, fontSize: '10px' }}>
+                            {isErr ? 'ERR' : 'WARN'}
+                          </span>
+                          <strong style={{ color: '#94a3b8' }}>{inc.id}</strong>
+                          <span style={{ color: '#e2e8f0', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {inc.title}
+                          </span>
+                          <span style={{ color: 'var(--muted)', fontSize: '10.5px' }}>{inc.time}</span>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #2e3035', paddingTop: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={handleOpenInNewTab}
+                  disabled={selectedIncidentIds.length === 0}
+                  title="Открыть акт в отдельной вкладке браузера"
+                  style={{ fontSize: '11.5px' }}
+                >
+                  Печатная форма ↗
+                </button>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => setIsExportModalOpen(false)}
+                    style={{ fontSize: '11.5px' }}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    className="button primary"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11.5px' }}
+                    onClick={handlePrintPdf}
+                    disabled={selectedIncidentIds.length === 0}
+                  >
+                    <Icon name="download" size={16} />
+                    Сформировать и скачать PDF ({selectedIncidentIds.length})
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -3467,7 +4340,6 @@ export default function App() {
   const [page, setPage] = useState<PageKey>('monitoring')
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
-  const [globalSearch, setGlobalSearch] = useState('')
   const [toastText, setToastText] = useState<string | null>(null)
   const [incidentsList, setIncidentsList] = useState<Incident[]>(incidentsSeed)
   const [violationWindowSeconds, setViolationWindowSeconds] = useState<number>(30)
@@ -3532,8 +4404,26 @@ export default function App() {
   const [streamCheckResult, setStreamCheckResult] = useState<{ status: string; message: string } | null>(null)
   const [isCheckingStream, setIsCheckingStream] = useState(false)
 
+  // Real-time Date & Time for header
+  const [currentDateTime, setCurrentDateTime] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentDateTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const currentFormattedDate = currentDateTime.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+  const currentFormattedTime = currentDateTime.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
   // User Authentication State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [isAuthChecking, setIsAuthChecking] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login')
@@ -3542,13 +4432,15 @@ export default function App() {
 
   // Check active user session and violation config on startup
   useEffect(() => {
-    fetchCurrentUser().then((user) => {
-      if (user) {
-        setCurrentUser(user)
-      } else {
-        setIsAuthModalOpen(true)
-      }
-    })
+    fetchCurrentUser()
+      .then((user) => {
+        if (user) {
+          setCurrentUser(user)
+        }
+      })
+      .finally(() => {
+        setIsAuthChecking(false)
+      })
 
     fetchIncidentConfig()
       .then((cfg) => {
@@ -3693,42 +4585,84 @@ export default function App() {
     setTimeout(() => setToastText(null), 3500)
   }
 
-  // Load projects on startup
-  useEffect(() => {
-    fetchProjects().then(async (prjs) => {
-      if (prjs.length > 0) {
+  // User separation: projects visible to the current user
+  const userVisibleProjects = useMemo(() => {
+    if (!currentUser) return []
+    if (currentUser.role === 'admin') return projectsList
+    // Non-admin sees their own projects or unassigned projects
+    return projectsList.filter(
+      (p) => !p.owner_username || p.owner_username === currentUser.username
+    )
+  }, [projectsList, currentUser])
+
+  const loadProjectsForUser = useCallback(async (user: UserProfile) => {
+    try {
+      const prjs = await fetchProjects()
+      const visible = user.role === 'admin'
+        ? prjs
+        : prjs.filter((p) => !p.owner_username || p.owner_username === user.username)
+
+      if (visible.length > 0) {
         setProjectsList(prjs)
-        setActiveProjectId((prev) => prev || prjs[0].id)
+        setActiveProjectId((prev) => (visible.some((p) => p.id === prev) ? prev : visible[0].id))
       } else {
-        // Create initial default project if empty
-        try {
-          const initPrj = await createProject({
-            name: 'ЖК «Северный», корпус 2',
-            code: 'PRJ-SEV',
-            address: 'г. Москва, ул. Полярная, 18',
-            object_kind: 'Жильё',
-          })
-          setProjectsList([initPrj])
-          setActiveProjectId(initPrj.id)
-        } catch {
-          // offline local fallback so controls are never disabled
-          const fallbackPrj: ProjectItem = {
-            id: 'local-default-prj',
-            code: 'PRJ-SEV',
-            name: 'ЖК «Северный», корпус 2',
-            address: 'г. Москва, ул. Полярная, 18',
-            object_kind: 'Жильё',
-            status: 'active',
-            zones: [],
-            cameras: [],
-            stages_count: 0,
-          }
-          setProjectsList([fallbackPrj])
-          setActiveProjectId(fallbackPrj.id)
-        }
+        // Auto-provision personal workspace project for this user
+        const initPrj = await createProject({
+          name: `Объект строительства (${user.username})`,
+          code: `PRJ-${user.username.toUpperCase().slice(0, 4)}`,
+          address: 'г. Москва',
+          object_kind: 'Жильё',
+          owner_username: user.username,
+        })
+        setProjectsList((prev) => [...prev, initPrj])
+        setActiveProjectId(initPrj.id)
       }
-    })
+    } catch {
+      // offline fallback
+      const fallbackPrj: ProjectItem = {
+        id: `local-${user.username}-prj`,
+        code: `PRJ-${user.username.toUpperCase().slice(0, 4)}`,
+        name: `Объект строительства (${user.username})`,
+        address: 'г. Москва',
+        object_kind: 'Жильё',
+        status: 'active',
+        owner_username: user.username,
+        zones: [],
+        cameras: [],
+        stages_count: 0,
+      }
+      setProjectsList((prev) => [...prev, fallbackPrj])
+      setActiveProjectId(fallbackPrj.id)
+    }
   }, [])
+
+  useEffect(() => {
+    if (currentUser) {
+      loadProjectsForUser(currentUser)
+    } else {
+      setProjectsList([])
+      setActiveProjectId(null)
+    }
+  }, [currentUser, loadProjectsForUser])
+
+  // Role-based workspace page permissions
+  const allowedNav = useMemo(() => {
+    if (!currentUser) return []
+    if (currentUser.role === 'admin') return nav
+    if (currentUser.role === 'viewer') {
+      return nav.filter((n) => ['monitoring', 'archive', 'reports'].includes(n.id))
+    }
+    if (currentUser.role === 'inspector') {
+      return nav.filter((n) => ['monitoring', 'archive', 'progress', 'reports'].includes(n.id))
+    }
+    return nav
+  }, [currentUser])
+
+  useEffect(() => {
+    if (allowedNav.length > 0 && !allowedNav.some((n) => n.id === page)) {
+      setPage(allowedNav[0].id)
+    }
+  }, [allowedNav, page])
 
   // Load project zones, cameras, and schedule whenever active project changes
   useEffect(() => {
@@ -3750,7 +4684,7 @@ export default function App() {
     })
   }, [activeProjectId])
 
-  const activeProject = projectsList.find((p) => p.id === activeProjectId) || projectsList[0]
+  const activeProject = userVisibleProjects.find((p) => p.id === activeProjectId) || userVisibleProjects[0]
 
   // Handle Create Project
   const handleCreateProjectSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -3761,11 +4695,16 @@ export default function App() {
     const objectKind = (form.elements.namedItem('prj_kind') as HTMLSelectElement).value
 
     try {
-      const created = await createProject({ name, address, object_kind: objectKind })
+      const created = await createProject({
+        name,
+        address,
+        object_kind: objectKind,
+        owner_username: currentUser?.username,
+      })
       setProjectsList((prev) => [...prev.filter((p) => p.id !== 'local-default-prj'), created])
       setActiveProjectId(created.id)
       setIsCreateProjectOpen(false)
-      toast(`Объект «${created.name}» успешно создан`)
+      toast(`Объект «${created.name}» успешно создан в вашей рабочей области`)
     } catch (err: unknown) {
       toast(err instanceof Error ? err.message : 'Ошибка создания объекта')
     }
@@ -3808,7 +4747,7 @@ export default function App() {
   // Handle Create / Edit Zone (Construction Site)
   const handleZoneSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    const targetProjectId = activeProjectId || projectsList[0]?.id
+    const targetProjectId = activeProjectId || userVisibleProjects[0]?.id
     if (!targetProjectId) {
       toast('Сначала выберите или создайте объект')
       return
@@ -3843,7 +4782,7 @@ export default function App() {
 
   // Handle Delete Zone
   const handleDeleteZone = async (zone: ZoneItem) => {
-    const targetProjectId = activeProjectId || projectsList[0]?.id
+    const targetProjectId = activeProjectId || userVisibleProjects[0]?.id
     if (!targetProjectId || !window.confirm(`Удалить стройплощадку «${zone.name}»?`)) return
     try {
       await deleteZone(targetProjectId, zone.id)
@@ -3857,7 +4796,7 @@ export default function App() {
   // Handle camera creation and editing in one form.
   const handleCameraSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    const targetProjectId = activeProjectId || projectsList[0]?.id
+    const targetProjectId = activeProjectId || userVisibleProjects[0]?.id
     if (!targetProjectId) {
       toast('Сначала выберите или создайте объект')
       return
@@ -3904,7 +4843,7 @@ export default function App() {
   }
 
   const handleDeleteCamera = async (camera: CameraItem) => {
-    const targetProjectId = activeProjectId || projectsList[0]?.id
+    const targetProjectId = activeProjectId || userVisibleProjects[0]?.id
     if (!targetProjectId || !window.confirm(`Удалить камеру «${camera.name}»?`)) return
     try {
       await deleteCamera(targetProjectId, camera.id)
@@ -4456,7 +5395,7 @@ export default function App() {
         return (
           <Settings
             activeProject={activeProject}
-            projectsList={projectsList}
+            projectsList={userVisibleProjects}
             onSelectProject={(id) => setActiveProjectId(id)}
             onUpdateProject={handleUpdateProject}
             onDeleteProject={handleDeleteProject}
@@ -4493,7 +5432,7 @@ export default function App() {
     page,
     stages,
     activeProject,
-    projectsList,
+    userVisibleProjects,
     activeZones,
     camerasList,
     selectedCameraId,
@@ -4506,6 +5445,285 @@ export default function App() {
     highlightedIncidentId,
     handleFrameAnalysis,
   ])
+
+  if (isAuthChecking) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: '#0b0d10',
+          color: '#f8fafc',
+          fontFamily: 'Inter, system-ui, sans-serif',
+        }}
+      >
+        <div
+          style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: '12px',
+            background: '#38bdf8',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 800,
+            fontSize: '20px',
+            color: '#0b0d10',
+            marginBottom: '16px',
+          }}
+        >
+          СК
+        </div>
+        <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>Строй-контроль</div>
+        <div style={{ fontSize: '13px', color: '#94a3b8' }}>Загрузка рабочей области...</div>
+      </div>
+    )
+  }
+
+  if (!currentUser) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: '#0b0d10',
+          padding: '20px',
+          fontFamily: 'Inter, system-ui, sans-serif',
+        }}
+      >
+        <div
+          className="dialog"
+          style={{
+            maxWidth: '440px',
+            width: '100%',
+            border: '1px solid rgba(255,255,255,0.12)',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.8)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+            <div
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '10px',
+                background: '#38bdf8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 800,
+                fontSize: '18px',
+                color: '#0b0d10',
+              }}
+            >
+              СК
+            </div>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '18px', color: '#fff' }}>Строй-контроль</h2>
+              <small style={{ color: '#94a3b8', fontSize: '12px' }}>Платформа мониторинга строительных объектов</small>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              borderBottom: '1px solid rgba(255,255,255,0.1)',
+              marginBottom: '16px',
+              gap: '8px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setAuthTab('login')
+                setAuthError(null)
+              }}
+              style={{
+                padding: '8px 16px',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: authTab === 'login' ? '2px solid #38bdf8' : '2px solid transparent',
+                color: authTab === 'login' ? '#38bdf8' : '#94a3b8',
+                fontWeight: 600,
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              Вход
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthTab('register')
+                setAuthError(null)
+              }}
+              style={{
+                padding: '8px 16px',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: authTab === 'register' ? '2px solid #38bdf8' : '2px solid transparent',
+                color: authTab === 'register' ? '#38bdf8' : '#94a3b8',
+                fontWeight: 600,
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              Регистрация
+            </button>
+          </div>
+
+          {authTab === 'login' ? (
+            <div>
+              <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '16px' }}>
+                Войдите в систему для доступа к закрепленным за вами объектам и рабочей области.
+              </p>
+
+              {authError && (
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid #ef4444',
+                    borderRadius: '8px',
+                    color: '#fca5a5',
+                    fontSize: '13px',
+                    marginBottom: '14px',
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
+
+              <form onSubmit={handleLoginSubmit}>
+                <label>
+                  Логин *
+                  <input name="login_username" placeholder="ваш логин" required autoFocus />
+                </label>
+                <label>
+                  Пароль *
+                  <input type="password" name="login_password" placeholder="введите пароль" required />
+                </label>
+                <div className="dialog-actions" style={{ marginTop: '20px' }}>
+                  <button type="submit" className="button primary full" disabled={isSubmittingAuth}>
+                    {isSubmittingAuth ? 'Вход...' : 'Войти в рабочую область'}
+                  </button>
+                </div>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: '#94a3b8' }}>
+                Нет учетной записи?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthTab('register')
+                    setAuthError(null)
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#38bdf8',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    padding: 0,
+                  }}
+                >
+                  Зарегистрироваться
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '16px' }}>
+                Создайте персональную учетную запись с изолированной рабочей областью строительных объектов.
+              </p>
+
+              {authError && (
+                <div
+                  style={{
+                    padding: '10px 14px',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid #ef4444',
+                    borderRadius: '8px',
+                    color: '#fca5a5',
+                    fontSize: '13px',
+                    marginBottom: '14px',
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
+
+              <form onSubmit={handleRegisterSubmit}>
+                <label>
+                  Придумайте логин *
+                  <input
+                    name="reg_username"
+                    placeholder="например, engineer_ivan"
+                    minLength={3}
+                    required
+                    autoFocus
+                  />
+                  <small style={{ color: '#94a3b8', fontSize: '11px', display: 'block', marginTop: '4px' }}>
+                    Любой логин, от 3 символов
+                  </small>
+                </label>
+                <label>
+                  Пароль *
+                  <input
+                    type="password"
+                    name="reg_password"
+                    placeholder="не менее 4 символов"
+                    minLength={4}
+                    required
+                  />
+                </label>
+                <label>
+                  Повторите пароль *
+                  <input
+                    type="password"
+                    name="reg_confirm_password"
+                    placeholder="повторите пароль"
+                    minLength={4}
+                    required
+                  />
+                </label>
+                <div className="dialog-actions" style={{ marginTop: '20px' }}>
+                  <button type="submit" className="button primary full" disabled={isSubmittingAuth}>
+                    {isSubmittingAuth ? 'Создание аккаунта...' : 'Зарегистрироваться'}
+                  </button>
+                </div>
+              </form>
+
+              <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '13px', color: '#94a3b8' }}>
+                Уже зарегистрированы?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthTab('login')
+                    setAuthError(null)
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#38bdf8',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    padding: 0,
+                  }}
+                >
+                  Войти
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
@@ -4530,7 +5748,7 @@ export default function App() {
         </div>
 
         <nav aria-label="Основная навигация">
-          {nav.map((n) => (
+          {allowedNav.map((n) => (
             <button
               key={n.id}
               aria-label={n.label}
@@ -4575,19 +5793,9 @@ export default function App() {
 
           <div className="topbar-spacer" />
 
-          <label className="global-search">
-            <Icon name="search" size={17} />
-            <input
-              value={globalSearch}
-              onChange={(e) => setGlobalSearch(e.target.value)}
-              placeholder="Поиск по графику, технике, камерам"
-              aria-label="Глобальный поиск"
-            />
-            <kbd>⌘ K</kbd>
-          </label>
-
-          <button className="date-button">
-            <Icon name="clock" size={16} />Сегодня, {new Date().toLocaleTimeString().slice(0, 5)}
+          <button className="date-button" title="Текущие дата и время">
+            <Icon name="clock" size={16} />
+            <span>{currentFormattedDate}, {currentFormattedTime}</span>
           </button>
           {currentUser ? (
             <div style={{ position: 'relative' }}>
@@ -4699,9 +5907,9 @@ export default function App() {
                 setActiveZoneId('all')
               }}
             >
-              {projectsList.map((p) => (
+              {userVisibleProjects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.code})
+                  {p.name} ({p.code}){currentUser?.role === 'admin' && p.owner_username ? ` — [${p.owner_username}]` : ''}
                 </option>
               ))}
             </select>
