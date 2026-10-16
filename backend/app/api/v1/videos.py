@@ -10,7 +10,7 @@ from typing import Any
 import anyio
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 
 from app.api.deps import DbSession
@@ -220,6 +220,49 @@ async def proxy_camera_stream(
         ) from e
 
 
+MAX_FRAME_BYTES = 8_000_000
+
+
+@router.get("/frame")
+async def camera_frame(url: str = Query(..., description="URL камеры: MJPEG-поток или JPEG-снимок")):
+    """Один свежий кадр с HTTP/HTTPS-камеры.
+
+    Интерфейс анализирует кадр раз в пару секунд, держать для этого открытый MJPEG-поток не нужно:
+    короткий запрос не занимает соединение браузера и не мешает остальным запросам к API.
+    """
+    clean_url = url.strip()
+    if not clean_url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="Кадр можно получить только по HTTP или HTTPS. Для RTSP нужен шлюз или серверный сбор кадров.",
+        )
+    headers = {"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"}
+    timeout = httpx.Timeout(connect=3.5, read=4.0, write=5.0, pool=5.0)
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=timeout, trust_env=False) as client:
+            async with client.stream("GET", clean_url) as resp:
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    buf += chunk
+                    if "multipart" in content_type:
+                        # first complete JPEG part of the stream: SOI … EOI
+                        start = buf.find(b"\xff\xd8")
+                        end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
+                        if end >= 0:
+                            return Response(bytes(buf[start : end + 2]), media_type="image/jpeg", headers=headers)
+                    if len(buf) > MAX_FRAME_BYTES:
+                        break
+                if "multipart" not in content_type and buf:
+                    return Response(bytes(buf), media_type=content_type or "image/jpeg", headers=headers)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Камера ответила ошибкой HTTP {e.response.status_code}") from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Камера не отдала кадр: {e}") from e
+    raise HTTPException(status_code=502, detail="Камера не отдала ни одного кадра")
+
+
 @router.get("/check-stream")
 async def check_camera_stream(
     url: str = Query(..., description="URL потока камеры для проверки связи")
@@ -262,17 +305,19 @@ async def check_camera_stream(
             async with httpx.AsyncClient(
                 verify=False, timeout=3.0, trust_env=False
             ) as client:
-                resp = await client.get(clean_url)
-                return {
-                    "status": "online" if resp.status_code < 400 else "warning",
-                    "protocol": "HTTP",
-                    "host": host,
-                    "port": port,
-                    "url": clean_url,
-                    "http_status": resp.status_code,
-                    "content_type": resp.headers.get("content-type", ""),
-                    "message": f"HTTP {resp.status_code} ({resp.headers.get('content-type', 'stream')})",
-                }
+                # An MJPEG stream never ends: read the status line and headers only.
+                async with client.stream("GET", clean_url) as resp:
+                    content_type = resp.headers.get("content-type", "")
+                    return {
+                        "status": "online" if resp.status_code < 400 else "warning",
+                        "protocol": "HTTP",
+                        "host": host,
+                        "port": port,
+                        "url": clean_url,
+                        "http_status": resp.status_code,
+                        "content_type": content_type,
+                        "message": f"HTTP {resp.status_code} ({content_type or 'stream'})",
+                    }
         except Exception as err:
             # Check if RTSP port 8554 is open as suggestion
             rtsp_hint = None

@@ -112,6 +112,9 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
         snapshot_url=snapshot_url,
         album_photos=album_photos,
         manual_override=bool(exp.get("is_manual_override", False)),
+        operator_comment=exp.get("operator_comment"),
+        decided_at=exp.get("decided_at"),
+        observed_at=exp.get("observed_at") or inc.first_seen_at,
         created_at=inc.created_at,
     )
 
@@ -147,64 +150,7 @@ def get_incidents(
         query = query.where(Incident.project_id == project_id)
 
     incidents = db.scalars(query).all()
-
-    if not incidents:
-        return [
-            IncidentResponse(
-                id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-                code="INC-042",
-                project_id=project_id or uuid.uuid4(),
-                stage_id=None,
-                stage_name="Выемка грунта котлована под фундамент",
-                zone_name="A-03 · Котлован",
-                camera_name="CAM-03",
-                title="Отсутствует обязательная техника: Экскаватор",
-                description="На этапе выемки грунта котлована за 30 сек не зафиксирован обязательный экскаватор. Нарушение регламента работ.",
-                severity=IncidentSeverity.ERROR,
-                discrepancy_type="MISSING_MANDATORY",
-                machinery_type="Экскаватор",
-                stage_probability=0.96,
-                status="pending",
-                observed_count=0,
-                frame_snapshot_url="/media/snapshots/inc_042.jpg",
-                snapshot_url="/media/snapshots/inc_042.jpg",
-                album_photos=[
-                    IncidentPhotoItem(
-                        url="/media/snapshots/inc_042.jpg",
-                        camera_name="CAM-03 · Котлован (основной ракурс)",
-                        is_primary=True,
-                    ),
-                    IncidentPhotoItem(
-                        url="/media/snapshots/inc_042_cam2.jpg",
-                        camera_name="CAM-01 · Въезд на стройплощадку",
-                        is_primary=False,
-                    ),
-                ],
-                created_at=datetime.now(),
-            ),
-            IncidentResponse(
-                id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
-                code="INC-043",
-                project_id=project_id or uuid.uuid4(),
-                stage_id=None,
-                stage_name="Выемка грунта котлована под фундамент",
-                zone_name="A-03 · Котлован",
-                camera_name="CAM-03",
-                title="Отсутствует рекомендованная техника: Погрузчик",
-                description="Рекомендованный погрузчик не зафиксирован в течение 30 сек. Рекомендуется привлечь технику для соблюдения темпа.",
-                severity=IncidentSeverity.WARNING,
-                discrepancy_type="MISSING_RECOMMENDED",
-                machinery_type="Погрузчик",
-                stage_probability=0.72,
-                status="pending",
-                observed_count=0,
-                frame_snapshot_url=None,
-                snapshot_url=None,
-                album_photos=[],
-                created_at=datetime.now(),
-            ),
-        ]
-
+    # An empty journal is a real answer: never substitute demonstration records.
     return [_incident_to_response(inc) for inc in incidents]
 
 
@@ -216,6 +162,7 @@ def create_incident(
     """Зарегистрировать нарушение с фиксацией фотоснимков со всех подключенных камер (альбом ошибки)."""
     code = f"INC-{uuid.uuid4().hex[:4].upper()}"
     now = datetime.now(UTC)
+    captured_at = (req.observed_at or now).isoformat()
     storage = get_storage()
 
     saved_album_photos: list[dict[str, Any]] = []
@@ -243,7 +190,7 @@ def create_incident(
                             "url": pub_url,
                             "camera_name": cam_name,
                             "is_primary": is_prim,
-                            "captured_at": now.isoformat(),
+                            "captured_at": captured_at,
                         }
                     )
                     if is_prim or primary_snapshot_url is None:
@@ -266,7 +213,7 @@ def create_incident(
                     "url": primary_snapshot_url,
                     "camera_name": req.camera_name or "Основная камера",
                     "is_primary": True,
-                    "captured_at": now.isoformat(),
+                    "captured_at": captured_at,
                 }
             )
         except Exception as e:
@@ -284,10 +231,9 @@ def create_incident(
     )
 
     target_project_id = req.project_id
-    if target_project_id:
-        proj = db.get(Project, target_project_id)
-        if not proj:
-            target_project_id = None
+    if target_project_id and not db.get(Project, target_project_id):
+        # Attaching the incident to some other object would mix data between workspaces.
+        raise HTTPException(status_code=404, detail="Объект для инцидента не найден")
     if not target_project_id:
         proj = db.scalars(select(Project)).first()
         if proj:
@@ -313,8 +259,8 @@ def create_incident(
         priority=priority,
         status=IncidentStatus.PENDING,
         dedup_key=f"{target_project_id}_{req.machinery_type}_{req.discrepancy_type}_{now.strftime('%Y%m%d%H%M%S')}",
-        first_seen_at=now,
-        last_seen_at=now,
+        first_seen_at=req.observed_at or now,
+        last_seen_at=req.observed_at or now,
         explanation={
             "snapshot_url": primary_snapshot_url,
             "album_photos": saved_album_photos,
@@ -323,6 +269,7 @@ def create_incident(
             "stage_name": req.stage_name,
             "description": req.description,
             "severity": req.severity.value if hasattr(req.severity, "value") else str(req.severity),
+            "observed_at": req.observed_at.isoformat() if req.observed_at else None,
         },
     )
     db.add(incident)
@@ -371,6 +318,9 @@ def update_incident_status(
     incident.status = new_status
     exp = dict(incident.explanation or {})
     exp["is_manual_override"] = True
+    exp["decided_at"] = datetime.now(UTC).isoformat()
+    comment = (data.comment or "").strip() or None
+    exp["operator_comment"] = comment
     incident.explanation = exp
 
     event = IncidentEvent(
@@ -378,7 +328,7 @@ def update_incident_status(
         event_type=IncidentEventType.STATUS_CHANGED,
         old_status=old_status,
         new_status=new_status,
-        comment=f"Ручная смена статуса: {old_status} -> {new_status}",
+        comment=comment or f"Ручная смена статуса: {old_status} -> {new_status}",
     )
     db.add(event)
     db.commit()

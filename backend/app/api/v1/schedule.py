@@ -247,54 +247,86 @@ def _find_stage(stage_id: str, db: DbSession) -> ScheduleTask | None:
     return stage
 
 
+STATUS_TO_PROB = {
+    "MANDATORY": 0.95,
+    "RECOMMENDED": 0.75,
+    "NEUTRAL": 0.40,
+    "UNCHARACTERISTIC": 0.05,
+    "ОБЯЗАТЕЛЬНАЯ": 0.95,
+    "РЕКОМЕНДОВАННАЯ": 0.75,
+    "ДОПУСТИМАЯ": 0.40,
+    "НЕ ДОПУСКАЕТСЯ": 0.05,
+}
+# "Не учитывается": stationary machinery (a tower crane mounted before the pit) or anything the
+# operator excludes from the check. It keeps its probability but takes no part in deviations.
+IGNORED_STATUSES = {"IGNORED", "НЕ УЧИТЫВАЕТСЯ"}
+
+
+def _classify(prob: float) -> tuple[str, str]:
+    if prob > 0.8:
+        return "MANDATORY", "Обязательная"
+    if prob >= 0.6:
+        return "RECOMMENDED", "Рекомендованная"
+    if prob < 0.15:
+        return "UNCHARACTERISTIC", "Не допускается"
+    return "NEUTRAL", "Допустимая"
+
+
+def _parse_override(value: object) -> tuple[str | None, float | None, int | None, int | None]:
+    """Override is either a status/probability, or {"status", "warn_after", "err_after"}."""
+    warn_after = err_after = None
+    if isinstance(value, dict):
+        warn_after = value.get("warn_after")
+        err_after = value.get("err_after")
+        value = value.get("status")
+    status: str | None = None
+    prob: float | None = None
+    if isinstance(value, str) and value.strip().upper() in IGNORED_STATUSES:
+        status = "IGNORED"
+    elif isinstance(value, str) and value.strip().upper() in STATUS_TO_PROB:
+        prob = STATUS_TO_PROB[value.strip().upper()]
+    elif value is not None:
+        try:
+            prob = float(value)
+        except (ValueError, TypeError):
+            prob = None
+    return (
+        status,
+        prob,
+        int(warn_after) if warn_after is not None else None,
+        int(err_after) if err_after is not None else None,
+    )
+
+
 def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbabilityResponse:
     matcher = StageMachineryService()
     stage_name = stage.name if stage else "Общестроительные работы"
     prob_profile = matcher.estimate_machinery_probabilities(stage_name)
     overrides = (stage.machinery_probabilities or {}) if stage else {}
 
-    status_to_prob = {
-        "MANDATORY": 0.95,
-        "RECOMMENDED": 0.75,
-        "NEUTRAL": 0.40,
-        "UNCHARACTERISTIC": 0.05,
-        "ОБЯЗАТЕЛЬНАЯ": 0.95,
-        "РЕКОМЕНДОВАННАЯ": 0.75,
-        "ДОПУСТИМАЯ": 0.40,
-        "НЕ ДОПУСКАЕТСЯ": 0.05,
-    }
-
     items: list[MachineryProbabilityItem] = []
-    # Map all 10 specialized classes
-    for cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
-        override_val = overrides.get(code) or overrides.get(raw_label) or overrides.get(label_ru)
-        if override_val is not None:
-            if isinstance(override_val, str) and override_val.strip().upper() in status_to_prob:
-                prob = status_to_prob[override_val.strip().upper()]
-            else:
-                try:
-                    prob = float(override_val)
-                except (ValueError, TypeError):
-                    prob = 0.5
+    for _cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
+        # Plan import stores the catalog profile under raw labels ("excavator"); that is the base.
+        stored = overrides.get(raw_label)
+        if isinstance(stored, (int, float)):
+            base_prob = float(stored)
         else:
-            # Match probability from StageMachineryService output
-            prob = prob_profile.probabilities.get(raw_label, 0.0)
-            if prob == 0.0:
-                prob = prob_profile.probabilities.get(label_ru.lower(), 0.0)
+            base_prob = prob_profile.probabilities.get(raw_label, 0.0)
+            if base_prob == 0.0:
+                base_prob = prob_profile.probabilities.get(label_ru.lower(), 0.0)
+        base_cls, _ = _classify(base_prob)
 
-        # Classification rule thresholds
-        if prob > 0.8:
-            cls = "MANDATORY"
-            level = "Обязательная"
-        elif prob >= 0.6:
-            cls = "RECOMMENDED"
-            level = "Рекомендованная"
-        elif prob < 0.15:
-            cls = "UNCHARACTERISTIC"
-            level = "Не допускается"
+        # Manual changes from the UI are stored under the machinery code (or the Russian name).
+        override_val = overrides.get(code) or overrides.get(label_ru)
+        status, prob, warn_after, err_after = _parse_override(override_val)
+        is_override = override_val is not None
+        if prob is None:
+            prob = base_prob
+
+        if status == "IGNORED":
+            cls, level = "IGNORED", "Не учитывается"
         else:
-            cls = "NEUTRAL"
-            level = "Допустимая"
+            cls, level = _classify(prob)
 
         items.append(
             MachineryProbabilityItem(
@@ -303,12 +335,16 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
                 probability=round(prob, 2),
                 classification=cls,
                 requirement_level=level,
+                base_probability=round(base_prob, 2),
+                base_classification=base_cls,
+                is_override=is_override,
+                warn_after_seconds=warn_after,
+                err_after_seconds=err_after,
             )
         )
 
-    # Sort items by probability descending
     items.sort(key=lambda x: x.probability, reverse=True)
-    top_machinery = [it.machinery_name_ru for it in items if it.probability >= 0.6]
+    top_machinery = [it.machinery_name_ru for it in items if it.probability >= 0.6 and it.classification != "IGNORED"]
 
     return StageProbabilityResponse(
         stage_id=stage.id if stage else uuid.uuid4(),
@@ -317,7 +353,7 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
         similarity_confidence=stage.catalog_similarity if (stage and stage.catalog_similarity is not None) else 0.95,
         probabilities=items,
         top_machinery=top_machinery,
-        has_custom_override=bool(overrides and len(overrides) > 0),
+        has_custom_override=any(it.is_override for it in items),
     )
 
 
@@ -346,7 +382,12 @@ def update_stage_probabilities(
         raise HTTPException(status_code=404, detail="Этап не найден")
 
     current_overrides = dict(stage.machinery_probabilities or {})
-    current_overrides.update(payload.overrides)
+    for key, value in payload.overrides.items():
+        # null resets one machine back to the catalog without touching the others
+        if value is None:
+            current_overrides.pop(key, None)
+        else:
+            current_overrides[key] = value
     stage.machinery_probabilities = current_overrides
     db.commit()
     db.refresh(stage)
