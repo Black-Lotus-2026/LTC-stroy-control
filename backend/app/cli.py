@@ -15,6 +15,7 @@ import sys
 
 from app.core.logging import setup_logging
 from app.db.session import session_scope
+from app.services.report_demo_data import seed_report_demo
 from app.services.work_catalog import import_work_catalog, parse_work_catalog
 
 logger = logging.getLogger("app.cli")
@@ -48,6 +49,16 @@ def cmd_import_catalog(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_seed_report_demo(_: argparse.Namespace) -> int:
+    """Создать mock-таймлайн и расписания для демонстрации отчётов."""
+    with session_scope() as db:
+        result = seed_report_demo(db)
+    logger.info("Демо-проект: %s", result.project_id)
+    logger.info("Создано записей журнала: %s", result.logs_created)
+    logger.info("Создано расписаний: %s", result.schedules_created)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="app.cli", description="Служебные команды сервиса «Строй-контроль»"
@@ -78,6 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Только разобрать файл и показать итог, ничего не записывая",
     )
     catalog.set_defaults(func=cmd_import_catalog)
+
+    report_demo = subparsers.add_parser(
+        "seed-report-demo",
+        help="Создать mock-логи CCTV/CV/VLC и расписания отчётов",
+    )
+    report_demo.set_defaults(func=cmd_seed_report_demo)
 
     return parser
 

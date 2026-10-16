@@ -9,7 +9,7 @@
 - Локальный пользователь: `management_demo`, пароль `management-demo-local`. Это публичные реквизиты тестовой fixture, не внешний аккаунт.
 - Объект: `MANAGEMENT-DEMO`, UUID `13ef06c8-2ef2-4761-9e16-fa6ac51b95e8`.
 - PostgreSQL 14: `127.0.0.1:55432`, база `management_demo`; кластер `var/management-test/postgres` в корне репозитория. Redis 7: Docker-контейнер `ltc-management-test-redis`, порт `56379`.
-- API и worker читают `backend/.env`. Сейчас `CELERY_EAGER=false`: задания действительно проходят Redis/Celery. Vite, API и worker оставлены запущенными; после завершения процессов их нужно запустить снова.
+- API и worker читают `backend/.env`. Сейчас `CELERY_EAGER=false`: задания действительно проходят Redis/Celery. Vite, API, worker и beat оставлены запущенными; после завершения процессов их нужно запустить снова.
 - Проверенный baseline run: `943f0312-3853-4ca9-b2c8-00749385d6bf`. Его полный ответ сохранён в [verified_deterministic_run.json](../data/demo_management/verified_deterministic_run.json). Это экспорт локальной карточки, не live LLM ответ.
 
 Из корня проекта, в отдельных терминалах:
@@ -122,3 +122,6 @@ cd backend
 Без ключа режим `llm` помечает роли `skipped/provider_unavailable`; режим `deterministic` вообще не обращается к провайдеру. Для резервного показа без Redis можно явно включить `CELERY_EAGER=true` и перезапустить API: это синхронный режим. Сохранённые результаты читаются без LLM, опрос не запускает генерацию повторно.
 
 Методика: [data/demo_management/README.md](../data/demo_management/README.md). Результаты и ограничения: [management-validation.md](management-validation.md).
+
+
+После объединения с PR #2 схема обновлена до `20261016_1300`. Для актуальных алертов и расписаний нужен beat; команда приведена выше. Новый narrator отчётов и SMTP остаются выключенными. Проверки и сохранность данных: [main-integration.md](main-integration.md).

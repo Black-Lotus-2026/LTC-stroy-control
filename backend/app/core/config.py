@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     # --- Часовой пояс проекта по умолчанию ---
     default_timezone: str = "Europe/Moscow"
 
+    # --- LLM-формулировки для отчётов ---
+    # Ключ не является полем Settings: ChatOpenAI читает OPENAI_API_KEY
+    # из окружения, а мы не рискуем вывести его при сериализации.
+    report_llm_enabled: bool = False
+    report_llm_model: str = "gpt-5.5"
+    report_llm_reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh"
+    ] = "low"
+    report_llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    report_llm_max_retries: int = Field(default=2, ge=0, le=5)
+
     # --- CORS: адреса, с которых ходит фронтенд ---
     cors_origins: list[str] = Field(
         default=[
@@ -82,6 +93,14 @@ class Settings(BaseSettings):
     # Период проверки и фиксации нарушений (в секундах).
     # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
     violation_evaluation_window_seconds: int = 30
+
+    # Optional SMTP delivery. In-app notifications work without these values.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str | None = None
+    smtp_starttls: bool = True
 
     @computed_field  # type: ignore[prop-decorator]
     @property

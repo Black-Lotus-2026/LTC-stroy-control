@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { type Incident, type IncidentStatus } from '../../data'
 import { type ProjectItem } from '../../api/stroyControlApi'
+import { incidentActions } from '../../domain/incidentWorkflow'
 import { incidentDateTime, incidentKind, isDeviation, isOpenIncident } from '../../domain/incidentPresentation'
 import { Icon, Status } from '../ui/Primitives'
 import { IncidentCostButton } from '../management/IncidentCost'
@@ -8,7 +9,6 @@ import './case-pages.css'
 
 const kindLabels = { error: 'Ошибка', warning: 'Предупреждение', info: 'Информация' }
 type KindFilter = 'all' | 'error' | 'warning' | 'info'
-const incidentStatuses: IncidentStatus[] = ['Ожидает обработки', 'Требует проверки', 'Подтверждено', 'В работе', 'Устранено', 'Проблемы нет', 'Ложное срабатывание']
 
 function EvidenceImage({ src, alt, contain = false }: { src?: string; alt: string; contain?: boolean }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
@@ -25,8 +25,9 @@ function KindBadge({ incident }: { incident: Incident }) {
 
 function CaseStatus({ incident, onChange }: { incident: Incident; onChange?: (id: string, status: IncidentStatus) => void }) {
   if (!isDeviation(incident)) return <Status tone="neutral">{incident.discrepancyType?.startsWith('STREAM_') ? 'Видеопоток' : 'Информация'}</Status>
-  if (!onChange) return <Status tone={isOpenIncident(incident) ? 'warning' : 'neutral'}>{incident.status}</Status>
-  return <select className="case-pages-status" aria-label={`Статус ${incident.id}`} value={incident.status} onChange={(e) => onChange(incident.id, e.target.value as IncidentStatus)}>{incidentStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select>
+  const actions = incidentActions(incident)
+  if (!onChange || !actions.length) return <Status tone={isOpenIncident(incident) ? 'warning' : 'neutral'}>{incident.verificationStatus === 'requested' ? 'Проверка запрошена' : incident.status}</Status>
+  return <select className="case-pages-status" aria-label={`Статус ${incident.id}`} value={incident.status} onChange={event => onChange(incident.id, event.target.value as IncidentStatus)}><option value={incident.status} disabled>{incident.status}</option>{actions.filter(status => status !== incident.status).map(status => <option key={status} value={status}>{status === 'Устранено' ? 'Исправлено — проверить' : status}</option>)}</select>
 }
 
 function CaseFilters({ query, onQuery, kind, onKind }: { query: string; onQuery: (value: string) => void; kind: KindFilter; onKind: (value: KindFilter) => void }) {

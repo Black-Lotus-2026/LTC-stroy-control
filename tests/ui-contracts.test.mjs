@@ -9,6 +9,7 @@ async function loadTypeScript(path) {
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)
 }
 const presentation = await loadTypeScript('../src/domain/incidentPresentation.ts')
+const workflow = await loadTypeScript('../src/domain/incidentWorkflow.ts')
 const observation = await loadTypeScript('../src/domain/observationScope.ts')
 const store = new Map()
 globalThis.localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value), removeItem: key => store.delete(key) }
@@ -122,4 +123,17 @@ test('schedule imports carry authentication without inventing successful stages'
     return new Response(JSON.stringify({detail:'Import unavailable'}),{status:503})
   }
   await assert.rejects(api.uploadScheduleFile(new File(['stage,start,end'], 'plan.csv'), projectId), /Import unavailable/)
+})
+
+
+test('incident actions follow assignment and verification from merged alert lifecycle', () => {
+  const user = {id:'a',username:'owner',role:'manager'}
+  assert.equal(workflow.canChangeIncident({assignedUserId:'b'},user,'owner'),false)
+  assert.equal(workflow.canChangeIncident({assignedUserId:'a'},user,'other'),true)
+  assert.equal(workflow.canChangeIncident({},user,'owner'),true)
+  assert.equal(workflow.canChangeIncident({assignedUserId:'a'},{...user,role:'viewer'},'owner'),false)
+  assert.deepEqual(workflow.incidentActions({status:'Подтверждено',verificationStatus:'requested'}),[])
+  assert.deepEqual(workflow.incidentActions({status:'Устранено'}),[])
+  assert.equal(workflow.incidentActions({status:'В работе',canDismiss:false}).includes('Проблемы нет'),false)
+  assert.equal(workflow.incidentActions({status:'В работе',canDismiss:true}).includes('Проблемы нет'),true)
 })

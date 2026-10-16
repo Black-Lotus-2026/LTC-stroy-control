@@ -1,5 +1,6 @@
 import productLogo from './assets/stroy-control-logo.png'
 import { observationScope, upsertIncident } from './domain/observationScope'
+import { canChangeIncident } from './domain/incidentWorkflow'
 import { filterIncidents } from './domain/incidentPresentation'
 import { Icon, Status } from './components/ui/Primitives'
 import { getEffectiveStageRules } from './domain/stageRules'
@@ -50,7 +51,16 @@ import {
   toRussianMachineryName,
   cleanViolationText,
   fetchStageProbabilities,
+  type IncidentAlertItem,
+  type AlertNotificationItem,
+  type AdminRecipient,
+  fetchAlerts,
+  markAlertRead,
+  fetchAdminRecipients,
+  updateProjectAlertSettings,
+  updateMyEmail,
 } from './api/stroyControlApi'
+import { AlertCenter } from './components/AlertCenter'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'management', label: 'Отклонения', icon: 'alert' },
@@ -59,6 +69,7 @@ const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'progress', label: 'График', icon: 'progress' },
   { id: 'analytics', label: 'Правила контроля', icon: 'chart' },
   { id: 'reports', label: 'Отчёты', icon: 'file' },
+  { id: 'alerts', label: 'Задачи', icon: 'bell' },
   { id: 'settings', label: 'Настройки', icon: 'settings' },
 ]
 
@@ -69,6 +80,7 @@ const titles: Record<PageKey, [string, string]> = {
   progress: ['График', 'Календарный график СМР и контроль сроков (Гант)'],
   analytics: ['Правила контроля', 'Вероятностные профили спецтехники по этапам СМР'],
   reports: ['Отчёты', 'Сводка нарушений за смену и контроль регламентов'],
+  alerts: ['Задачи', 'Задачи ответственным, сроки проверки и эскалации'],
   settings: ['Настройки', 'Объекты, стройплощадки, камеры и правила'],
 }
 
@@ -550,6 +562,10 @@ function Settings({
   onDeleteCamera,
   violationWindowSeconds = 30,
   onUpdateViolationWindow,
+  currentUser,
+  adminRecipients,
+  onSaveAlertSettings,
+  onSaveEmail,
   toast,
 }: {
   activeProject?: ProjectItem
@@ -569,6 +585,10 @@ function Settings({
   onDeleteCamera: (camera: CameraItem) => void
   violationWindowSeconds?: number
   onUpdateViolationWindow?: (seconds: number) => Promise<void>
+  currentUser: UserProfile | null
+  adminRecipients: AdminRecipient[]
+  onSaveAlertSettings: (projectId: string, data: { owner_username: string | null; alert_error_deadline_minutes: number; alert_warning_deadline_minutes: number; escalation_user_id: string | null }) => Promise<void>
+  onSaveEmail: (email: string | null) => Promise<void>
   toast: (s: string) => void
 }) {
   const [activeTab, setActiveTab] = useState<'general' | 'zones' | 'cameras'>('general')
@@ -584,10 +604,22 @@ function Settings({
   const [windowInput, setWindowInput] = useState<number>(violationWindowSeconds)
   const [isSavingWindow, setIsSavingWindow] = useState(false)
   const projectDirty = name !== (activeProject?.name || '') || code !== (activeProject?.code || '') || address !== (activeProject?.address || '') || objectKind !== (activeProject?.object_kind || 'Жильё')
+  const [alertOwner, setAlertOwner] = useState(activeProject?.owner_username || '')
+  const [alertChief, setAlertChief] = useState(activeProject?.escalation_user_id || '')
+  const [errorMinutes, setErrorMinutes] = useState(activeProject?.alert_error_deadline_minutes || 120)
+  const [warningMinutes, setWarningMinutes] = useState(activeProject?.alert_warning_deadline_minutes || 1440)
+  const [emailInput, setEmailInput] = useState(currentUser?.email || '')
+  const [isSavingAlerts, setIsSavingAlerts] = useState(false)
+  const [isSavingEmail, setIsSavingEmail] = useState(false)
+  const alertSettingsDirty = alertOwner !== (activeProject?.owner_username || '') || alertChief !== (activeProject?.escalation_user_id || '') || errorMinutes !== (activeProject?.alert_error_deadline_minutes || 120) || warningMinutes !== (activeProject?.alert_warning_deadline_minutes || 1440)
 
   useEffect(() => {
     setWindowInput(violationWindowSeconds)
   }, [violationWindowSeconds])
+
+  useEffect(() => {
+    setEmailInput(currentUser?.email || '')
+  }, [currentUser?.email])
 
   // Synchronize when activeProject changes
   useEffect(() => {
@@ -595,7 +627,11 @@ function Settings({
     setCode(activeProject?.code || '')
     setAddress(activeProject?.address || '')
     setObjectKind(activeProject?.object_kind || 'Жильё')
-  }, [activeProject?.id])
+    setAlertOwner(activeProject?.owner_username || '')
+    setAlertChief(activeProject?.escalation_user_id || '')
+    setErrorMinutes(activeProject?.alert_error_deadline_minutes || 120)
+    setWarningMinutes(activeProject?.alert_warning_deadline_minutes || 1440)
+  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes])
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -736,6 +772,7 @@ function Settings({
                       type="number"
                       min={5}
                       max={600}
+                      disabled={currentUser?.role !== 'admin'}
                       value={windowInput}
                       onChange={(e) => setWindowInput(parseInt(e.target.value, 10) || 30)}
                       style={{ width: '100%', height: '36px' }}
@@ -744,7 +781,7 @@ function Settings({
                   <button
                     type="button"
                     className="button"
-                    disabled={isSavingWindow || windowInput === violationWindowSeconds || windowInput < 5 || windowInput > 600}
+                    disabled={currentUser?.role !== 'admin' || isSavingWindow || windowInput === violationWindowSeconds || windowInput < 5 || windowInput > 600}
                     style={{ height: '36px', alignSelf: 'flex-end', whiteSpace: 'nowrap' }}
                     onClick={async () => {
                       if (!onUpdateViolationWindow) return
@@ -761,6 +798,66 @@ function Settings({
                 </div>
               </div>
             </div>
+
+            <details className="alert-settings-card"><summary>Уведомления и сроки реакции</summary>
+              <p>Ответственный получает задачу; после срока система запрашивает повторную проверку.</p>
+              <div className="form-grid">
+                <label>
+                  Ответственный за объект
+                  <input value={alertOwner} disabled={currentUser?.role !== 'admin'} onChange={(e) => setAlertOwner(e.target.value)} placeholder="Логин пользователя" />
+                </label>
+                <label>
+                  Руководитель для эскалации
+                  <select value={alertChief} disabled={currentUser?.role !== 'admin'} onChange={(e) => setAlertChief(e.target.value)}>
+                    <option value="">Первый активный администратор</option>
+                    {adminRecipients.map((admin) => <option key={admin.id} value={admin.id}>{admin.name} ({admin.username})</option>)}
+                  </select>
+                </label>
+                <label>
+                  Критическое отклонение, мин
+                  <input type="number" min={1} max={10080} value={errorMinutes} onChange={(e) => setErrorMinutes(Number(e.target.value))} />
+                </label>
+                <label>
+                  Предупреждение, мин
+                  <input type="number" min={1} max={43200} value={warningMinutes} onChange={(e) => setWarningMinutes(Number(e.target.value))} />
+                </label>
+              </div>
+              <button
+                className="button primary"
+                disabled={!activeProject || isSavingAlerts || !alertSettingsDirty || errorMinutes < 1 || errorMinutes > 10080 || warningMinutes < 1 || warningMinutes > 43200}
+                onClick={async () => {
+                  if (!activeProject) return
+                  setIsSavingAlerts(true)
+                  try {
+                    await onSaveAlertSettings(activeProject.id, {
+                      owner_username: alertOwner.trim() || null,
+                      escalation_user_id: alertChief || null,
+                      alert_error_deadline_minutes: errorMinutes,
+                      alert_warning_deadline_minutes: warningMinutes,
+                    })
+                  } catch (error) {
+                    toast(error instanceof Error ? error.message : 'Не удалось сохранить настройки алертов')
+                  } finally {
+                    setIsSavingAlerts(false)
+                  }
+                }}
+              >
+                {isSavingAlerts ? 'Сохранение…' : 'Сохранить сроки'}
+              </button>
+              <div className="alert-email-settings">
+                <label>
+                  Мой email для копии алертов
+                  <input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="name@example.com" />
+                </label>
+                <button className="button" disabled={isSavingEmail || emailInput.trim() === (currentUser?.email || '')} onClick={async () => {
+                  setIsSavingEmail(true)
+                  try { await onSaveEmail(emailInput.trim() || null) }
+                  catch (error) { toast(error instanceof Error ? error.message : 'Не удалось сохранить email') }
+                  finally { setIsSavingEmail(false) }
+                }}>Сохранить email</button>
+                <small>Письма отправляются, если на сервере настроен SMTP. Уведомления доступны в разделе «Задачи».</small>
+              </div>
+            </details>
           </>
         )}
 
@@ -888,6 +985,45 @@ function mapApiStatus(rawStatus?: string | null): IncidentStatus {
   return 'Ожидает обработки'
 }
 
+function mapApiIncident(item: IncidentAlertItem): Incident {
+  const snapshot = normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url)
+  return {
+    id: item.code,
+    apiId: item.id,
+    assignedUserId: item.assigned_user_id,
+    uuid: item.id,
+    projectId: item.project_id,
+    type: item.discrepancy_type?.startsWith('STREAM_') ? 'Видеопоток' : 'Техника',
+    title: item.title || 'Нарушение регламента',
+    zoneId: item.zone_id,
+    createdAt: item.first_seen_at || item.created_at,
+    zone: item.zone_name || 'Без привязки к площадке',
+    camera: item.camera_name || 'Камера не указана',
+    time: item.first_seen_at || item.created_at ? new Date((item.first_seen_at || item.created_at)!).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'}) : 'Время не указано',
+    age: 'Недавно',
+    priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
+    status: mapApiStatus(item.status),
+    assignee: item.assignee_name || 'Не назначен',
+    sla: item.sla_deadline ? new Date(item.sla_deadline).toLocaleString('ru-RU') : '—',
+    slaDeadline: item.sla_deadline,
+    verificationStatus: item.verification_status,
+    escalatedAt: item.escalated_at,
+    confidence: Math.round((item.confidence || 0) * 100),
+    note: item.description || '',
+    severity: item.severity,
+    snapshotUrl: snapshot,
+    albumPhotos: item.album_photos?.map((p) => ({
+      url: normalizeSnapshotUrl(p.url) || p.url,
+      cameraName: p.camera_name,
+      isPrimary: p.is_primary,
+      capturedAt: p.captured_at,
+    })) || [],
+    stageName: item.stage_name || undefined,
+    discrepancyType: item.discrepancy_type,
+    manual_override: Boolean(item.manual_override),
+  }
+}
+
 export default function App() {
   const [page, setPage] = useState<PageKey>('management')
   const [collapsed, setCollapsed] = useState(false)
@@ -988,6 +1124,14 @@ export default function App() {
 
   // User Authentication State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [alertsList, setAlertsList] = useState<AlertNotificationItem[]>([])
+  const [alertsLoading, setAlertsLoading] = useState(false)
+  const [alertsError, setAlertsError] = useState('')
+  const incidentsRequest = useRef(0)
+  const alertsRequest = useRef(0)
+  const activeScope = useRef('')
+  activeScope.current = `${currentUser?.id}:${activeProjectId}`
+  const [adminRecipients, setAdminRecipients] = useState<AdminRecipient[]>([])
   const [isAuthChecking, setIsAuthChecking] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
@@ -1017,63 +1161,63 @@ export default function App() {
 
   }, [])
 
+  const refreshIncidents = useCallback(async () => {
+    if (!currentUser || !activeProjectId) return
+    const scope = `${currentUser.id}:${activeProjectId}`
+    const request = ++incidentsRequest.current
+    try {
+      const items = await fetchIncidents(activeProjectId)
+      if (request === incidentsRequest.current && activeScope.current === scope) {
+        setIncidentsList(items.map(mapApiIncident)); setIncidentsError('')
+      }
+    } catch (error) {
+      if (request === incidentsRequest.current && activeScope.current === scope) setIncidentsError('Не удалось обновить события')
+      throw error
+    } finally {
+      if (request === incidentsRequest.current && activeScope.current === scope) setIncidentsLoading(false)
+    }
+  }, [currentUser, activeProjectId])
+
+  const refreshAlerts = useCallback(async () => {
+    if (!currentUser) return
+    const userId = currentUser.id
+    const request = ++alertsRequest.current
+    try {
+      const items = await fetchAlerts()
+      if (request === alertsRequest.current && activeScope.current.startsWith(`${userId}:`)) { setAlertsList(items); setAlertsError('') }
+    } catch (error) {
+      if (request === alertsRequest.current) setAlertsError('Не удалось загрузить уведомления')
+      throw error
+    } finally {
+      if (request === alertsRequest.current) setAlertsLoading(false)
+    }
+  }, [currentUser])
+
   useEffect(() => {
-    if (!currentUser) { setIncidentsList([]); return }
-    let cancelled = false
+    setIncidentsList([]); setIncidentsError('')
+    if (!currentUser || !activeProjectId) { setIncidentsLoading(false); return }
     setIncidentsLoading(true)
-    setIncidentsError('')
-    fetchIncidents()
-      .then((apiIncs) => {
-        if (apiIncs) {
-          const mapped: Incident[] = apiIncs.map((item) => {
-            return {
-              id: item.code,
-              uuid: item.id,
-              projectId: item.project_id,
-              zoneId: item.zone_id,
-              createdAt: item.first_seen_at || item.created_at,
-              type: 'Техника',
-              title: item.title || 'Нарушение регламента',
-              zone: item.zone_name || 'Без привязки к площадке',
-              camera: item.camera_name || 'Камера не указана',
-              time: item.first_seen_at || item.created_at ? new Date((item.first_seen_at || item.created_at)!).toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'}) : 'Время не указано',
-              age: 'Недавно',
-              priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
-              status: mapApiStatus(item.status),
-              assignee: item.assignee_name || 'Не назначен',
-              sla: 'Не задан',
-              confidence: Math.round((item.confidence || 0) * 100),
-              note: item.description || '',
-              severity: item.severity,
-              snapshotUrl: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url),
-              albumPhotos: item.album_photos && item.album_photos.length > 0
-                ? item.album_photos.map((p) => ({
-                    url: normalizeSnapshotUrl(p.url) || p.url,
-                    cameraName: p.camera_name,
-                    isPrimary: p.is_primary,
-                    capturedAt: p.captured_at,
-                  }))
-                : (item.frame_snapshot_url || item.snapshot_url)
-                ? [
-                    {
-                      url: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url) || '',
-                      cameraName: item.camera_name || 'Камера 1',
-                      isPrimary: true,
-                    },
-                  ]
-                : [],
-              stageName: item.stage_name || undefined,
-              discrepancyType: item.discrepancy_type,
-              manual_override: Boolean(item.manual_override),
-            }
-          })
-          if (!cancelled) setIncidentsList(mapped)
-        }
-      })
-      .catch(() => { if (!cancelled) { setIncidentsList([]); setIncidentsError('Не удалось загрузить события') } })
-      .finally(() => { if (!cancelled) setIncidentsLoading(false) })
+    void refreshIncidents().catch(() => {})
+    const timer = window.setInterval(() => { void refreshIncidents().catch(() => {}) }, 15000)
+    return () => { incidentsRequest.current += 1; window.clearInterval(timer) }
+  }, [currentUser, activeProjectId, refreshIncidents, incidentsRevision])
+
+  useEffect(() => {
+    setAlertsList([]); setAlertsError('')
+    if (!currentUser) return
+    setAlertsLoading(true)
+    void refreshAlerts().catch(() => {})
+    const timer = window.setInterval(() => { void refreshAlerts().catch(() => {}) }, 15000)
+    return () => { alertsRequest.current += 1; window.clearInterval(timer) }
+  }, [currentUser, refreshAlerts])
+
+  useEffect(() => {
+    let cancelled = false
+    if (currentUser?.role === 'admin') {
+      fetchAdminRecipients().then(items => { if (!cancelled) setAdminRecipients(items) }).catch(() => { if (!cancelled) setAdminRecipients([]) })
+    } else setAdminRecipients([])
     return () => { cancelled = true }
-  }, [currentUser, incidentsRevision])
+  }, [currentUser])
 
   const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -1198,10 +1342,10 @@ export default function App() {
     if (!currentUser) return []
     if (currentUser.role === 'admin') return nav
     if (currentUser.role === 'viewer') {
-      return nav.filter((n) => ['management', 'monitoring', 'archive', 'reports'].includes(n.id))
+      return nav.filter((n) => ['management', 'monitoring', 'archive', 'reports', 'alerts'].includes(n.id))
     }
     if (currentUser.role === 'inspector') {
-      return nav.filter((n) => ['management', 'monitoring', 'archive', 'progress', 'reports'].includes(n.id))
+      return nav.filter((n) => ['management', 'monitoring', 'archive', 'progress', 'reports', 'alerts'].includes(n.id))
     }
     return nav
   }, [currentUser])
@@ -1241,7 +1385,7 @@ export default function App() {
   }, [stages, stageOverridesVersion])
 
   const activeProject = userVisibleProjects.find(project => project.id === activeProjectId)
-  const scopedIncidents = useMemo(() => filterIncidents(incidentsList, activeProjectId || undefined, activeZoneId), [incidentsList, activeProjectId, activeZoneId])
+  const scopedIncidents = useMemo(() => filterIncidents(incidentsList, activeProjectId || undefined, activeZoneId).map(incident => ({ ...incident, canUpdate: canChangeIncident(incident, currentUser, activeProject?.owner_username), canDismiss: currentUser?.role === 'admin' })), [incidentsList, activeProjectId, activeZoneId, currentUser, activeProject?.owner_username])
 
   // Handle Create Project
   const handleCreateProjectSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -1453,13 +1597,50 @@ export default function App() {
   // Handle manual incident status change ("Ожидает обработки", "Проблемы нет", "Подтверждено")
   const handleIncidentStatusChange = async (incidentId: string, newStatus: IncidentStatus) => {
     const incident = incidentsList.find((item) => item.id === incidentId)
-    if (!incident?.uuid) { toast('Событие не сохранено: изменение статуса недоступно'); return }
+    if (!incident?.uuid) {
+      toast('Инцидент ещё не сохранён на сервере')
+      return
+    }
     try {
-      const saved = await updateIncidentStatus(incident.uuid, newStatus)
-      setIncidentsList((prev) => prev.map((item) => item.uuid === saved.id
-        ? { ...item, status: mapApiStatus(saved.status), manual_override: true } : item))
-      toast('Статус сохранён сервером')
-    } catch { toast('Не удалось сохранить статус. Повторите попытку.') }
+      const result = await updateIncidentStatus(incident.uuid, newStatus)
+      setIncidentsList((prev) => prev.map((item) => item.id === incidentId ? mapApiIncident(result) : item))
+      toast(newStatus === 'Устранено' ? 'Повторная проверка запрошена' : `Статус: «${newStatus}»`)
+      refreshAlerts().catch(() => {})
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Не удалось изменить статус')
+    }
+  }
+
+  const handleAlertRead = (alert: AlertNotificationItem) => {
+    if (alert.read_at) return
+    markAlertRead(alert.id)
+      .then(() => setAlertsList((prev) => prev.map((item) => item.id === alert.id ? { ...item, read_at: new Date().toISOString() } : item)))
+      .catch(() => toast('Не удалось отметить алерт прочитанным'))
+  }
+
+  const handleAlertAction = async (alert: AlertNotificationItem, status: string) => {
+    try {
+      await updateIncidentStatus(alert.incident_id, status)
+      await Promise.all([refreshAlerts(), refreshIncidents()])
+      toast(status === 'resolved' ? 'Повторная проверка запрошена' : 'Статус инцидента обновлён')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Не удалось обновить инцидент')
+    }
+  }
+
+  const handleAlertSettingsSave = async (
+    projectId: string,
+    data: { owner_username: string | null; alert_error_deadline_minutes: number; alert_warning_deadline_minutes: number; escalation_user_id: string | null }
+  ) => {
+    const saved = await updateProjectAlertSettings(projectId, data)
+    setProjectsList((prev) => prev.map((project) => project.id === projectId ? { ...project, ...saved } : project))
+    toast('Настройки алертов сохранены')
+  }
+
+  const handleEmailSave = async (email: string | null) => {
+    const user = await updateMyEmail(email)
+    setCurrentUser(user)
+    toast('Email для уведомлений сохранён')
   }
 
   // Reset detection observations when video or camera switches
@@ -1535,7 +1716,7 @@ export default function App() {
         discrepancy_type: 'STREAM_ONLINE',
         zone_name: zoneName,
         camera_name: camName,
-      }).then((saved) => setIncidentsList(prev => upsertIncident(prev, { ...newIncident, id: saved.code, uuid: saved.id, projectId: saved.project_id, zoneId: saved.zone_id, createdAt: saved.first_seen_at || saved.created_at, status: mapApiStatus(saved.status), assignee: saved.assignee_name || 'Не назначен' }, newId))).catch(() => toast('Не удалось сохранить событие видеопотока'))
+      }).then((saved) => setIncidentsList(prev => upsertIncident(prev, { ...newIncident, id: saved.code, uuid: saved.id, apiId: saved.id, assignedUserId: saved.assigned_user_id, slaDeadline: saved.sla_deadline, verificationStatus: saved.verification_status, escalatedAt: saved.escalated_at, projectId: saved.project_id, zoneId: saved.zone_id, createdAt: saved.first_seen_at || saved.created_at, status: mapApiStatus(saved.status), assignee: saved.assignee_name || 'Не назначен' }, newId))).catch(() => toast('Не удалось сохранить событие видеопотока'))
     } else if (prevState === 'ONLINE' && currentState === 'OFFLINE') {
       streamStartTimeRef.current = null
       detectedLabelsInWindowRef.current.clear()
@@ -1574,7 +1755,7 @@ export default function App() {
         discrepancy_type: 'STREAM_LOST',
         zone_name: zoneName,
         camera_name: camName,
-      }).then((saved) => setIncidentsList(prev => upsertIncident(prev, { ...newIncident, id: saved.code, uuid: saved.id, projectId: saved.project_id, zoneId: saved.zone_id, createdAt: saved.first_seen_at || saved.created_at, status: mapApiStatus(saved.status), assignee: saved.assignee_name || 'Не назначен' }, newId))).catch(() => toast('Не удалось сохранить событие видеопотока'))
+      }).then((saved) => setIncidentsList(prev => upsertIncident(prev, { ...newIncident, id: saved.code, uuid: saved.id, apiId: saved.id, assignedUserId: saved.assigned_user_id, slaDeadline: saved.sla_deadline, verificationStatus: saved.verification_status, escalatedAt: saved.escalated_at, projectId: saved.project_id, zoneId: saved.zone_id, createdAt: saved.first_seen_at || saved.created_at, status: mapApiStatus(saved.status), assignee: saved.assignee_name || 'Не назначен' }, newId))).catch(() => toast('Не удалось сохранить событие видеопотока'))
     }
   }, [page, isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, toast])
 
@@ -1799,6 +1980,7 @@ export default function App() {
           album_snapshots: albumPhotos.map((p) => ({
             snapshot_base64: p.url,
             camera_name: p.cameraName,
+            is_primary: p.isPrimary,
           })),
         })
           .then((saved) => {
@@ -1812,13 +1994,14 @@ export default function App() {
               capturedAt: p.captured_at,
             }))
             setIncidentsList(prev => upsertIncident(prev, {
-              ...newIncident, id: saved.code, uuid: saved.id, projectId: saved.project_id,
+              ...newIncident, id: saved.code, uuid: saved.id, apiId: saved.id, assignedUserId: saved.assigned_user_id, slaDeadline: saved.sla_deadline, verificationStatus: saved.verification_status, escalatedAt: saved.escalated_at, projectId: saved.project_id,
               zoneId: saved.zone_id, createdAt: saved.first_seen_at || saved.created_at,
               status: mapApiStatus(saved.status), manual_override: Boolean(saved.manual_override),
               assignee: saved.assignee_name || 'Не назначен',
               snapshotUrl: serverUrl || newIncident.snapshotUrl,
               albumPhotos: serverAlbum?.length ? serverAlbum : newIncident.albumPhotos,
             }, newId))
+            void refreshAlerts().catch(() => {})
           })
           .catch(() => { setActiveViolationAlert(previous => previous?.id === newId ? null : previous); toast('Не удалось сохранить отклонение. Проверьте подключение.') })
       }
@@ -1869,6 +2052,7 @@ export default function App() {
       isStreamOnline,
       violationWindowSeconds,
       stages,
+      refreshAlerts,
       stageOverridesVersion,
       confirmedRuleStageIds,
       currentUser,
@@ -1878,8 +2062,9 @@ export default function App() {
       selectedCameraId,
       uploadedVideoUrl,
       uploadedVideoName,
-      videoTimestamp,
       activeProjectId,
+      refreshAlerts,
+      videoTimestamp,
       toast,
     ]
   )
@@ -1978,6 +2163,26 @@ export default function App() {
             toast={toast}
           />
         )
+      case 'alerts':
+        return (
+          <AlertCenter
+            key={currentUser?.id}
+            error={alertsError}
+            onRetry={() => { setAlertsLoading(true); void refreshAlerts().catch(() => {}) }}
+            canAct={currentUser?.role !== 'viewer'}
+            canOpen={alert => userVisibleProjects.some(project => project.id === alert.project_id)}
+            alerts={alertsList}
+            loading={alertsLoading}
+            onRead={handleAlertRead}
+            onAction={handleAlertAction}
+            onOpen={(alert) => {
+              setActiveProjectId(alert.project_id)
+              setActiveZoneId('all')
+              setHighlightedIncidentId(alert.incident_code)
+              setPage('reports')
+            }}
+          />
+        )
       case 'settings':
         return (
           <Settings
@@ -2007,6 +2212,10 @@ export default function App() {
             onDeleteCamera={handleDeleteCamera}
             violationWindowSeconds={violationWindowSeconds}
             onUpdateViolationWindow={handleUpdateViolationWindow}
+            currentUser={currentUser}
+            adminRecipients={adminRecipients}
+            onSaveAlertSettings={handleAlertSettingsSave}
+            onSaveEmail={handleEmailSave}
             toast={toast}
           />
         )
@@ -2026,6 +2235,11 @@ export default function App() {
     videoTimestamp,
     activeProjectId,
     incidentsList,
+    alertsList,
+    alertsLoading,
+    alertsError,
+    adminRecipients,
+    currentUser,
     violationWindowSeconds,
     highlightedIncidentId,
     handleFrameAnalysis,
@@ -2225,7 +2439,7 @@ export default function App() {
             onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon name={item.icon}/>{(!collapsed || mobileNav) && <span>{item.label}</span>}</button>)}</nav>
         <div className="sidebar-foot">
           <details className="shell-secondary"><summary aria-label="Дополнительно" title={collapsed ? 'Дополнительно' : undefined}><Icon name="layers" size={18}/>{(!collapsed || mobileNav) && <span>Дополнительно</span>}</summary>
-            <nav aria-label="Дополнительные разделы">{allowedNav.filter(item => ['archive','analytics'].includes(item.id)).map(item => <button key={item.id} aria-label={item.label} className={page === item.id ? 'active' : ''}
+            <nav aria-label="Дополнительные разделы">{allowedNav.filter(item => ['archive','analytics','alerts'].includes(item.id)).map(item => <button key={item.id} aria-label={item.label} className={page === item.id ? 'active' : ''}
               onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon name={item.icon}/>{(!collapsed || mobileNav) && <span>{item.label}</span>}</button>)}</nav>
           </details>
           {allowedNav.some(item => item.id === 'settings') && <button className={`shell-settings${page === 'settings' ? ' active' : ''}`} aria-label="Настройки" onClick={() => { setPage('settings'); setMobileNav(false) }}><Icon name="settings"/>{(!collapsed || mobileNav) && <span>Настройки</span>}</button>}
@@ -2245,13 +2459,14 @@ export default function App() {
             <option value="all">Все площадки</option>{activeZones.map(zone => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
           </select></label>}
           <div className="topbar-spacer"/>
+          <button className="shell-alert-bell" aria-label={`Уведомления: ${alertsList.filter(item => !item.read_at).length} новых`} title="Задачи и уведомления" onClick={() => setPage('alerts')}><Icon name="bell" size={18}/>{alertsList.some(item => !item.read_at) && <span className="shell-alert-dot"/>}</button>
           <div className="shell-user"><button className="avatar shell-avatar" aria-label="Меню пользователя" aria-expanded={isUserMenuOpen} title={currentUser.username} onClick={() => setIsUserMenuOpen(value => !value)}>{currentUser.username.slice(0,2).toUpperCase()}</button>
             {isUserMenuOpen && <div className="shell-user-menu"><strong>{currentUser.name || currentUser.username}</strong><small>{{ admin:'Администратор', manager:'Руководитель', inspector:'Инспектор', viewer:'Наблюдатель' }[currentUser.role] || currentUser.role}</small><button className="button" onClick={handleLogout}>Выйти</button></div>}
           </div>
         </header>
         {page !== 'management' && <div className="page-heading"><h1>{title[0]}</h1></div>}
         <div className="page-content">
-          {projectsError ? <div className="workspace-state" role="alert"><h2>{projectsError}</h2><button className="button" onClick={() => void loadProjectsForUser(currentUser)}>Повторить</button></div>
+          {page === 'alerts' ? pageBody : projectsError ? <div className="workspace-state" role="alert"><h2>{projectsError}</h2><button className="button" onClick={() => void loadProjectsForUser(currentUser)}>Повторить</button></div>
             : projectsLoading ? <div className="workspace-state" role="status">Загрузка объектов…</div>
             : !activeProject ? <div className="workspace-state"><h2>Добавьте первый объект</h2>{allowedNav.some(item => item.id === 'settings') ? <button className="button primary" onClick={() => setIsCreateProjectOpen(true)}>Создать объект</button> : <p>Обратитесь к владельцу рабочей области.</p>}</div>
             : <>

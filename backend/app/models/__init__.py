@@ -17,13 +17,20 @@ from app.models.enums import (
     IncidentStatus,
     IncidentType,
     ObjectCategory,
+    ObservationCategory,
+    ObservationSeverity,
+    ObservationSource,
     PPEStatus,
     RejectReason,
+    ReportPeriod,
+    ReportScheduleFrequency,
+    ReportStatus,
     RuleKind,
     ScheduleTaskStatus,
     UserRole,
     ZoneRiskLevel,
 )
+from app.models.alert import AlertNotification
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.project import (
@@ -34,6 +41,7 @@ from app.models.project import (
     Zone,
 )
 from app.models.reference import ObjectClass, WorkType
+from app.models.report import GeneratedReport, ObservationLog, ReportSchedule
 from app.models.rules import CostRate, RuleSet, WorkRequirement
 from app.models.schedule import ScheduleTask
 from app.models.user import User
@@ -64,8 +72,13 @@ __all__ = [
     "Incident",
     "IncidentEvent",
     "IncidentEvidence",
+    "AlertNotification",
     "VideoAsset",
     "User",
+    # Временная шкала и отчёты
+    "ObservationLog",
+    "ReportSchedule",
+    "GeneratedReport",
     # Перечисления
     "AnalysisStatus",
     "CameraStatus",
@@ -78,8 +91,14 @@ __all__ = [
     "IncidentStatus",
     "IncidentType",
     "ObjectCategory",
+    "ObservationCategory",
+    "ObservationSeverity",
+    "ObservationSource",
     "PPEStatus",
     "RejectReason",
+    "ReportPeriod",
+    "ReportScheduleFrequency",
+    "ReportStatus",
     "RuleKind",
     "ScheduleTaskStatus",
     "UserRole",

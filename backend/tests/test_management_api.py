@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_current_user
+from app.api.v1.alerts import router as alerts_router
 from app.api.v1.incidents import router as incident_router
 from app.api.v1.management import router
 from app.api.v1.schedule import router as schedule_router
@@ -42,6 +43,7 @@ from app.models import (
     Zone,
 )
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
+from app.services.alert_service import assign_initial_alert
 from app.services.management.agents.provider import OpenRouterProvider
 from app.services.management.demo import AS_OF, make_demo_snapshot
 from app.services.management.orchestrator import execute_run
@@ -191,6 +193,7 @@ def api(monkeypatch):
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.include_router(incident_router, prefix="/api/v1")
+    app.include_router(alerts_router, prefix="/api/v1")
     app.include_router(schedule_router, prefix="/api/v1")
 
     def database():
@@ -931,3 +934,34 @@ def test_schedule_clear_is_scoped_and_viewer_cannot_write(api):
         api.client.get(f"/api/v1/schedule/stages/{own_id}/probabilities").status_code
         == 200
     )
+
+
+def test_merged_alert_verification_keeps_case_cost_and_notification_scope(api):
+    saved = start(api)
+    incident_id = saved["incident_id"]
+    curve_url = f"/api/v1/incidents/{incident_id}/inaction-cost"
+    before = api.client.get(curve_url).json()
+    with api.factory() as db:
+        incident = db.get(Incident, UUID(incident_id))
+        project = db.get(Project, incident.project_id)
+        assign_initial_alert(db, incident, project)
+        db.commit()
+    inbox = api.client.get("/api/v1/alerts")
+    assert inbox.status_code == 200
+    alert = inbox.json()[0]
+    assert alert["incident_id"] == incident_id
+    assert alert["sla_deadline"]
+    response = api.client.patch(
+        f"/api/v1/incidents/{incident_id}/status", json={"status": "resolved"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] != "resolved"
+    assert response.json()["verification_status"] == "requested"
+    after = api.client.get(curve_url).json()
+    assert after["points"] == before["points"]
+    assert api.client.get(f"/api/v1/incidents/{incident_id}/events").status_code == 200
+    assert api.client.patch(f"/api/v1/alerts/{alert['id']}/read").status_code == 200
+    api.current_user = api.outsider
+    assert api.client.get("/api/v1/alerts").json() == []
+    assert api.client.patch(f"/api/v1/alerts/{alert['id']}/read").status_code == 404
+    assert api.client.get(f"/api/v1/incidents/{incident_id}/events").status_code == 404

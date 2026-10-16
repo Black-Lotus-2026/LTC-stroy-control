@@ -2,10 +2,10 @@ import base64
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
@@ -15,11 +15,12 @@ from app.models.enums import (
     IncidentPriority,
     IncidentStatus,
     IncidentType,
+    UserRole,
 )
 from app.models.incident import Incident, IncidentEvent
 from app.models.project import Camera, Project, Zone
 from app.models.schedule import ScheduleTask
-from app.models.enums import UserRole
+from app.schemas.alert import IncidentEventItem
 from app.services.management.context import aware, require_project
 from app.schemas.stroy_control import (
     IncidentAlbumResponse,
@@ -32,6 +33,7 @@ from app.schemas.stroy_control import (
     IncidentStatusUpdateRequest,
 )
 from app.storage import get_storage
+from app.services.alert_service import OPEN_STATUSES, assign_initial_alert, request_verification
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,7 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
 
     sev = (
         IncidentSeverity.ERROR
-        if (inc.priority and inc.priority.value == "critical") or exp.get("severity") == "error"
+        if (inc.priority and inc.priority.value == "critical") or str(exp.get("severity", "")).lower() == "error"
         else IncidentSeverity.WARNING
     )
 
@@ -115,6 +117,12 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
         machinery_type=inc.machinery_type or "Экскаватор",
         stage_probability=inc.stage_probability,
         status=status_str,
+        assigned_user_id=inc.assigned_user_id,
+        sla_deadline=inc.sla_deadline,
+        verification_status=inc.verification_status,
+        last_checked_at=inc.last_checked_at,
+        escalated_at=inc.escalated_at,
+        verification_details=inc.verification_details or {},
         observed_count=inc.observation_count,
         assignee_name=(
             (inc.assignee.name or inc.assignee.username) if inc.assignee else None
@@ -129,6 +137,17 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
 
 # --- Endpoints ---
 
+def _incident_for_user(db: DbSession, incident_id: uuid.UUID, user: CurrentUser) -> Incident:
+    incident = db.get(Incident, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Инцидент не найден")
+    project = db.get(Project, incident.project_id)
+    if user.role != UserRole.ADMIN and incident.assigned_user_id != user.id and (
+        not project or project.owner_username != user.username
+    ):
+        raise HTTPException(status_code=404, detail="Инцидент не найден")
+    return incident
+
 @router.get("/config", response_model=IncidentConfigResponse)
 def get_incident_config() -> IncidentConfigResponse:
     """Получить текущее значение окна фиксации нарушений (в секундах)."""
@@ -138,8 +157,12 @@ def get_incident_config() -> IncidentConfigResponse:
 
 
 @router.patch("/config", response_model=IncidentConfigResponse)
-def update_incident_config(data: IncidentConfigUpdate) -> IncidentConfigResponse:
+def update_incident_config(
+    data: IncidentConfigUpdate, current_user: CurrentUser
+) -> IncidentConfigResponse:
     """Обновить окно фиксации нарушений (в секундах)."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Требуются права администратора")
     settings.violation_evaluation_window_seconds = data.violation_evaluation_window_seconds
     return IncidentConfigResponse(
         violation_evaluation_window_seconds=settings.violation_evaluation_window_seconds
@@ -149,20 +172,31 @@ def update_incident_config(data: IncidentConfigUpdate) -> IncidentConfigResponse
 @router.get("", response_model=list[IncidentResponse])
 def get_incidents(
     db: DbSession,
-    user: CurrentUser,
+    current_user: CurrentUser,
     project_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=500),
 ) -> list[IncidentResponse]:
     """Получить список зарегистрированных нарушений и алертов."""
-    query = select(Incident).order_by(Incident.created_at.desc()).limit(limit)
+    query = select(Incident).join(Project, Project.id == Incident.project_id)
     if project_id:
-        require_project(db, project_id, user)
+        project = db.get(Project, project_id)
+        has_assigned = db.scalar(select(Incident.id).where(
+            Incident.project_id == project_id,
+            Incident.assigned_user_id == current_user.id,
+        ))
+        if not project or (
+            current_user.role != UserRole.ADMIN
+            and project.owner_username != current_user.username
+            and not has_assigned
+        ):
+            raise HTTPException(status_code=404, detail="Объект не найден")
         query = query.where(Incident.project_id == project_id)
-    elif user.role != UserRole.ADMIN:
-        query = query.join(Project, Project.id == Incident.project_id).where(Project.owner_username == user.username)
-
-    incidents = db.scalars(query).all()
-
+    if current_user.role != UserRole.ADMIN:
+        query = query.where(or_(
+            Project.owner_username == current_user.username,
+            Incident.assigned_user_id == current_user.id,
+        ))
+    incidents = db.scalars(query.order_by(Incident.created_at.desc()).limit(limit)).all()
     return [_incident_to_response(inc) for inc in incidents]
 
 
@@ -170,12 +204,12 @@ def get_incidents(
 def create_incident(
     req: IncidentCreateRequest,
     db: DbSession,
-    user: CurrentUser,
+    current_user: CurrentUser,
 ) -> IncidentResponse:
     """Зарегистрировать нарушение с фиксацией фотоснимков со всех подключенных камер (альбом ошибки)."""
-    code = f"INC-{uuid.uuid4().hex[:4].upper()}"
+    code = f"INC-{uuid.uuid4().hex[:8].upper()}"
     now = datetime.now(UTC)
-    require_project(db, req.project_id, user, write=True, lock=True)
+    project = require_project(db, req.project_id, current_user, write=True, lock=True)
     captured_at = req.captured_at or now
     if captured_at > now + timedelta(seconds=30):
         raise HTTPException(422, "Время съёмки не может быть в будущем")
@@ -272,16 +306,14 @@ def create_incident(
         else IncidentType.EQUIPMENT_MISSING
     )
 
-    target_project_id = req.project_id
-
     incident = Incident(
         code=code,
-        project_id=target_project_id,
+        project_id=project.id,
         schedule_task_id=req.stage_id,
         zone_id=req.zone_id,
         camera_id=req.camera_id,
-        category=IncidentCategory.EQUIPMENT,
-        type=inc_type,
+        category=(IncidentCategory.CAMERA if req.discrepancy_type.startswith("STREAM_") else IncidentCategory.EQUIPMENT),
+        type=(IncidentType.CAMERA_OFFLINE if req.discrepancy_type.startswith("STREAM_") else inc_type),
         title=req.title,
         description=req.description,
         discrepancy_type=req.discrepancy_type,
@@ -307,6 +339,9 @@ def create_incident(
         },
     )
     db.add(incident)
+    db.flush()
+    if req.discrepancy_type != "STREAM_ONLINE":
+        assign_initial_alert(db, incident, project)
     db.commit()
     db.refresh(incident)
 
@@ -317,14 +352,11 @@ def create_incident(
 def get_incident_album(
     incident_id: uuid.UUID,
     db: DbSession,
-    user: CurrentUser,
+    current_user: CurrentUser,
 ) -> IncidentAlbumResponse:
     """Получить альбом фотографий со всех камер для конкретной ошибки/инцидента."""
-    incident = db.get(Incident, incident_id)
-    if not incident:
-        raise HTTPException(status_code=404, detail="Инцидент не найден")
+    incident = _incident_for_user(db, incident_id, current_user)
 
-    require_project(db, incident.project_id, user)
     resp = _incident_to_response(incident)
     return IncidentAlbumResponse(
         incident_id=resp.id,
@@ -337,39 +369,78 @@ def get_incident_album(
     )
 
 
+@router.get("/{incident_id}/events", response_model=list[IncidentEventItem])
+def get_incident_events(
+    incident_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> list[IncidentEventItem]:
+    incident = _incident_for_user(db, incident_id, current_user)
+    return [
+        IncidentEventItem(
+            id=event.id,
+            event_type=event.event_type.value,
+            comment=event.comment,
+            created_at=event.created_at,
+            user_id=event.user_id,
+        )
+        for event in incident.events
+    ]
+
+
 @router.patch("/{incident_id}/status", response_model=IncidentResponse)
 def update_incident_status(
     incident_id: uuid.UUID,
     data: IncidentStatusUpdateRequest,
     db: DbSession,
-    user: CurrentUser,
+    current_user: CurrentUser,
 ) -> IncidentResponse:
     """Вручную изменить статус инцидента."""
-    incident = db.get(Incident, incident_id)
-    if not incident:
-        raise HTTPException(status_code=404, detail="Инцидент не найден")
+    incident = _incident_for_user(db, incident_id, current_user)
+    project = db.get(Project, incident.project_id)
+    can_update_unassigned = (
+        incident.assigned_user_id is None
+        and project is not None
+        and project.owner_username == current_user.username
+    )
+    if current_user.role == UserRole.VIEWER or (
+        current_user.role != UserRole.ADMIN
+        and incident.assigned_user_id != current_user.id
+        and not can_update_unassigned
+    ):
+        raise HTTPException(status_code=403, detail="Инцидент назначен другому пользователю")
 
-    require_project(db, incident.project_id, user, write=True)
     old_status = incident.status
     new_status = _normalize_status(data.status)
-
-    if new_status == old_status:
+    if new_status == old_status and new_status != IncidentStatus.RESOLVED:
         return _incident_to_response(incident)
-    incident.status = new_status
-    incident.resolved_at = datetime.now(UTC) if new_status == IncidentStatus.RESOLVED else None
+    if new_status == IncidentStatus.FALSE_POSITIVE and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Отклонить нарушение может администратор")
+    if new_status == IncidentStatus.RESOLVED:
+        try:
+            request_verification(db, incident, current_user)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif new_status in (IncidentStatus.IN_PROGRESS, IncidentStatus.CONFIRMED):
+        if incident.status not in OPEN_STATUSES:
+            raise HTTPException(status_code=409, detail="Инцидент уже закрыт")
+        incident.status = new_status
+    elif new_status == IncidentStatus.FALSE_POSITIVE:
+        incident.status = new_status
+        incident.resolved_at = datetime.now(UTC)
+    else:
+        raise HTTPException(status_code=422, detail="Недопустимый статус")
     exp = dict(incident.explanation or {})
     exp["is_manual_override"] = True
     incident.explanation = exp
 
-    event = IncidentEvent(
-        incident_id=incident.id,
-        event_type=IncidentEventType.STATUS_CHANGED,
-        user_id=user.id,
-        old_status=old_status,
-        new_status=new_status,
-        comment=f"Ручная смена статуса: {old_status} -> {new_status}",
-    )
-    db.add(event)
+    if new_status != IncidentStatus.RESOLVED:
+        db.add(IncidentEvent(
+            incident_id=incident.id,
+            event_type=IncidentEventType.STATUS_CHANGED,
+            old_status=old_status,
+            new_status=new_status,
+            user_id=current_user.id,
+            comment=f"Ручная смена статуса: {old_status} -> {new_status}",
+        ))
     db.commit()
     db.refresh(incident)
 
