@@ -186,7 +186,7 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
     )
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_project(project_id: uuid.UUID, db: DbSession) -> None:
     """Удалить объект строительства."""
     project = db.scalars(select(Project).where(Project.id == project_id)).first()
@@ -357,7 +357,7 @@ def update_zone(
     )
 
 
-@router.delete("/{project_id}/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_zone(
     project_id: uuid.UUID,
     zone_id: uuid.UUID,
@@ -501,7 +501,7 @@ def update_camera(
     )
 
 
-@router.delete("/{project_id}/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_camera(
     project_id: str,
     camera_id: str,

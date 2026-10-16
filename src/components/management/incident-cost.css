@@ -1,0 +1,44 @@
+.case-cost-button{border:1px solid #665332;background:#30291e;color:#e2c184;border-radius:7px;padding:8px 12px;font-family:inherit;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer}
+.case-cost-button:hover{background:#403423;border-color:#ab8442}
+.case-cost-button:focus-visible,.case-cost-modal button:focus-visible,.case-cost-chart:focus-visible{outline:2px solid #d4ab57;outline-offset:3px}
+.case-cost-list{max-width:1000px;margin:0 auto;padding:24px 0}
+.case-cost-list h2{font-size:22px;margin:0 0 22px;font-weight:600}
+.case-cost-list ul{list-style:none;margin:0;padding:0;border-top:1px solid #303237}
+.case-cost-list li{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 0;border-bottom:1px solid #303237}
+.case-cost-list li>div{min-width:0;display:grid;gap:6px}
+.case-cost-list strong{font-size:14px;font-weight:550;line-height:1.45}
+.case-cost-list li span{font-size:12px;color:#969aa3}
+.case-cost-backdrop{position:fixed;inset:0;z-index:1800;display:grid;place-items:center;background:rgba(0,0,0,.58);padding:20px;backdrop-filter:blur(3px)}
+.case-cost-modal{box-sizing:border-box;width:min(540px,calc(100vw - 40px));min-width:0;max-width:100%;max-height:90vh;overflow-y:auto;background:#1c1e22;color:#f0f0ef;border:1px solid #3b3d42;border-radius:14px;padding:24px;box-shadow:0 24px 90px #0008;font-family:inherit}
+.case-cost-modal header{display:flex;align-items:center;justify-content:space-between;gap:20px}
+.case-cost-modal h2{font-size:16px;margin:0;font-weight:600}
+.case-cost-modal button{font-family:inherit}
+.case-cost-close{border:0;background:transparent;color:#92969e;font-size:26px;width:28px;height:28px;cursor:pointer;line-height:1}
+.case-cost-close:hover{color:#fff}
+.case-cost-title{display:block;font-size:12px;color:#aeb2ba;margin:6px 0 12px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.case-cost-link{text-decoration:none;width:fit-content;max-width:100%;border-bottom:1px solid #62666e;padding-bottom:2px}
+.case-cost-link:hover{color:#e2c184;border-color:#e2c184}
+.case-cost-link:focus-visible{outline:2px solid #d4ab57;outline-offset:4px}
+.case-cost-kind{font-size:12px;color:#d6b779;font-weight:550;margin:0 0 6px}
+.case-cost-warning{font-size:12px;color:#d9b46e;margin:0 0 16px}
+.case-cost-chart-hint{font-size:11px;color:#a5a9b1;margin:0 0 10px}
+.case-cost-total{position:relative;display:flex;align-items:center;gap:12px}
+.case-cost-total>strong{font-size:34px;font-weight:550;letter-spacing:-1px;line-height:1.2;font-variant-numeric:tabular-nums}
+.case-cost-duration{font-size:12px;color:#969aa3;margin:6px 0 12px}
+.case-cost-info{position:static;display:inline-flex}
+.case-cost-info>button{display:grid;place-items:center;width:44px;height:44px;border:0;background:transparent;color:#b1b4bd;cursor:pointer;padding:0}
+.case-cost-info>button>span{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;border:1px solid #92959d;font-family:Georgia,serif;font-size:14px;font-style:italic}
+.case-cost-info [role=tooltip]{position:absolute;z-index:2;top:44px;left:0;width:360px;box-sizing:border-box;max-width:calc(100vw - 90px);padding:12px 14px;border:1px solid #505258;background:#282a2f;color:#e0e1e4;border-radius:8px;box-shadow:0 8px 28px #0006;font-size:12px;line-height:1.6;pointer-events:auto;max-height:60vh;overflow-y:auto}
+.case-cost-info [role=tooltip]>strong{display:block;font-size:12px;font-weight:550;margin-bottom:7px}
+.case-cost-rate,.case-cost-source,.case-cost-info-meta{display:block}
+.case-cost-rate small{display:block;color:#b6bac2}
+.case-cost-source,.case-cost-info-meta{font-size:11px;line-height:1.5;color:#b6bac2;margin-top:7px}
+.case-cost-chart{display:block;width:100%;height:auto;touch-action:pan-y;border-radius:5px}
+.case-cost-grid{stroke:#34363b;stroke-width:1}
+.case-cost-axis{fill:#9599a2;font-family:inherit;font-size:10px}
+.case-cost-caption{font-size:11px;color:#a2a7b0;margin:15px 0 0}
+.case-cost-empty{font-size:13px;line-height:1.6;color:#c2c6ce;padding:20px 0;margin:0}
+.case-cost-empty p{margin:0 0 12px}
+.case-cost-empty ul{padding-left:18px;margin:0 0 20px}
+.case-cost-empty .case-cost-next{color:#a5abb5;font-size:12px;margin-bottom:0}
+@media(max-width:600px){.case-cost-modal{padding:20px}.case-cost-list li{align-items:flex-start;gap:12px}.case-cost-list strong{font-size:13px}.case-cost-button{font-size:11px;padding:8px}.case-cost-total>strong{font-size:30px}.case-cost-info [role=tooltip]{left:0;width:300px}}

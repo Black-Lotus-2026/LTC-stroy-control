@@ -38,7 +38,7 @@ class ConflictError(AppError):
 
 
 class ValidationError(AppError):
-    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
     code = "VALIDATION_ERROR"
 
 
@@ -60,7 +60,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         # Ошибки валидации Pydantic приводим к тому же формату, что и остальные.
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=_error_body(
                 "VALIDATION_ERROR",
                 "Некорректные параметры запроса",

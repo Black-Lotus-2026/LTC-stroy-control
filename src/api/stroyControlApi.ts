@@ -86,11 +86,18 @@ export interface IncidentAlertItem {
   snapshot_url?: string | null
   album_photos?: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
   manual_override?: boolean
+  assignee_name?: string | null
   created_at?: string
 }
 
 export interface IncidentCreatePayload {
-  project_id?: string
+  project_id: string
+  zone_id?: string | null
+  camera_id?: string | null
+  captured_at?: string
+  model_status?: 'valid' | 'unavailable' | 'failed'
+  rule_version?: string
+  observation_key?: string
   stage_id?: string | null
   stage_name?: string | null
   zone_name?: string | null
@@ -832,7 +839,7 @@ function applyLocalOverridesToResponse(resp: StageProbabilityResponse, stageId: 
         ...item,
         probability: statusMeta[ov].prob,
         requirement_level: statusMeta[ov].level,
-        classification: ov as any,
+        classification: ov as MachineryProbabilityItem['classification'],
       }
     }
     return item
@@ -975,7 +982,7 @@ export async function updateIncidentConfig(
 export async function createIncident(data: IncidentCreatePayload): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Ошибка регистрации инцидента')
@@ -1062,21 +1069,15 @@ function normalizeIncidentItem(item: IncidentAlertItem): IncidentAlertItem {
 }
 
 export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
-  try {
-    const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
-    const res = await fetch(url)
-    if (res.ok) {
-      const data: IncidentAlertItem[] = await res.json()
-      return data.map(normalizeIncidentItem)
-    }
-  } catch {
-    // Return mock incidents
-  }
-  return getFallbackIncidents().map(normalizeIncidentItem)
+  const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить инциденты')
+  const data: IncidentAlertItem[] = await res.json()
+  return data.map(normalizeIncidentItem)
 }
 
 export async function fetchIncidentAlbum(incidentId: string): Promise<IncidentAlbumData> {
-  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`)
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`, { headers: getAuthHeaders() })
   if (!res.ok) throw new Error('Ошибка получения альбома инцидента')
   return await res.json()
 }
@@ -1087,7 +1088,7 @@ export async function updateIncidentStatus(
 ): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/status`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ status }),
   })
   if (!res.ok) throw new Error('Ошибка обновления статуса инцидента')
@@ -1192,40 +1193,7 @@ function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
   }
 }
 
-function getFallbackIncidents(): IncidentAlertItem[] {
-  return [
-    {
-      id: 'inc-001',
-      code: 'INC-042',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'ERROR',
-      discrepancy_type: 'MISSING_MANDATORY',
-      machinery_type: 'Экскаватор',
-      stage_probability: 0.96,
-      observed_count: 0,
-      snapshot_url: '/media/snapshots/inc_042.jpg',
-      album_photos: [
-        { url: '/media/snapshots/inc_042.jpg', camera_name: 'CAM-03 · Котлован (основной ракурс)', is_primary: true },
-        { url: '/media/snapshots/inc_042_cam2.jpg', camera_name: 'CAM-01 · Въезд на стройплощадку', is_primary: false },
-      ],
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'inc-002',
-      code: 'INC-043',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'WARNING',
-      discrepancy_type: 'MISSING_RECOMMENDED',
-      machinery_type: 'Погрузчик',
-      stage_probability: 0.72,
-      observed_count: 0,
-      album_photos: [],
-      created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    },
-  ]
-}
+
 
 export interface DetectionBoxItem {
   class_id: number
