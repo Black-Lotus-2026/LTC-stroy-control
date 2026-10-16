@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.api.v1.incidents import router as incident_router
 from app.api.v1.management import router
+from app.api.v1.schedule import router as schedule_router
 from app.db.base import Base, utcnow
 from app.db.session import get_db
 from app.models import (
@@ -190,6 +191,7 @@ def api(monkeypatch):
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.include_router(incident_router, prefix="/api/v1")
+    app.include_router(schedule_router, prefix="/api/v1")
 
     def database():
         with factory() as db:
@@ -354,7 +356,6 @@ def test_case_curve_does_not_use_another_cases_project_profile(api):
     assert curve["points"][-1]["cost"] == "112000.00"
 
 
-
 def test_case_curve_and_case_card_show_the_saved_responsible_person(api):
     saved = start(api)
     with api.factory() as db:
@@ -368,6 +369,7 @@ def test_case_curve_and_case_card_show_the_saved_responsible_person(api):
     cases = api.client.get("/api/v1/incidents").json()
     card = next(case for case in cases if case["id"] == saved["incident_id"])
     assert card["assignee_name"] == api.owner.name
+
 
 def test_auth_and_foreign_project_profile_run_trace_are_denied(api):
     own = start(api)
@@ -867,3 +869,65 @@ def test_incident_task_must_match_blocked_schedule_task(api):
     body["snapshot"]["tasks"][0]["schedule_task_id"] = None
     response = api.client.post("/api/v1/management/runs", json=body)
     assert response.status_code == 422
+
+
+def test_schedule_writes_require_exact_owned_stage_and_never_fall_back(api):
+    own_id = str(api.saved_tasks[0].id)
+    foreign_id = str(api.saved_tasks[2].id)
+    with api.factory() as db:
+        before = db.get(ScheduleTask, api.saved_tasks[0].id).machinery_probabilities
+    for stage_id in ("stage-1", str(uuid4()), foreign_id):
+        path = f"/api/v1/schedule/stages/{stage_id}/probabilities"
+        assert api.client.get(path).status_code == 404
+        assert (
+            api.client.put(
+                path, json={"overrides": {"excavator": "MANDATORY"}}
+            ).status_code
+            == 404
+        )
+        assert api.client.delete(path).status_code == 404
+        assert (
+            api.client.put(
+                f"/api/v1/schedule/stages/{stage_id}", json={"name": "forbidden"}
+            ).status_code
+            == 404
+        )
+    with api.factory() as db:
+        assert (
+            db.get(ScheduleTask, api.saved_tasks[0].id).machinery_probabilities == before
+        )
+    response = api.client.get(f"/api/v1/schedule/stages/{own_id}/probabilities")
+    assert response.status_code == 200
+    assert response.json()["stage_id"] == own_id
+
+
+def test_schedule_clear_is_scoped_and_viewer_cannot_write(api):
+    assert api.client.post("/api/v1/schedule/clear").status_code == 422
+    assert (
+        api.client.get(
+            "/api/v1/schedule/stages", params={"project_id": str(api.projects[2].id)}
+        ).status_code
+        == 404
+    )
+    with api.factory() as db:
+        viewer = db.get(User, api.owner.id)
+        viewer.role = UserRole.VIEWER
+        db.commit()
+        api.current_user = viewer
+    own_id = str(api.saved_tasks[0].id)
+    assert (
+        api.client.put(
+            f"/api/v1/schedule/stages/{own_id}/probabilities", json={"overrides": {}}
+        ).status_code
+        == 403
+    )
+    assert (
+        api.client.post(
+            "/api/v1/schedule/clear", params={"project_id": str(api.projects[0].id)}
+        ).status_code
+        == 403
+    )
+    assert (
+        api.client.get(f"/api/v1/schedule/stages/{own_id}/probabilities").status_code
+        == 200
+    )
