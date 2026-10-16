@@ -22,7 +22,7 @@ export function Queue({
   prof: Profile | null
   onOpen: (id: string, el: HTMLElement) => void
   onDecide: (id: string, status: 'confirmed' | 'false_positive', dir: 1 | -1) => void
-  onJournal: () => void
+  onJournal: (el: HTMLElement) => void
 }) {
   const pending = events
     .filter((e) => e.status === 'pending')
@@ -77,7 +77,7 @@ export function Queue({
             <Roll value={pending.length} />
           </span>
         </span>
-        <button type="button" className="btn ghost small" onClick={onJournal}>
+        <button type="button" className="btn ghost small" onClick={(e) => onJournal(e.currentTarget)}>
           Журнал
         </button>
       </div>

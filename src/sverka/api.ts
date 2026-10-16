@@ -89,10 +89,20 @@ export const logout = () => setStoredToken(null)
 export const projects = () => req<ProjectItem[]>('/projects')
 export const createProject = (data: { name: string; address?: string; object_kind?: string; owner_username?: string }) =>
   req<ProjectItem>('/projects', json('POST', data), 'Не удалось создать объект')
+export const updateProject = (projectId: string, data: { name?: string; code?: string; address?: string; object_kind?: string }) =>
+  req<ProjectItem>(`/projects/${projectId}`, json('PATCH', data), 'Не удалось сохранить объект')
+export const deleteProject = (projectId: string) => req<void>(`/projects/${projectId}`, { method: 'DELETE' }, 'Не удалось удалить объект')
 export const zones = (projectId: string) => req<ZoneItem[]>(`/projects/${projectId}/zones`)
+export const createZone = (projectId: string, data: { name: string; code?: string; description?: string }) =>
+  req<ZoneItem>(`/projects/${projectId}/zones`, json('POST', data), 'Не удалось создать зону')
+export const updateZone = (projectId: string, zoneId: string, data: { name?: string; code?: string; description?: string }) =>
+  req<ZoneItem>(`/projects/${projectId}/zones/${zoneId}`, json('PATCH', data), 'Не удалось сохранить зону')
+export const deleteZone = (projectId: string, zoneId: string) => req<void>(`/projects/${projectId}/zones/${zoneId}`, { method: 'DELETE' }, 'Не удалось удалить зону')
 export const cameras = (projectId: string) => req<CameraItem[]>(`/projects/${projectId}/cameras`)
 export const createCamera = (projectId: string, data: { name: string; stream_url: string; zone_id?: string | null }) =>
   req<CameraItem>(`/projects/${projectId}/cameras`, json('POST', data), 'Не удалось сохранить камеру')
+export const updateCamera = (projectId: string, cameraId: string, data: { name: string; stream_url: string; zone_id: string | null }) =>
+  req<CameraItem>(`/projects/${projectId}/cameras/${cameraId}`, json('PATCH', data), 'Не удалось сохранить камеру')
 export const deleteCamera = (projectId: string, cameraId: string) =>
   req<void>(`/projects/${projectId}/cameras/${cameraId}`, { method: 'DELETE' }, 'Не удалось удалить камеру')
 
@@ -170,6 +180,10 @@ export interface ApiProfile {
   probabilities: ApiMachinery[]
   has_custom_override?: boolean
 }
+export const updateStage = (stageId: string, data: { planned_start: string; planned_end: string; duration_days: number }) =>
+  req<StageItem>(`/schedule/stages/${stageId}`, json('PUT', data), 'Не удалось сохранить сроки этапа')
+/** Always scoped to the object: without project_id the server clears the plans of every object. */
+export const clearPlan = (projectId: string) => req<{ deleted_count: number }>(`/schedule/clear?project_id=${projectId}`, { method: 'POST' }, 'Не удалось очистить план')
 export const profile = (stageId: string) => req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`)
 export const putOverrides = (stageId: string, overrides: Record<string, unknown>) =>
   req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`, json('PUT', { overrides }), 'Не удалось сохранить правило')
@@ -229,7 +243,7 @@ export interface IncidentCreate {
   description: string
   album_snapshots?: { camera_name: string; snapshot_base64: string; is_primary?: boolean }[]
 }
-export const incidents = (projectId: string) => req<ApiIncident[]>(`/incidents?project_id=${projectId}&limit=200`)
+export const incidents = (projectId: string) => req<ApiIncident[]>(`/incidents?project_id=${projectId}&limit=1000`)
 export const createIncident = (data: IncidentCreate) => req<ApiIncident>('/incidents', json('POST', data), 'Не удалось сохранить событие')
 export const setIncidentStatus = (id: string, status: string) =>
   req<ApiIncident>(`/incidents/${id}/status`, json('PATCH', { status }), 'Не удалось сохранить решение')

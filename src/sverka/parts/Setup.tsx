@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import type { ImportResult, ProjectItem } from '../api'
 import type { Observation, Stage } from '../model'
+import { KINDS } from '../model'
 import { fmtDay } from '../lib/format'
 import { CameraForm, RecordingForm, type Probe } from './Settings'
 
-const KINDS = ['Жильё', 'Административные здания', 'Офисно-деловой центр', 'Образование', 'ДОУ', 'Здравоохранение', 'Спорт', 'Культура', 'Дороги']
 
 const Check = () => (
   <svg viewBox="0 0 30 30" aria-hidden="true">

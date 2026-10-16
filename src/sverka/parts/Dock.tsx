@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Observation, Profile, Stage, UiEvent } from '../model'
-import { LV, LV_ORDER } from '../model'
+import { LV, LV_ORDER, stageAt } from '../model'
 import { CODES, MACH, Sil, type Code } from '../lib/machinery'
-import { DAY_MS, MONTHS_S, dayStart, fmtDay, hhmm } from '../lib/format'
+import { DAY_MS, MONTHS_S, addDays, dayStart, fmtDay, hhmm, plural } from '../lib/format'
 import { Spring, VelocityTracker, capture, clamp, easeOut, lerp, project, rubber } from '../lib/spring'
 import { Chevron } from './common'
 
@@ -17,8 +17,11 @@ export function Dock({
   profiles,
   needProfiles,
   onRule,
+  onResetStage,
   onOpenEvent,
   onUploadPlan,
+  onSaveSchedule,
+  onClearPlan,
   onSeek,
   open,
   setOpen,
@@ -32,8 +35,11 @@ export function Dock({
   profiles: Map<string, Profile>
   needProfiles: () => void
   onRule: (code: Code, el: HTMLElement, stageId: string) => void
+  onResetStage: (stageId: string) => Promise<void>
   onOpenEvent: (id: string, el: HTMLElement) => void
   onUploadPlan: (f: File) => void
+  onSaveSchedule: (changes: { id: string; start: number; end: number }[]) => Promise<void>
+  onClearPlan: () => Promise<void>
   onSeek: (t: number) => void
   open: boolean
   setOpen: (o: boolean) => void
@@ -45,6 +51,48 @@ export function Dock({
   const [sel, setSel] = useState<string | null>(null)
   const selStage = stages.find((s) => s.id === sel) || current || stages[0] || null
   const span = stages.length ? { from: stages[0].start - 3 * DAY_MS, to: stages[stages.length - 1].end + 8 * DAY_MS } : null
+
+  /* schedule editing: a draft moves one stage (and, if asked, the ones after it) by whole days.
+     Bars show the draft through per-stage springs, so following stages ride along like coupled
+     wagons; nothing reaches the server until "Сохранить". */
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
+  const [clearAsk, setClearAsk] = useState(false)
+  // while saving, fresh dates from the server mean the draft is applied: show the plan as is
+  const saveBase = useRef<Stage[] | null>(null)
+  const live = saveBase.current && saveBase.current !== stages ? null : draft
+  const edited = live ? stages.find((x) => x.id === live.id) ?? null : null
+  const offsetFor = (s: Stage, d: Draft | null): [number, number] => {
+    if (!d) return [0, 0]
+    if (s.id === d.id) return [d.ds, d.de]
+    const e = stages.find((x) => x.id === d.id)
+    return d.cascade && e && s.n > e.n ? [d.de, d.de] : [0, 0]
+  }
+  const shownOf = (s: Stage, d: Draft | null = live): Stage => {
+    const [a, b] = offsetFor(s, d)
+    return a || b ? { ...s, start: addDays(s.start, a), end: addDays(s.end, b), days: s.days + b - a } : s
+  }
+  const shown = stages.map((s) => shownOf(s))
+  const offs = useRef(new Map<string, { s: Spring; e: Spring }>())
+  const queued = useRef(false)
+  const relayout = () => {
+    if (queued.current) return
+    queued.current = true
+    queueMicrotask(() => {
+      queued.current = false
+      layoutRef.current(pRef.current)
+    })
+  }
+  const off = (id: string) => {
+    let o = offs.current.get(id)
+    if (!o) {
+      o = { s: new Spring(0, { response: 0.42, damping: 0.84, rest: 0.004, onUpdate: relayout }), e: new Spring(0, { response: 0.42, damping: 0.84, rest: 0.004, onUpdate: relayout }) }
+      offs.current.set(id, o)
+    }
+    return o
+  }
+  const committed = useRef(new Map<string, { start: number; end: number }>())
+  const barDrag = useRef<null | { id: string; mode: 'start' | 'end' | 'move'; x0: number; s0: number; e0: number; ppd: number; days: number; moved: boolean; last: number }>(null)
 
   const limits = useCallback(() => {
     const mob = matchMedia('(max-width: 860px)').matches
@@ -83,12 +131,24 @@ export function Dock({
         const rowY = mob ? rowTop + i * rowH + 38 : rowTop + i * rowH + 14
         const top = lerp(stripTop, rowY, pi)
         const h = lerp(mob ? 4 : 6, mob ? 8 : 16, pi)
-        const L = x(s.start)
-        const R = x(s.end + DAY_MS)
+        const o = offs.current.get(s.id)
+        const L = x(s.start + (o ? o.s.x : 0) * DAY_MS)
+        const R = x(s.end + DAY_MS + (o ? o.e.x : 0) * DAY_MS)
         bar.style.transform = `translate(${L}px, ${top}px)`
         bar.style.width = Math.max(2, R - L - 2) + 'px'
         bar.style.height = h + 'px'
       })
+      const tip = b.querySelector<HTMLElement>('.p-tip')
+      const bd = barDrag.current
+      if (tip && bd) {
+        const s = stages.find((z) => z.id === bd.id)
+        const o = offs.current.get(bd.id)
+        if (s && o) {
+          const i = stages.indexOf(s)
+          const edgeX = bd.mode === 'start' ? x(s.start + o.s.x * DAY_MS) : x(s.end + DAY_MS + o.e.x * DAY_MS)
+          tip.style.transform = `translate(${(pc?.offsetLeft ?? left) + edgeX}px, ${(mob ? rowTop + i * rowH + 38 : rowTop + i * rowH + 14) - 26}px) translateX(-50%)`
+        }
+      }
       const now = b.querySelector<HTMLElement>('.p-now')
       if (now) {
         now.style.transform = `translateX(${x(dayStart(t))}px)`
@@ -149,8 +209,9 @@ export function Dock({
           row.style.top = 28 + i * 22 + 'px'
           row.querySelectorAll<HTMLElement>('.dm-cell').forEach((cell, j) => {
             const s = stages[j]
-            const L = x(s.start)
-            const R = x(s.end + DAY_MS)
+            const o = offs.current.get(s.id)
+            const L = x(s.start + (o ? o.s.x : 0) * DAY_MS)
+            const R = x(s.end + DAY_MS + (o ? o.e.x : 0) * DAY_MS)
             cell.style.left = left - gut + L + 'px'
             cell.style.width = Math.max(2, R - L - 2) + 'px'
             cell.tabIndex = p > 0.5 ? 0 : -1
@@ -198,6 +259,95 @@ export function Dock({
     })
   const layoutRef = useRef(layout)
   layoutRef.current = layout
+
+  useLayoutEffect(() => {
+    for (const s of stages) {
+      const o = off(s.id)
+      // the plan itself moved (saved or undone): keep the bar where it is on screen, then settle
+      const prev = committed.current.get(s.id)
+      if (prev) {
+        const ds = Math.round((s.start - prev.start) / DAY_MS)
+        const de = Math.round((s.end - prev.end) / DAY_MS)
+        if (ds) o.s.set(o.s.x - ds)
+        if (de) o.e.set(o.e.x - de)
+      }
+      committed.current.set(s.id, { start: s.start, end: s.end })
+      if (barDrag.current?.id === s.id) continue
+      const [a, b] = offsetFor(s, live)
+      o.s.to(a)
+      o.e.to(b)
+    }
+    // offsetFor reads stages and the live draft
+  }, [stages, live])
+  useEffect(() => {
+    if (!open) {
+      setDraft(null)
+      setClearAsk(false)
+    }
+  }, [open])
+
+  /* drag a stage on the gantt: the ends change dates, the middle moves the whole stage */
+  const barDown = (s: Stage) => (e: React.PointerEvent) => {
+    if (e.button || pRef.current < 0.5 || limits().mob) return
+    e.stopPropagation()
+    const b = body.current
+    if (!b || !span) return
+    const gut = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gut')) || 20
+    const w = b.clientWidth - (gut + 252) - (gut + 380)
+    const ppd = w / ((span.to - span.from) / DAY_MS)
+    const h = (e.target as HTMLElement).dataset.h as 'start' | 'end' | undefined
+    const d = draft?.id === s.id ? draft : null
+    setSel(s.id)
+    barDrag.current = { id: s.id, mode: h || 'move', x0: e.clientX, s0: d?.ds ?? 0, e0: d?.de ?? 0, ppd, days: s.days, moved: false, last: NaN }
+    if (draft && draft.id !== s.id) setDraft(null)
+    vt.current.reset()
+    vt.current.add(e.clientX, 0)
+    capture(e.currentTarget, e.pointerId)
+  }
+  const barMove = (e: React.PointerEvent) => {
+    const d = barDrag.current
+    if (!d) return
+    vt.current.add(e.clientX, 0)
+    const dd = (e.clientX - d.x0) / d.ppd
+    if (!d.moved && Math.abs(e.clientX - d.x0) < 3) return
+    if (!d.moved) {
+      d.moved = true
+      b0.current?.classList.add('editing')
+    }
+    const o = off(d.id)
+    let so = o.s.x
+    let eo = o.e.x
+    if (d.mode === 'move') {
+      so = d.s0 + dd
+      eo = d.e0 + dd
+    } else if (d.mode === 'end') eo = Math.max(d.e0 + dd, so - (d.days - 1))
+    else so = Math.min(d.s0 + dd, eo + (d.days - 1))
+    o.s.set(so)
+    o.e.set(eo)
+    const r = Math.round(eo)
+    const rs = Math.round(so)
+    if (r * 1000 + rs !== d.last) {
+      d.last = r * 1000 + rs
+      // followers ride along on their own springs, a beat behind the hand
+      const cascade = draft?.cascade ?? true
+      setDraft({ id: d.id, ds: rs, de: r, cascade })
+    }
+  }
+  const barUp = () => {
+    const d = barDrag.current
+    if (!d) return
+    barDrag.current = null
+    b0.current?.classList.remove('editing')
+    const o = off(d.id)
+    const v = vt.current.get().x / d.ppd
+    const ds = Math.round(o.s.x)
+    const de = Math.round(o.e.x)
+    o.s.to(ds, { velocity: d.mode !== 'end' ? v : 0, damping: 0.8 })
+    o.e.to(de, { velocity: d.mode !== 'start' ? v : 0, damping: 0.8 })
+    if (!d.moved) return
+    setDraft(ds || de ? { id: d.id, ds, de, cascade: draft?.cascade ?? true } : null)
+  }
+  const b0 = body
 
   useLayoutEffect(() => {
     const { min } = limits()
@@ -299,18 +449,23 @@ export function Dock({
           )}
         </div>
         <div className="plan-canvas" {...dragProps}>
-          {stages.map((s) => {
+          {shown.map((s) => {
             const today = dayStart(t)
             const cls = today > s.end ? 'done' : today >= s.start ? 'active' : 'future'
             const prog = cls === 'active' ? (today - s.start) / Math.max(1, s.end - s.start) : 0
             return (
-              <div key={s.id} className={`p-bar ${cls}`} data-id={s.id}>
+              <div key={s.id} className={`p-bar ${cls}`} data-id={s.id} data-draft={live?.id === s.id || undefined} onPointerDown={barDown(s)} onPointerMove={barMove} onPointerUp={barUp} onPointerCancel={barUp}>
                 {cls === 'active' && <i className="p-fill" style={{ width: `${prog * 100}%` }} />}
+                <i className="p-h l" data-h="start" />
+                <i className="p-h r" data-h="end" />
               </div>
             )
           })}
           {stages.length > 0 && <div className="p-now" />}
         </div>
+        <span className="p-tip" aria-hidden="true">
+          {live && edited ? (barDrag.current?.mode === 'start' ? fmtDay(addDays(edited.start, live.ds)) : fmtDay(addDays(edited.end, live.de))) : ''}
+        </span>
         <DayRuler t={t} obs={obs} events={events} onOpenEvent={onOpenEvent} onSeek={onSeek} shift={shift} />
         <div className="dock-note">{obs.mode === 'recording' ? 'Перетащите отметку, чтобы перемотать запись' : 'Архива кадров нет: шкала показывает текущий сеанс'}</div>
         <div className="plan-full" id="planFull" data-open="false">
@@ -321,13 +476,43 @@ export function Dock({
               <p>Сопоставлено со справочником: {stages.filter((s) => s.catalog).length} из {stages.length}</p>
             </div>
             <div className="pf-actions">
-              <label className="btn small">
-                Загрузить .xlsx или .csv
-                <input type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => e.target.files?.[0] && onUploadPlan(e.target.files[0])} />
-              </label>
-              <button type="button" className="btn small" onClick={() => setOpen(false)}>
-                Свернуть
-              </button>
+              {clearAsk ? (
+                <span className="confirm-row">
+                  Удалить план из {stages.length} {plural(stages.length, 'этапа', 'этапов', 'этапов')}? Правила техники по этапам тоже пропадут.
+                  <button
+                    type="button"
+                    className="btn small danger"
+                    disabled={saving === 'clear'}
+                    onClick={() => {
+                      setSaving('clear')
+                      onClearPlan().finally(() => {
+                        setSaving(null)
+                        setClearAsk(false)
+                      })
+                    }}
+                  >
+                    {saving === 'clear' ? 'Удаляем…' : 'Удалить план'}
+                  </button>
+                  <button type="button" className="btn small ghost" onClick={() => setClearAsk(false)}>
+                    Отмена
+                  </button>
+                </span>
+              ) : (
+                <>
+                  <label className="btn small">
+                    Загрузить .xlsx или .csv
+                    <input type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => e.target.files?.[0] && onUploadPlan(e.target.files[0])} />
+                  </label>
+                  {stages.length > 0 && (
+                    <button type="button" className="btn small ghost" onClick={() => setClearAsk(true)}>
+                      Очистить план
+                    </button>
+                  )}
+                  <button type="button" className="btn small" onClick={() => setOpen(false)}>
+                    Свернуть
+                  </button>
+                </>
+              )}
             </div>
           </div>
           <div className="pf-months">
@@ -347,7 +532,7 @@ export function Dock({
             </div>
           </div>
           <div className="pf-rows">
-            {stages.map((s) => {
+            {shown.map((s) => {
               const today = dayStart(t)
               const state = today > s.end ? 'завершён по плану' : today >= s.start ? 'идёт сейчас' : ''
               return (
@@ -355,7 +540,7 @@ export function Dock({
                   <span className="n">{s.n}</span>
                   <span className="t">
                     <b>{s.name}</b>
-                    <small className={state === 'идёт сейчас' ? 'active' : ''}>
+                    <small className={state === 'идёт сейчас' ? 'active' : ''} data-moved={(live && s.start !== stages.find((x) => x.id === s.id)?.start) || (live && s.end !== stages.find((x) => x.id === s.id)?.end) || undefined}>
                       {fmtDay(s.start)} – {fmtDay(s.end)} · {s.days} дн.{state ? ` · ${state}` : ''}
                     </small>
                   </span>
@@ -404,11 +589,51 @@ export function Dock({
                   Этап {selStage.n} · {selStage.days} дн.
                 </span>
                 <h3>{selStage.name}</h3>
-                <div className="meta">
-                  {fmtDay(selStage.start)} – {fmtDay(selStage.end)}
-                  <br />
-                  {selStage.catalog ? `Справочник: ${selStage.catalog}${selStage.similarity != null ? ` · сходство ${selStage.similarity.toFixed(2).replace('.', ',')}` : ''}` : 'Не сопоставлен со справочником'}
-                </div>
+                <div className="meta">{selStage.catalog ? `Справочник: ${selStage.catalog}${selStage.similarity != null ? ` · сходство ${selStage.similarity.toFixed(2).replace('.', ',')}` : ''}` : 'Не сопоставлен со справочником'}</div>
+                <Schedule
+                  stage={selStage}
+                  stages={stages}
+                  draft={live?.id === selStage.id ? live : null}
+                  shownOf={shownOf}
+                  t={t}
+                  current={current}
+                  saving={saving === 'schedule'}
+                  onDraft={setDraft}
+                  onSave={async () => {
+                    if (!live) return
+                    const changes = stages.filter((s) => offsetFor(s, live).some(Boolean)).map((s) => {
+                      const x = shownOf(s)
+                      return { id: s.id, start: x.start, end: x.end }
+                    })
+                    setSaving('schedule')
+                    saveBase.current = stages
+                    try {
+                      await onSaveSchedule(changes)
+                      setDraft(null)
+                    } finally {
+                      saveBase.current = null
+                      setSaving(null)
+                    }
+                  }}
+                />
+                {prof?.edited && (
+                  <div className="req-reset">
+                    <span>
+                      Изменено вручную: {CODES.filter((c) => prof.rules[c].edited).length} из {CODES.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="link"
+                      disabled={saving === 'reset'}
+                      onClick={() => {
+                        setSaving('reset')
+                        onResetStage(selStage.id).finally(() => setSaving(null))
+                      }}
+                    >
+                      {saving === 'reset' ? 'Возвращаем…' : 'Вернуть все к исходным'}
+                    </button>
+                  </div>
+                )}
                 <div className="req-list">
                   {!prof && <div className="skeleton"><i /><i /></div>}
                   {prof &&
@@ -443,6 +668,132 @@ export function Dock({
         </div>
       </div>
     </section>
+  )
+}
+
+interface Draft { id: string; ds: number; de: number; cascade: boolean }
+
+function Schedule({
+  stage,
+  stages,
+  draft,
+  shownOf,
+  t,
+  current,
+  saving,
+  onDraft,
+  onSave,
+}: {
+  stage: Stage
+  stages: Stage[]
+  draft: Draft | null
+  shownOf: (s: Stage, d?: Draft | null) => Stage
+  t: number
+  current: Stage | null
+  saving: boolean
+  onDraft: (d: Draft | null) => void
+  onSave: () => Promise<void>
+}) {
+  const [err, setErr] = useState<string | null>(null)
+  const d = draft ?? { id: stage.id, ds: 0, de: 0, cascade: true }
+  const x = shownOf(stage, d)
+  const after = stages.filter((s) => s.n > stage.n)
+  const set = (p: Partial<Draft>) => {
+    const n = { ...d, ...p }
+    if (stage.days + n.de - n.ds < 1) return
+    onDraft(n.ds || n.de ? n : { ...n, ds: 0, de: 0 })
+  }
+  const editing = !!draft
+  const last = stages[stages.length - 1]
+  const lastShown = last ? shownOf(last, d) : null
+  const nowAfter = stageAt(stages.map((s) => shownOf(s, d)), t)
+  const delta = d.de
+  const words = (n: number) => `${n > 0 ? '+' : '−'}${Math.abs(n)} ${plural(Math.abs(n), 'день', 'дня', 'дней')}`
+  return (
+    <div className="sched" data-editing={editing || undefined}>
+      <div className="sched-top">
+        <span className="kicker">Сроки</span>
+        {!editing && (
+          <button type="button" className="link" onClick={() => onDraft({ id: stage.id, ds: 0, de: 0, cascade: true })}>
+            Изменить
+          </button>
+        )}
+      </div>
+      {!editing ? (
+        <p className="sched-line">
+          {fmtDay(stage.start)} – {fmtDay(stage.end)} · {stage.days} дн.
+          <small>Можно потянуть края полосы на графике</small>
+        </p>
+      ) : (
+        <>
+          <div className="sched-grid">
+            <span>Начало</span>
+            <div className="stepper">
+              <button type="button" aria-label="Начало раньше на день" onClick={() => set({ ds: d.ds - 1 })}>
+                −
+              </button>
+              <output>{fmtDay(x.start)}</output>
+              <button type="button" aria-label="Начало позже на день" onClick={() => set({ ds: d.ds + 1 })}>
+                +
+              </button>
+            </div>
+            <span>Окончание</span>
+            <div className="stepper">
+              <button type="button" aria-label="Окончание раньше на день" onClick={() => set({ de: d.de - 1 })}>
+                −
+              </button>
+              <output>{fmtDay(x.end)}</output>
+              <button type="button" aria-label="Окончание позже на день" onClick={() => set({ de: d.de + 1 })}>
+                +
+              </button>
+            </div>
+            <span>Длительность</span>
+            <b>
+              {x.days} дн.{x.days !== stage.days && <em>{words(x.days - stage.days)}</em>}
+            </b>
+          </div>
+          {after.length > 0 && (
+            <button type="button" className="toggle sched-cascade" role="switch" aria-checked={d.cascade} onClick={() => set({ cascade: !d.cascade })}>
+              <span className="sw" />
+              Сдвинуть следующие этапы ({after.length})
+            </button>
+          )}
+          <p className="sched-impact">
+            {!d.ds && !d.de
+              ? 'Сроки пока не изменены.'
+              : [
+                  d.de ? `Окончание ${words(d.de)}: ${fmtDay(stage.end)} → ${fmtDay(x.end)}.` : '',
+                  d.ds ? `Начало ${words(d.ds)}: ${fmtDay(stage.start)} → ${fmtDay(x.start)}.` : '',
+                  after.length && delta
+                    ? d.cascade
+                      ? `Этапы ${after[0].n}–${after[after.length - 1].n} сдвинутся на ${words(delta).replace('+', '')}, план закончится ${fmtDay(lastShown!.end)}.`
+                      : `Следующие этапы останутся на месте${delta > 0 && after[0].start <= x.end ? ', этап ' + after[0].n + ' начнётся раньше, чем закончится этот' : ''}.`
+                    : '',
+                  nowAfter?.id !== current?.id ? `Сверка на ${fmtDay(t)} пойдёт по этапу ${nowAfter ? `${nowAfter.n} «${nowAfter.name}»` : '— (вне плана)'} вместо ${current ? current.n : 'вне плана'}.` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+          </p>
+          {err && <p className="err-line">{err}</p>}
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn small plan"
+              disabled={saving || (!d.ds && !d.de)}
+              onClick={() => {
+                setErr(null)
+                onSave().catch((e: Error) => setErr(e.message))
+              }}
+            >
+              {saving ? 'Сохраняем…' : 'Сохранить сроки'}
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => onDraft(null)} disabled={saving}>
+              Отмена
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

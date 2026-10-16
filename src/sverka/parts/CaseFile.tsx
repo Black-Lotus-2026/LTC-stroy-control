@@ -1,23 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Episode, EventStatus, Observation, Profile, Stage, UiEvent } from '../model'
-import { LV, STATUS_WORD, consequence, liveTitle, sevNow, stageDay } from '../model'
+import { LV, STATUS_WORD, consequence, liveTitle, parseDescription, sevNow, stageDay } from '../model'
 import { MACH, type Code } from '../lib/machinery'
 import { durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
 import { CloseIcon, SevIcon } from './common'
+import { Lightbox } from './Lightbox'
 
 const SEV_WORD = { warn: 'Предупреждение', err: 'Отклонение', info: 'Сведения' }
-
-/** Descriptions we create carry labelled lines; older ones are shown as one block. */
-function parseDescription(text: string) {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const m = line.match(/^(Наблюдение|Качество данных|Правило):\s*(.+)$/)
-    if (m) out[m[1]] = m[2]
-  }
-  if (!Object.keys(out).length && text.trim()) out['Наблюдение'] = text.trim()
-  return out
-}
 
 export function CaseFile({
   ev,
@@ -48,13 +38,18 @@ export function CaseFile({
   const [shot, setShot] = useState(() => Math.max(0, ev.album.findIndex((a) => a.primary)))
   const [broken, setBroken] = useState<Set<string>>(new Set())
   const [save, setSave] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
+  const [lb, setLb] = useState(false)
+  // a decision can be changed later: the operator opens the choice again
+  const [redo, setRedo] = useState(false)
   const rect = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
   const springRef = useRef<Spring | null>(null)
 
   const computeRect = () => {
     if (matchMedia('(max-width: 860px)').matches) return { left: 0, top: 0, width: innerWidth, height: innerHeight }
     const dockMin = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-min')) || 104
-    return { left: 20, top: 64, width: innerWidth - 40, height: innerHeight - 64 - dockMin - 10 }
+    // over the journal the case takes the journal's height, so its rows do not show below
+    const below = document.querySelector('.journal') ? 12 : dockMin + 10
+    return { left: 20, top: 64, width: innerWidth - 40, height: innerHeight - 64 - below }
   }
   const paint = (p: number) => {
     const c = el.current
@@ -96,11 +91,12 @@ export function CaseFile({
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (lb) return
       if (e.key === 'Escape') {
         e.preventDefault()
         close()
       }
-      if (ev.status !== 'pending' || ev.sample) return
+      if ((ev.status !== 'pending' && !redo) || ev.sample) return
       const m: Record<string, EventStatus> = { '1': 'confirmed', '2': 'false_positive', '3': 'in_progress' }
       if (m[e.key]) decide(m[e.key])
       if (e.key === 'Tab') {
@@ -207,7 +203,9 @@ export function CaseFile({
           <div className="ev-main">
             {photo && !broken.has(photo.url) ? (
               <>
-                <img src={photo.url} alt={`Кадр: ${photo.camera}`} onError={() => setBroken((b) => new Set(b).add(photo.url))} />
+                <button type="button" className="ev-zoom" onClick={() => setLb(true)} aria-label="Открыть кадр на весь экран">
+                  <img src={photo.url} alt={`Кадр: ${photo.camera}`} onError={() => setBroken((b) => new Set(b).add(photo.url))} style={lb ? { visibility: 'hidden' } : undefined} />
+                </button>
                 <div className="ticks" />
                 <div className="ev-cap">
                   <span className="chip-mat">
@@ -280,21 +278,60 @@ export function CaseFile({
                   <b>Пример с сервера.</b> Сервер показывает его, пока журнал объекта пуст. Записи в базе нет, поэтому решение по нему не сохраняется.
                 </span>
               </div>
-            ) : ev.status !== 'pending' ? (
+            ) : ev.status !== 'pending' && !redo ? (
               <div className="decided">
                 <span>
                   Решение: <b>{STATUS_WORD[ev.status]}</b>
                   {ev.decidedAt ? ` · ${hhmm(ev.decidedAt)}` : ''}
                 </span>
-                {(ev.status === 'confirmed' || ev.status === 'in_progress') && (
-                  <div className="decide-row">
+                <div className="decide-row">
+                  {(ev.status === 'confirmed' || ev.status === 'in_progress') && (
                     <button type="button" className="btn" onClick={() => decide('resolved')} disabled={save.s === 'saving'}>
                       Отметить устранённым
                     </button>
+                  )}
+                  <button type="button" className="btn ghost" onClick={() => setRedo(true)} disabled={save.s === 'saving'}>
+                    Изменить решение
+                  </button>
+                </div>
+                {save.s !== 'idle' && (
+                  <div className="save-state" data-s={save.s}>
+                    {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.msg}
                   </div>
                 )}
-                {save.s === 'error' && <div className="save-state" data-s="error">{save.msg}</div>}
               </div>
+            ) : redo ? (
+              <>
+                <div className="redo-head">
+                  <span>
+                    Сейчас: <b>{STATUS_WORD[ev.status]}</b>. Новое решение:
+                  </span>
+                  <button type="button" className="link-plain" onClick={() => setRedo(false)}>
+                    Отмена
+                  </button>
+                </div>
+                <div className="decide-row">
+                  {(
+                    [
+                      ['confirmed', 'Подтвердить', '1'],
+                      ['false_positive', 'Ложное', '2'],
+                      ['in_progress', 'В работу', '3'],
+                      ['resolved', 'Устранено', ''],
+                      ['pending', 'Вернуть в ожидание', ''],
+                    ] as const
+                  )
+                    .filter(([v]) => v !== ev.status)
+                    .map(([v, l, k]) => (
+                      <button key={v} type="button" className={`btn${v === 'pending' ? ' ghost' : ''}`} onClick={() => decide(v)} disabled={save.s === 'saving'}>
+                        {l}
+                        {k && <kbd>{k}</kbd>}
+                      </button>
+                    ))}
+                </div>
+                <div className="save-state" data-s={save.s === 'idle' ? undefined : save.s}>
+                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : 'Смена решения запишется в историю события на сервере.'}
+                </div>
+              </>
             ) : (
               <>
                 <div className="decide-row">
@@ -316,6 +353,16 @@ export function CaseFile({
           </div>
         </div>
       </section>
+      {lb && photo && (
+        <Lightbox
+          photos={ev.album.filter((a) => !broken.has(a.url))}
+          index={Math.max(0, ev.album.filter((a) => !broken.has(a.url)).indexOf(photo))}
+          caption={`${fmtDay(ev.at)}, ${hhmmss(ev.at)} · ${ev.code}${ev.demo ? ' · демо-распознавание' : ''}`}
+          source={() => el.current?.querySelector('.ev-main img')?.getBoundingClientRect() ?? null}
+          onIndex={(i) => setShot(ev.album.indexOf(ev.album.filter((a) => !broken.has(a.url))[i]))}
+          onClose={() => setLb(false)}
+        />
+      )}
     </>
   )
 }

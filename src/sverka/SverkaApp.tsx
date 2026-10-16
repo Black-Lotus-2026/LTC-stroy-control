@@ -5,7 +5,7 @@ import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, Stage, UiEvent, VerdictAction } from './model'
 import { DEFAULTS, DEMO_LINE, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
-import { durShort, fmtDay, hhmm, hhmmss } from './lib/format'
+import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
 import { ToastProvider, useToast } from './parts/common'
 import { Verdict } from './parts/Verdict'
@@ -18,6 +18,7 @@ import { RuleEditor } from './parts/RuleEditor'
 import { SettingsSheet, type SheetTab } from './parts/Settings'
 import { Setup } from './parts/Setup'
 import { Auth } from './parts/Auth'
+import { Journal } from './parts/Journal'
 
 export function SverkaApp() {
   const [user, setUser] = useState<UserProfile | null | undefined>(undefined)
@@ -100,6 +101,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   const [caseOpen, setCaseOpen] = useState<{ id: string; origin: DOMRect | null } | null>(null)
   const [rule, setRule] = useState<{ code: Code; stageId: string; anchor: DOMRect } | null>(null)
   const [sheet, setSheet] = useState<SheetTab | null>(null)
+  const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
   const [menu, setMenu] = useState<null | { kind: 'project' | 'user'; anchor: DOMRect }>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -136,6 +138,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
     setSelected(null)
     setCaseOpen(null)
     setRule(null)
+    setJournal(null)
     if (!project) {
       if (projects) setSetupOpen(true)
       return
@@ -196,17 +199,23 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   engine.windowMs = settings.window * 1000
   engine.stageName = stage?.name
 
+  // the server computes a profile per request (seconds each): never ask twice for the same stage
+  const inflight = useRef(new Set<string>())
   const loadProfile = useCallback(
     (stageId: string) => {
-      if (apiProfiles.has(stageId)) return Promise.resolve()
+      if (apiProfiles.has(stageId) || inflight.current.has(stageId)) return Promise.resolve()
       const token = loadToken.current
-      return api.profile(stageId).then(
-        (p) => {
-          if (token !== loadToken.current) return
-          setApiProfiles((m) => new Map(m).set(stageId, p))
-        },
-        (e: Error) => toast(`Профиль этапа не загрузился: ${e.message}`, { error: true }),
-      )
+      inflight.current.add(stageId)
+      return api
+        .profile(stageId)
+        .then(
+          (p) => {
+            if (token !== loadToken.current) return
+            setApiProfiles((m) => new Map(m).set(stageId, p))
+          },
+          (e: Error) => toast(`Профиль этапа не загрузился: ${e.message}`, { error: true }),
+        )
+        .finally(() => inflight.current.delete(stageId))
     },
     [apiProfiles, toast],
   )
@@ -298,7 +307,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
       make(`${stage.id}|miss|${s.code}|${Math.round(s.since / 1000)}`, 'missing', s.code, s.since, {
         stage_id: stage.id,
         stage_name: stage.name,
-        zone_name: zones[0]?.name ?? null,
+        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
         camera_name: live[0]?.name ?? null,
         severity: s.sev === 'err' ? 'ERROR' : 'WARNING',
         discrepancy_type: 'MISSING_MANDATORY',
@@ -319,7 +328,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
       make(`${stage.id}|oop|${o.code}|${Math.round(o.since / 1000)}`, 'oop', o.code, o.since, {
         stage_id: stage.id,
         stage_name: stage.name,
-        zone_name: zones[0]?.name ?? null,
+        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
         camera_name: live[0]?.name ?? null,
         severity: 'ERROR',
         discrepancy_type: 'UNCHARACTERISTIC_PRESENT',
@@ -410,6 +419,26 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
     writeLocal(stageId, local)
     toast('Правило возвращено к исходному уровню')
   }
+  /** Every manual change of the stage at once: levels back on the server, local marks dropped. */
+  const resetStage = async (stageId: string) => {
+    const local = localRules.get(stageId) ?? loadLocalRules(stageId)
+    const back: Record<string, string> = {}
+    for (const code of Object.keys(local) as Code[]) {
+      const rec = local[code]!
+      const serverLvl = apiLevel(stageId, code)
+      if (serverLvl && rec.base !== 'skip' && serverLvl !== rec.base) back[MACH[code].api] = LV_TO_CLS[rec.base]
+    }
+    try {
+      if (Object.keys(back).length) {
+        const res = await api.putOverrides(stageId, back)
+        setApiProfiles((m) => new Map(m).set(stageId, res))
+      }
+      writeLocal(stageId, {})
+      toast('Правила этапа возвращены к исходным уровням')
+    } catch (e) {
+      toast(`Не удалось вернуть правила: ${(e as Error).message}`, { error: true })
+    }
+  }
   const apiLevel = (stageId: string, code: Code): Level | null => {
     const p = apiProfiles.get(stageId)
     if (!p) return null
@@ -417,9 +446,9 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   }
 
   /* sources */
-  const addCamera = async (name: string, url: string) => {
+  const addCamera = async (name: string, url: string, zoneId?: string | null) => {
     if (!project) return
-    const cam = await api.createCamera(project.id, { name, stream_url: url, zone_id: zones[0]?.id ?? null })
+    const cam = await api.createCamera(project.id, { name, stream_url: url, zone_id: zoneId === undefined ? zones[0]?.id ?? null : zoneId })
     const next = [...cameras, cam]
     setCameras(next)
     engine.setCameras(next)
@@ -436,6 +465,60 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
       toast((e as Error).message, { error: true })
     }
   }
+  const updateCamera = async (id: string, name: string, url: string, zoneId: string | null) => {
+    if (!project) return
+    const cam = await api.updateCamera(project.id, id, { name, stream_url: url, zone_id: zoneId })
+    const next = cameras.map((c) => (c.id === id ? cam : c))
+    setCameras(next)
+    engine.setCameras(next)
+    toast(`Камера «${cam.name}» сохранена`)
+  }
+
+  /* the object itself */
+  const updateProject = async (d: { name: string; code: string; address: string; object_kind: string }) => {
+    if (!project) return
+    const res = await api.updateProject(project.id, d)
+    setProjects((l) => (l || []).map((p) => (p.id === res.id ? { ...p, ...res, owner_username: p.owner_username } : p)))
+  }
+  const deleteProject = async () => {
+    if (!project) return
+    const gone = project
+    await api.deleteProject(gone.id)
+    setSheet(null)
+    const rest = (projects || []).filter((p) => p.id !== gone.id)
+    setProjects(rest)
+    const next = rest.find((p) => user.role === 'admin' || !p.owner_username || p.owner_username === user.username)
+    setProjectId(next?.id ?? null)
+    toast(`Объект «${gone.name}» удалён`)
+  }
+  const createZone = async (d: { name: string; code: string; description: string }) => {
+    if (!project) return
+    const z = await api.createZone(project.id, { name: d.name, code: d.code || undefined, description: d.description || undefined })
+    setZones((l) => [...l, z])
+  }
+  const updateZone = async (id: string, d: { name: string; code: string; description: string }) => {
+    if (!project) return
+    const z = await api.updateZone(project.id, id, d)
+    setZones((l) => l.map((x) => (x.id === id ? z : x)))
+  }
+  const deleteZone = async (id: string) => {
+    if (!project) return
+    try {
+      await api.deleteZone(project.id, id)
+      setZones((l) => l.filter((x) => x.id !== id))
+      // the server unlinks the cameras of the zone (ON DELETE SET NULL)
+      setCameras((l) => l.map((c) => (c.zone_id === id ? { ...c, zone_id: null } : c)))
+    } catch (e) {
+      toast((e as Error).message, { error: true })
+    }
+  }
+  /** The zone an event belongs to: the zone of the camera it was seen on. */
+  const zoneOf = (sourceId?: string) => {
+    const cam = cameras.find((c) => c.id === sourceId)
+    const z = zones.find((x) => x.id === cam?.zone_id)
+    return z?.name ?? (zones.length === 1 ? zones[0].name : null)
+  }
+
   const openRecording = (file: File, start: number) => {
     engine.startRecording(file, start)
     setSelected('recording')
@@ -459,6 +542,43 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
     return res
   }
 
+  /* plan dates: one PUT per changed stage, then the plan is read back from the server */
+  const writeDates = async (list: { id: string; start: number; end: number }[]) => {
+    if (!project) return
+    const id = project.id
+    await Promise.all(list.map((c) => api.updateStage(c.id, { planned_start: isoDay(c.start), planned_end: isoDay(c.end), duration_days: Math.round((c.end - c.start) / DAY_MS) + 1 })))
+    const fresh = await api.stages(id)
+    if (project?.id === id) setStages(toStages(fresh))
+  }
+  const saveSchedule = async (changes: { id: string; start: number; end: number }[]) => {
+    const before = changes.map((c) => {
+      const s = stages.find((x) => x.id === c.id)!
+      return { id: c.id, start: s.start, end: s.end }
+    })
+    const main = stages.find((x) => x.id === changes[0]?.id)
+    await writeDates(changes)
+    const others = changes.length - 1
+    toast(`Сроки этапа ${main?.n ?? ''} сохранены${others ? ` · ещё ${others} ${plural(others, 'этап сдвинут', 'этапа сдвинуты', 'этапов сдвинуты')}` : ''}`, {
+      undo: () =>
+        void writeDates(before).then(
+          () => toast('Сроки возвращены'),
+          (e: Error) => toast(`Не удалось вернуть сроки: ${e.message}`, { error: true }),
+        ),
+    })
+  }
+  const clearPlan = async () => {
+    if (!project) return
+    try {
+      await api.clearPlan(project.id)
+      setStages([])
+      setApiProfiles(new Map())
+      setDockOpen(false)
+      toast('План очищен. Загрузите новый план, чтобы продолжить сверку.')
+    } catch (e) {
+      toast((e as Error).message, { error: true })
+    }
+  }
+
   const onAction = (a: VerdictAction | { act: string; id?: string }, el?: HTMLElement) => {
     if (a.act === 'case' && a.id) setCaseOpen({ id: a.id, origin: document.querySelector(`.q-item[data-id="${a.id}"] .q-card`)?.getBoundingClientRect() ?? el?.getBoundingClientRect() ?? null })
     else if (a.act === 'plan') setDockOpen(true)
@@ -476,7 +596,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || caseOpen || rule || sheet) return
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || caseOpen || rule || sheet || journal) return
       if (e.key === 'Escape' && dockOpen) setDockOpen(false)
       if (e.key === 'p' || e.key === 'з') setDockOpen((o) => !o)
       if (['j', 'k', 'о', 'л'].includes(e.key)) {
@@ -489,6 +609,11 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
     addEventListener('keydown', k)
     return () => removeEventListener('keydown', k)
   })
+
+  // flights from the camera to the queue would cross the journal: keep them under it
+  useEffect(() => {
+    document.body.dataset.journal = journal ? 'open' : ''
+  }, [journal])
 
   const caseEvent = caseOpen ? events.find((e) => e.id === caseOpen.id) : null
   const caseStage = caseEvent ? stages.find((s) => s.id === caseEvent.stageId) ?? stageAt(stages, caseEvent.at) : null
@@ -512,10 +637,10 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
             <span className="slash" aria-hidden="true">
               /
             </span>
-            <span className="ctx" id="ctxZone" style={{ cursor: 'default' }}>
+            <button type="button" className="ctx" id="ctxZone" onClick={() => setSheet('object')} title="Зоны площадки">
               <small>Зона</small>
-              <span className="no-caret">{zones.length === 1 ? zones[0].name : `${zones.length} зоны`}</span>
-            </span>
+              <span className="no-caret">{zones.length === 1 ? zones[0].name : `${zones.length} ${plural(zones.length, 'зона', 'зоны', 'зон')}`}</span>
+            </button>
           </>
         )}
         <div className="grow" />
@@ -553,7 +678,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
             onDecide={(id, status) => {
               decide(id, status).catch(() => undefined)
             }}
-            onJournal={() => toast('Журнал с выгрузкой акта за период переносится следующим шагом. Пока он доступен в старом интерфейсе.')}
+            onJournal={(el) => setJournal({ origin: el.getBoundingClientRect() })}
           />
         </aside>
         <QueueJump count={pending.length} err={pending.some((e) => e.sev === 'err')} />
@@ -593,6 +718,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
         profiles={profiles}
         needProfiles={needAll}
         onRule={(c, el, sid) => openRule(c, el, sid)}
+        onResetStage={resetStage}
         onOpenEvent={(id, el) => setCaseOpen({ id, origin: el.getBoundingClientRect() })}
         onUploadPlan={(f) => {
           if (!project) return
@@ -601,12 +727,27 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
             (e: Error) => toast(e.message, { error: true }),
           )
         }}
+        onSaveSchedule={saveSchedule}
+        onClearPlan={clearPlan}
         onSeek={(v) => engine.seek(v)}
         open={dockOpen}
         setOpen={setDockOpen}
         shift={{ from: settings.shiftFrom, to: settings.shiftTo }}
       />
 
+      {journal && project && (
+        <Journal
+          events={events}
+          stages={stages}
+          project={project}
+          user={user.username}
+          settings={settings}
+          t={t}
+          origin={journal.origin}
+          onOpen={(id, el) => setCaseOpen({ id, origin: el.getBoundingClientRect() })}
+          onClose={() => setJournal(null)}
+        />
+      )}
       {caseEvent && (
         <CaseFile
           key={caseEvent.id}
@@ -660,6 +801,15 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           onCheck={api.probeCamera}
           onRecording={openRecording}
           onClose={() => setSheet(null)}
+          objectActions={{
+            counts: { stages: stages.length, events: events.filter((e) => !e.sample).length },
+            onUpdateProject: updateProject,
+            onDeleteProject: deleteProject,
+            onCreateZone: createZone,
+            onUpdateZone: updateZone,
+            onDeleteZone: deleteZone,
+            onUpdateCamera: updateCamera,
+          }}
         />
       )}
       {menu && (
@@ -685,6 +835,10 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           ) : (
             <>
               <div className="m-k kicker">{user.username} · {user.role === 'admin' ? 'администратор' : 'инженер технадзора'}</div>
+              <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setJournal({ origin: menu.anchor }) }}>
+                <span />
+                <span><b>Журнал и акт</b><small>События за период, выгрузка акта</small></span>
+              </button>
               <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setSetupOpen(true) }}>
                 <span />
                 <span><b>Первый запуск</b><small>План, источники, проверка</small></span>

@@ -1,14 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CameraItem, ProjectItem, ZoneItem } from '../api'
 import type { NumKey, Observation, Settings as S } from '../model'
-import { DEFAULTS, STEPS, THRESHOLDS } from '../model'
+import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
 import { clock, durShort, hhmmss, toLocalInput } from '../lib/format'
 import { Spring, clamp } from '../lib/spring'
 import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'object'
+
+export interface ObjectActions {
+  counts: { stages: number; events: number }
+  onUpdateProject: (d: { name: string; code: string; address: string; object_kind: string }) => Promise<void>
+  onDeleteProject: () => Promise<void>
+  onCreateZone: (d: ZoneDraft) => Promise<void>
+  onUpdateZone: (id: string, d: ZoneDraft) => Promise<void>
+  onDeleteZone: (id: string) => Promise<void>
+  onUpdateCamera: (id: string, name: string, url: string, zoneId: string | null) => Promise<void>
+}
+export interface ZoneDraft { name: string; code: string; description: string }
 
 export function SettingsSheet({
   tab: initialTab,
@@ -23,6 +34,7 @@ export function SettingsSheet({
   onCheck,
   onRecording,
   onClose,
+  objectActions,
 }: {
   tab: SheetTab
   settings: S
@@ -31,11 +43,12 @@ export function SettingsSheet({
   cameras: CameraItem[]
   project: ProjectItem
   zones: ZoneItem[]
-  onAddCamera: (name: string, url: string) => Promise<void>
+  onAddCamera: (name: string, url: string, zoneId?: string | null) => Promise<void>
   onDeleteCamera: (id: string) => Promise<void>
   onCheck: Probe
   onRecording: (f: File, start: number) => void
   onClose: () => void
+  objectActions: ObjectActions
 }) {
   const [tab, setTab] = useState<SheetTab>(initialTab)
   const el = useRef<HTMLElement>(null)
@@ -118,7 +131,8 @@ export function SettingsSheet({
             [
               ['control', 'Контроль'],
               ['sources', 'Источники'],
-              ['shift', 'Смена и объект'],
+              ['shift', 'Смена'],
+              ['object', 'Объект'],
             ] as const
           ).map(([k, v]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
@@ -166,26 +180,13 @@ export function SettingsSheet({
               </div>
             </>
           )}
-          {tab === 'sources' && <Sources obs={obs} cameras={cameras} onAdd={onAddCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} />}
+          {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} />}
+          {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} a={objectActions} />}
           {tab === 'shift' && (
             <>
               {row({ k: "shiftFrom", title: "Начало смены", desc: "Вне смены отсутствие техники не считается отклонением." })}
               {row({ k: "shiftTo", title: "Конец смены", desc: "После конца смены события об отсутствии техники не создаются." })}
               {row({ k: "startGrace", title: "Сбор техники после начала смены", desc: "Сколько ждать, прежде чем считать технику отсутствующей, если с начала смены её ещё не было." })}
-              <div className="set-row">
-                <div>
-                  <h4>Тип объекта</h4>
-                  <p>Определяет раздел справочника для профилей этапов.</p>
-                </div>
-                <span>{project.object_kind || 'не указан'}</span>
-              </div>
-              <div className="set-row">
-                <div>
-                  <h4>Зоны</h4>
-                  <p>{zones.length ? zones.map((z) => z.name).join(', ') : 'Зоны не заданы. События относятся ко всему объекту.'}</p>
-                </div>
-                <span />
-              </div>
             </>
           )}
         </div>
@@ -237,9 +238,10 @@ const STATUS_LINE: Record<string, string> = {
   idle: 'Пауза: открыта запись',
 }
 
-function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; onAdd: (n: string, u: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
+function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
   const [form, setForm] = useState<null | 'camera' | 'recording'>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
   const [checks, setChecks] = useState<Record<string, string>>({})
   return (
     <>
@@ -257,6 +259,21 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
       {cameras.map((c) => {
         const v = obs.sources.find((s) => s.id === c.id)
         const st = v?.status || 'idle'
+        const zone = zones.find((z) => z.id === c.zone_id)
+        if (editing === c.id)
+          return (
+            <div className="src-edit" key={c.id}>
+              <span className="kicker">Камера · изменение</span>
+              <CameraForm
+                zones={zones}
+                initial={{ name: c.name, url: c.stream_url || '', zoneId: c.zone_id ?? null }}
+                submitLabel="Сохранить"
+                onAdd={(n, u, z) => onUpdate(c.id, n, u, z ?? null).then(() => setEditing(null))}
+                onCheck={onCheck}
+                onCancel={() => setEditing(null)}
+              />
+            </div>
+          )
         return (
           <div className="src-row" key={c.id}>
             {v?.snapshot ? <img src={v.snapshot} alt="" /> : <span className="t-snap-none" style={{ position: 'static', width: 96, aspectRatio: '16/9' }}>нет кадра</span>}
@@ -267,6 +284,7 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
                 {v?.message ? ` · ${v.message}` : ''}
               </small>
               <small className="mono">{c.stream_url || 'адрес не указан'}</small>
+              {zones.length > 0 && <small>Зона: {zone ? zone.name : 'не указана'}</small>}
               {checks[c.id] && <small>{checks[c.id]}</small>}
             </div>
             <div className="row-actions">
@@ -298,6 +316,9 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
                   >
                     Проверить
                   </button>
+                  <button type="button" className="btn small ghost" onClick={() => setEditing(c.id)} aria-label={`Изменить камеру ${c.name}`}>
+                    Изменить
+                  </button>
                   <button type="button" className="btn small ghost" onClick={() => setConfirmDel(c.id)} aria-label={`Удалить камеру ${c.name}`}>
                     Удалить
                   </button>
@@ -315,7 +336,7 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
         <span />
       </div>
       {form === 'camera' ? (
-        <CameraForm onAdd={onAdd} onCancel={() => setForm(null)} onCheck={onCheck} />
+        <CameraForm zones={zones} onAdd={onAdd} onCancel={() => setForm(null)} onCheck={onCheck} />
       ) : form === 'recording' ? (
         <RecordingForm onSubmit={(f, s) => { onRecording(f, s); setForm(null) }} onCancel={() => setForm(null)} />
       ) : (
@@ -332,9 +353,24 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
   )
 }
 
-export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u: string) => Promise<void>; onCancel?: () => void; onCheck: Probe }) {
-  const [name, setName] = useState('')
-  const [url, setUrl] = useState('')
+export function CameraForm({
+  onAdd,
+  onCancel,
+  onCheck,
+  zones = [],
+  initial,
+  submitLabel = 'Проверить и сохранить',
+}: {
+  onAdd: (n: string, u: string, zoneId?: string | null) => Promise<void>
+  onCancel?: () => void
+  onCheck: Probe
+  zones?: ZoneItem[]
+  initial?: { name: string; url: string; zoneId: string | null }
+  submitLabel?: string
+}) {
+  const [name, setName] = useState(initial?.name ?? '')
+  const [url, setUrl] = useState(initial?.url ?? '')
+  const [zoneId, setZoneId] = useState<string | null>(initial ? initial.zoneId : zones[0]?.id ?? null)
   const [state, setState] = useState<{ s: 'idle' | 'busy' | 'error' | 'warn'; msg?: string }>({ s: 'idle' })
   const rtsp = /^rtsp:\/\//i.test(url.trim())
   const submit = async (e: React.FormEvent) => {
@@ -342,16 +378,24 @@ export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u:
     if (!name.trim() || !url.trim()) return
     setState({ s: 'busy', msg: 'Проверяем связь…' })
     try {
+      // the address did not change: nothing to check again
+      if (initial && url.trim() === initial.url.trim()) {
+        await onAdd(name.trim(), url.trim(), zoneId)
+        setState({ s: 'idle' })
+        return
+      }
       const r = await onCheck(url.trim())
       if (!r.ok) {
         setState({ s: 'warn', msg: `${r.message}. Камеру можно сохранить, но кадров не будет, пока связь не появится.` })
         return
       }
-      await onAdd(name.trim(), url.trim())
-      setName('')
-      setUrl('')
+      await onAdd(name.trim(), url.trim(), zoneId)
+      if (!initial) {
+        setName('')
+        setUrl('')
+      }
       setState({ s: 'idle' })
-      onCancel?.()
+      if (!initial) onCancel?.()
     } catch (err) {
       setState({ s: 'error', msg: err instanceof Error ? err.message : 'Не удалось сохранить камеру' })
     }
@@ -368,14 +412,29 @@ export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u:
           <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://10.20.1.11/mjpeg" required />
         </label>
       </div>
+      {zones.length > 0 && (
+        <div className="form-grid">
+          <label>
+            Зона
+            <select className="select" value={zoneId ?? ''} onChange={(e) => setZoneId(e.target.value || null)}>
+              <option value="">Без зоны</option>
+              {zones.map((z) => (
+                <option key={z.id} value={z.id}>
+                  {z.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
       {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/MJPEG-адрес или серверный шлюз.</p>}
       {state.msg && <p className={state.s === 'error' ? 'err-line' : 'hint'}>{state.msg}</p>}
       <div className="form-actions">
         <button type="submit" className="btn small primary" disabled={state.s === 'busy'}>
-          {state.s === 'busy' ? 'Проверяем…' : 'Проверить и сохранить'}
+          {state.s === 'busy' ? 'Проверяем…' : submitLabel}
         </button>
         {state.s === 'warn' && (
-          <button type="button" className="btn small" onClick={() => onAdd(name.trim(), url.trim()).then(() => { setState({ s: 'idle' }); onCancel?.() }, (err) => setState({ s: 'error', msg: err.message }))}>
+          <button type="button" className="btn small" onClick={() => onAdd(name.trim(), url.trim(), zoneId).then(() => { setState({ s: 'idle' }); if (!initial) onCancel?.() }, (err) => setState({ s: 'error', msg: err.message }))}>
             Сохранить без проверки
           </button>
         )}
@@ -419,6 +478,217 @@ export function RecordingForm({ onSubmit, onCancel }: { onSubmit: (f: File, star
             Отмена
           </button>
         )}
+      </div>
+    </form>
+  )
+}
+
+/* ── Object: its card, the zones of the site, and deleting it ─────────────── */
+function ObjectPane({ project, zones, cameras, a }: { project: ProjectItem; zones: ZoneItem[]; cameras: CameraItem[]; a: ObjectActions }) {
+  const init = { name: project.name, code: project.code || '', address: project.address || '', object_kind: project.object_kind || KINDS[0] }
+  const [f, setF] = useState(init)
+  const [st, setSt] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
+  const [zoneForm, setZoneForm] = useState<string | 'new' | null>(null)
+  const [zoneDel, setZoneDel] = useState<string | null>(null)
+  const [ask, setAsk] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [delBusy, setDelBusy] = useState(false)
+  const [delErr, setDelErr] = useState<string | null>(null)
+  const dirty = (Object.keys(init) as (keyof typeof init)[]).some((k) => f[k].trim() !== init[k].trim())
+  const kinds = KINDS.includes(f.object_kind) ? KINDS : [f.object_kind, ...KINDS]
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!f.name.trim() || !dirty) return
+    setSt({ s: 'saving' })
+    try {
+      await a.onUpdateProject(f)
+      setSt({ s: 'saved' })
+    } catch (err) {
+      setSt({ s: 'error', msg: err instanceof Error ? err.message : 'Не удалось сохранить' })
+    }
+  }
+  return (
+    <>
+      <section className="obj-sec">
+        <span className="kicker">Карточка объекта</span>
+        <form onSubmit={save}>
+          <div className="form-grid two-col">
+            <label style={{ gridColumn: '1 / -1' }}>
+              Название
+              <input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
+            </label>
+            <label>
+              Код
+              <input className="input mono" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} placeholder="PRJ-SEV" />
+            </label>
+            <label>
+              Тип объекта
+              <select className="select" value={f.object_kind} onChange={(e) => setF({ ...f, object_kind: e.target.value })}>
+                {kinds.map((k) => (
+                  <option key={k}>{k}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ gridColumn: '1 / -1' }}>
+              Адрес
+              <input className="input" value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} placeholder="г. Москва, ул. Строителей, 12" />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button type="submit" className="btn small primary" disabled={!dirty || st.s === 'saving' || !f.name.trim()}>
+              {st.s === 'saving' ? 'Сохраняем…' : 'Сохранить'}
+            </button>
+            {dirty && (
+              <button type="button" className="btn small ghost" onClick={() => { setF(init); setSt({ s: 'idle' }) }}>
+                Отменить правки
+              </button>
+            )}
+            {st.s === 'saved' && !dirty && <span className="save-state" data-s="saved">Сохранено</span>}
+            {st.s === 'error' && <span className="err-line">{st.msg}</span>}
+          </div>
+        </form>
+        <p className="hint">Тип объекта пока только подписывает объект: сервер не учитывает его, когда сопоставляет этапы плана со справочником.</p>
+      </section>
+
+      <section className="obj-sec">
+        <div className="obj-head">
+          <span className="kicker">Зоны площадки</span>
+          {zoneForm !== 'new' && (
+            <button type="button" className="btn small" onClick={() => setZoneForm('new')}>
+              Добавить зону
+            </button>
+          )}
+        </div>
+        {!zones.length && zoneForm !== 'new' && <p className="hint">Зон нет: события относятся ко всему объекту. Зона нужна, если камеры смотрят на разные участки.</p>}
+        {zoneForm === 'new' && <ZoneForm onSubmit={(d) => a.onCreateZone(d).then(() => setZoneForm(null))} onCancel={() => setZoneForm(null)} />}
+        {zones.map((z) => {
+          const n = cameras.filter((c) => c.zone_id === z.id).length
+          if (zoneForm === z.id) return <ZoneForm key={z.id} initial={{ name: z.name, code: z.code || '', description: z.description || '' }} onSubmit={(d) => a.onUpdateZone(z.id, d).then(() => setZoneForm(null))} onCancel={() => setZoneForm(null)} />
+          return (
+            <div className="zone-row" key={z.id}>
+              <div>
+                <b>
+                  {z.name} <span className="mono">{z.code}</span>
+                </b>
+                <small>
+                  {z.description ? `${z.description} · ` : ''}
+                  {n ? `${n} ${n === 1 ? 'камера' : n < 5 ? 'камеры' : 'камер'}` : 'камер нет'}
+                </small>
+              </div>
+              <div className="row-actions">
+                {zoneDel === z.id ? (
+                  <span className="confirm-row">
+                    {n ? `Камеры (${n}) останутся без зоны.` : 'Удалить?'}
+                    <button type="button" className="btn small danger" onClick={() => a.onDeleteZone(z.id).finally(() => setZoneDel(null))}>
+                      Удалить
+                    </button>
+                    <button type="button" className="btn small ghost" onClick={() => setZoneDel(null)}>
+                      Нет
+                    </button>
+                  </span>
+                ) : (
+                  <>
+                    <button type="button" className="btn small ghost" onClick={() => setZoneForm(z.id)}>
+                      Изменить
+                    </button>
+                    <button type="button" className="btn small ghost" onClick={() => setZoneDel(z.id)}>
+                      Удалить
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )
+        })}
+        {zones.length > 0 && <p className="hint">Зона камеры попадает в события, снятые этой камерой. Привязать камеру к зоне можно во вкладке «Источники».</p>}
+      </section>
+
+      <section className="obj-sec danger-zone">
+        <span className="kicker">Удаление объекта</span>
+        {!ask ? (
+          <div className="obj-head">
+            <p className="hint">Объект удаляется вместе с планом, камерами, зонами и журналом событий.</p>
+            <button type="button" className="btn small danger" onClick={() => setAsk(true)}>
+              Удалить объект…
+            </button>
+          </div>
+        ) : (
+          <div className="del-box">
+            <p>
+              Удалятся план ({a.counts.stages} {a.counts.stages === 1 ? 'этап' : 'этапов'}), камеры ({cameras.length}), зоны ({zones.length}) и журнал событий ({a.counts.events}). Отменить это нельзя.
+            </p>
+            <label>
+              Чтобы подтвердить, введите название объекта
+              <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={project.name} autoFocus />
+            </label>
+            {delErr && <p className="err-line">{delErr}</p>}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="btn small danger"
+                disabled={typed.trim() !== project.name.trim() || delBusy}
+                onClick={() => {
+                  setDelBusy(true)
+                  setDelErr(null)
+                  a.onDeleteProject().catch((e: Error) => {
+                    setDelErr(e.message)
+                    setDelBusy(false)
+                  })
+                }}
+              >
+                {delBusy ? 'Удаляем…' : 'Удалить навсегда'}
+              </button>
+              <button type="button" className="btn small ghost" onClick={() => { setAsk(false); setTyped('') }}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+    </>
+  )
+}
+
+function ZoneForm({ initial, onSubmit, onCancel }: { initial?: ZoneDraft; onSubmit: (d: ZoneDraft) => Promise<void>; onCancel: () => void }) {
+  const [d, setD] = useState<ZoneDraft>(initial ?? { name: '', code: '', description: '' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <form
+      className="zone-form"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (!d.name.trim()) return
+        setBusy(true)
+        setErr(null)
+        onSubmit({ name: d.name.trim(), code: d.code.trim(), description: d.description.trim() }).catch((x: Error) => {
+          setErr(x.message)
+          setBusy(false)
+        })
+      }}
+    >
+      <div className="form-grid two-col">
+        <label>
+          Название
+          <input className="input" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="Котлован секции А" required autoFocus />
+        </label>
+        <label>
+          Код
+          <input className="input mono" value={d.code} onChange={(e) => setD({ ...d, code: e.target.value })} placeholder="A-01" />
+        </label>
+        <label style={{ gridColumn: '1 / -1' }}>
+          Описание
+          <input className="input" value={d.description} onChange={(e) => setD({ ...d, description: e.target.value })} placeholder="Что на этом участке" />
+        </label>
+      </div>
+      {err && <p className="err-line">{err}</p>}
+      <div className="form-actions">
+        <button type="submit" className="btn small primary" disabled={busy || !d.name.trim()}>
+          {busy ? 'Сохраняем…' : initial ? 'Сохранить' : 'Добавить зону'}
+        </button>
+        <button type="button" className="btn small ghost" onClick={onCancel}>
+          Отмена
+        </button>
       </div>
     </form>
   )

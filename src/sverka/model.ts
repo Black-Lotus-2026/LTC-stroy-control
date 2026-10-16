@@ -64,6 +64,9 @@ export function saveSettings(projectId: string, s: Settings) {
   }
 }
 
+/** Object types as the reference catalogue names them. */
+export const KINDS = ['Жильё', 'Административные здания', 'Офисно-деловой центр', 'Образование', 'ДОУ', 'Здравоохранение', 'Спорт', 'Культура', 'Дороги']
+
 /* ── Plan ───────────────────────────────────────────────── */
 export interface Stage {
   id: string
@@ -330,6 +333,17 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     sample: SAMPLE_IDS.has(a.id),
   }
 }
+/** Descriptions we create carry labelled lines; older ones are shown as one block. */
+export function parseDescription(text: string) {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const m = line.match(/^(Наблюдение|Качество данных|Правило):\s*(.+)$/)
+    if (m) out[m[1]] = m[2]
+  }
+  if (!Object.keys(out).length && text.trim()) out['Наблюдение'] = text.trim()
+  return out
+}
+
 /** Session knowledge about an episode: when the absence began and whether it ended. */
 export interface Episode { from: number; to?: number }
 

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Spring, reducedMotion } from '../lib/spring'
 
 /* ── Toast with optional undo ───────────────────────────── */
@@ -134,4 +134,65 @@ export function Roll({ value }: { value: number }) {
 export function Rich({ text }: { text: string }) {
   const parts = text.split(/\*\*(.+?)\*\*/g)
   return <>{parts.map((p, i) => (i % 2 ? <strong key={i}>{p}</strong> : p))}</>
+}
+
+/** Segmented control; the pill travels to the choice on a spring and can be re-targeted mid-flight. */
+export function Seg<T extends string>({ value, options, onChange, label, className = '' }: { value: T; options: { v: T; label: React.ReactNode }[]; onChange: (v: T) => void; label: string; className?: string }) {
+  const box = useRef<HTMLDivElement>(null)
+  const pill = useRef<HTMLElement>(null)
+  const px = useRef(new Spring(0, { response: 0.34, damping: 0.86, rest: 0.2, onUpdate: (v) => pill.current && (pill.current.style.transform = `translateX(${v}px)`) }))
+  const pw = useRef(new Spring(0, { response: 0.34, damping: 0.95, rest: 0.2, onUpdate: (v) => pill.current && (pill.current.style.width = v + 'px') }))
+  const first = useRef(true)
+  useLayoutEffect(() => {
+    const b = box.current?.querySelector<HTMLElement>('button[aria-checked="true"]')
+    if (!b || !pill.current) return
+    pill.current.style.height = b.offsetHeight + 'px'
+    pill.current.style.top = b.offsetTop + 'px'
+    if (first.current || !b.offsetWidth) {
+      px.current.set(b.offsetLeft)
+      pw.current.set(b.offsetWidth)
+      first.current = !b.offsetWidth
+    } else {
+      px.current.to(b.offsetLeft)
+      pw.current.to(b.offsetWidth)
+    }
+  })
+  return (
+    <div className={`seg seg-auto ${className}`} role="radiogroup" aria-label={label} ref={box}>
+      {options.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          role="radio"
+          aria-checked={o.v === value}
+          tabIndex={o.v === value ? 0 : -1}
+          onClick={() => onChange(o.v)}
+          onKeyDown={(e) => {
+            const i = options.findIndex((x) => x.v === value)
+            const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+            if (!d) return
+            e.preventDefault()
+            const n = options[(i + d + options.length) % options.length]
+            onChange(n.v)
+            window.setTimeout(() => box.current?.querySelector<HTMLElement>('button[aria-checked="true"]')?.focus(), 0)
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+      <i className="pill" ref={pill} />
+    </div>
+  )
+}
+
+/** Checkbox drawn as a small square; the tick is drawn with a stroke when it turns on. */
+export function Tick({ on, onChange, label, className = '' }: { on: boolean; onChange: (v: boolean) => void; label: string; className?: string }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={on} aria-label={label} title={label} className={`tick ${className}`} onClick={(e) => { e.stopPropagation(); onChange(!on) }}>
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="13" height="13" rx="3.5" />
+        <path d="M4.6 8.3l2.3 2.3 4.6-5" />
+      </svg>
+    </button>
+  )
 }

@@ -64,10 +64,50 @@ export function planDay(iso: string) {
 }
 
 /** Seconds since local midnight → "07:30". */
-export const clock = (sec: number) => `${pad(Math.floor(sec / 3600) % 24)}:${pad(Math.floor(sec / 60) % 60)}`
+export const clock = (sec: number) => (sec === 86400 ? '24:00' : `${pad(Math.floor(sec / 3600) % 24)}:${pad(Math.floor(sec / 60) % 60)}`)
 
 export const conf2 = (c: number) => c.toFixed(2).replace('.', ',')
 
 export function toLocalInput(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** "16.10.2026" — for documents. */
+export const fmtDate = (t: number | Date) => {
+  const d = typeof t === 'number' ? new Date(t) : t
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`
+}
+
+export const WEEKDAYS = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота']
+
+/** "пятница, 16 октября 2026" — day headers in the journal. */
+export const fmtDayLong = (t: number) => {
+  const d = new Date(t)
+  return `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS_G[d.getMonth()]} ${d.getFullYear()}`
+}
+
+/** A calendar day as the server stores plan dates: UTC midnight of that date. */
+export function isoDay(t: number) {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00Z`
+}
+
+/** Local calendar day shifted by whole days (DST-safe). */
+export function addDays(t: number, n: number) {
+  const d = new Date(t)
+  d.setDate(d.getDate() + n)
+  return d.getTime()
+}
+
+/** Whole calendar days from a to b. */
+export const daysBetween = (a: number, b: number) => Math.round((dayStart(b) - dayStart(a)) / DAY_MS)
+
+/** "2026-10-16" for <input type="date">. */
+export const toDateInput = (t: number) => {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+export const fromDateInput = (v: string) => {
+  const [y, m, d] = v.split('-').map(Number)
+  return new Date(y, m - 1, d).getTime()
 }
