@@ -12,9 +12,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Literal, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class IncidentSeverity(str, Enum):
@@ -211,6 +211,12 @@ class IncidentStatusUpdateRequest(BaseModel):
 
 class IncidentCreateRequest(BaseModel):
     project_id: uuid.UUID
+    zone_id: uuid.UUID | None = None
+    camera_id: uuid.UUID | None = None
+    captured_at: AwareDatetime | None = None
+    model_status: Literal["valid", "unavailable", "failed"] = "valid"
+    rule_version: str | None = None
+    observation_key: str | None = Field(default=None, max_length=120)
     stage_id: uuid.UUID | None = None
     stage_name: str | None = None
     zone_name: str | None = None
@@ -218,7 +224,7 @@ class IncidentCreateRequest(BaseModel):
     severity: IncidentSeverity = IncidentSeverity.ERROR
     discrepancy_type: str = "MISSING_MANDATORY"
     machinery_type: str | None = None
-    stage_probability: float | None = 0.95
+    stage_probability: float | None = None
     observed_count: int = 0
     title: str
     description: str

@@ -42,7 +42,7 @@ def get_current_user(
 ) -> User:
     """Require valid authenticated user."""
     user = get_current_user_optional(auth, db)
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Необходима авторизация",

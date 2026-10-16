@@ -42,7 +42,9 @@ def db():
     engine.dispose()
 
 
-def setup_alert(db: Session, *, deadline_minutes: int = 120) -> tuple[Incident, User, User]:
+def setup_alert(
+    db: Session, *, deadline_minutes: int = 120, captured_at: datetime | None = None
+) -> tuple[Incident, User, User]:
     owner = User(username="foreman", name="Ответственный", role=UserRole.MANAGER)
     chief = User(username="chief", name="Руководитель", role=UserRole.ADMIN)
     db.add_all([owner, chief])
@@ -59,7 +61,8 @@ def setup_alert(db: Session, *, deadline_minutes: int = 120) -> tuple[Incident, 
         title="Нет экскаватора", discrepancy_type="MISSING_MANDATORY",
         machinery_type="Экскаватор", status=IncidentStatus.PENDING,
         priority=IncidentPriority.CRITICAL, dedup_key="alert-test",
-        first_seen_at=datetime.now(UTC), last_seen_at=datetime.now(UTC),
+        first_seen_at=captured_at or datetime.now(UTC),
+        last_seen_at=captured_at or datetime.now(UTC),
     )
     db.add(incident)
     db.flush()
@@ -71,7 +74,8 @@ def setup_alert(db: Session, *, deadline_minutes: int = 120) -> tuple[Incident, 
 def test_assignment_and_verified_resolution(db: Session) -> None:
     incident, owner, _ = setup_alert(db)
     assert incident.assigned_user_id == owner.id
-    assert incident.sla_deadline - incident.first_seen_at == timedelta(hours=2)
+    deadline = incident.sla_deadline.replace(tzinfo=UTC)
+    assert timedelta(minutes=119) < deadline - datetime.now(UTC) <= timedelta(hours=2)
     assert [(n.kind, n.recipient_user_id) for n in db.scalars(select(AlertNotification))] == [
         ("assigned", owner.id)
     ]
@@ -85,6 +89,11 @@ def test_assignment_and_verified_resolution(db: Session) -> None:
     assert incident.status == IncidentStatus.RESOLVED
     assert {n.kind for n in db.scalars(select(AlertNotification))} == {"assigned", "verified"}
     assert run_due_verifications(db, verifier=lambda *_: pytest.fail("closed incident rechecked"))["checked"] == 0
+
+
+def test_recorded_capture_gets_full_correction_window(db: Session) -> None:
+    incident, _, _ = setup_alert(db, captured_at=datetime.now(UTC) - timedelta(days=1))
+    assert incident.sla_deadline.replace(tzinfo=UTC) > datetime.now(UTC) + timedelta(minutes=119)
 
 
 @pytest.mark.parametrize("outcome", ["failed", "unavailable"])

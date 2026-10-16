@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # и чтобы тесты не поднимали воркер. См. docs/decisions/0002-celery.md
     celery_eager: bool = False
 
+    # Management uses a separate adapter; never expose credentials in API or logs.
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = "openai/gpt-4o-mini"
+    management_queue_timeout_seconds: int = 300
+    management_run_timeout_seconds: int = 90
+
     # --- Хранилище кадров ---
     storage_backend: Literal["local"] = "local"
     storage_local_root: Path = Path("./var/storage")

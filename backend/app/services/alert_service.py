@@ -103,7 +103,7 @@ def assign_initial_alert(db: Session, incident: Incident, project: Project) -> N
         if incident.priority.value == "critical"
         else project.alert_warning_deadline_minutes
     )
-    incident.sla_deadline = incident.first_seen_at + timedelta(minutes=minutes)
+    incident.sla_deadline = datetime.now(UTC) + timedelta(minutes=minutes)
     db.flush()
     db.add(
         IncidentEvent(

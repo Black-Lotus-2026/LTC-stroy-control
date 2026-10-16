@@ -98,6 +98,12 @@ export interface IncidentAlertItem {
 
 export interface IncidentCreatePayload {
   project_id: string
+  zone_id?: string | null
+  camera_id?: string | null
+  captured_at?: string
+  model_status?: 'valid' | 'unavailable' | 'failed'
+  rule_version?: string
+  observation_key?: string
   stage_id?: string | null
   stage_name?: string | null
   zone_name?: string | null
@@ -915,7 +921,7 @@ function applyLocalOverridesToResponse(resp: StageProbabilityResponse, stageId: 
         ...item,
         probability: statusMeta[ov].prob,
         requirement_level: statusMeta[ov].level,
-        classification: ov as any,
+        classification: ov as MachineryProbabilityItem['classification'],
       }
     }
     return item
@@ -1145,17 +1151,11 @@ function normalizeIncidentItem(item: IncidentAlertItem): IncidentAlertItem {
 }
 
 export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
-  try {
-    const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
-    const res = await fetch(url, { headers: getAuthHeaders() })
-    if (res.ok) {
-      const data: IncidentAlertItem[] = await res.json()
-      return data.map(normalizeIncidentItem)
-    }
-  } catch {
-    // Keep the inbox truthful while the API is unavailable.
-  }
-  return []
+  const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить инциденты')
+  const data: IncidentAlertItem[] = await res.json()
+  return data.map(normalizeIncidentItem)
 }
 
 export async function fetchIncidentAlbum(incidentId: string): Promise<IncidentAlbumData> {

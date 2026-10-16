@@ -1,15 +1,15 @@
-"""Merge report-agent and platform migration branches.
+"""Merge report-agent and management migration branches.
 
-Revision ID: 20261016_1200
-Revises: 7f4a2b9c1d20, 20260928_2230
+Revision ID: 20261016_1250
+Revises: 7f4a2b9c1d20, 20261016_1200
 """
 
 from typing import Sequence, Union
 
-revision: str = "20261016_1200"
+revision: str = "20261016_1250"
 down_revision: Union[str, Sequence[str], None] = (
     "7f4a2b9c1d20",
-    "20260928_2230",
+    "20261016_1200",
 )
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

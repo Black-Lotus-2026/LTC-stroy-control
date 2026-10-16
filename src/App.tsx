@@ -1,3 +1,4 @@
+import { CaseCostsPanel, IncidentCostButton, IncidentCostDialog } from './components/management/IncidentCost'
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import {
   incidentsSeed,
@@ -64,6 +65,7 @@ import {
 import { AlertCenter } from './components/AlertCenter'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
+  { id: 'management', label: 'Отклонения', icon: 'alert' },
   { id: 'monitoring', label: 'Наблюдение', icon: 'video' },
   { id: 'archive', label: 'Фотоархив', icon: 'camera' },
   { id: 'progress', label: 'Прогресс', icon: 'progress' },
@@ -74,6 +76,7 @@ const nav: { id: PageKey; label: string; icon: string }[] = [
 ]
 
 const titles: Record<PageKey, [string, string]> = {
+  management: ['Отклонения', ''],
   monitoring: ['Наблюдение', 'Камеры, видеозаписи и детекция строительной техники'],
   archive: ['Фотоархив', 'Фотофиксация нарушений и событий стройплощадки с привязкой к отчётам'],
   progress: ['Прогресс', 'Календарный график СМР и контроль сроков (Гант)'],
@@ -521,7 +524,7 @@ function CameraFrame({
           const validDets = mapped.filter((d) => d.conf >= 60)
           setRealDetections(mapped)
           onDetectionsUpdate?.(validDets)
-          if (snapshotDataUrl) {
+          if (snapshotDataUrl && res.model_ready) {
             onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime, streamName, streamName)
           }
         } catch (err) {
@@ -1420,7 +1423,7 @@ function PhotoArchive({
                                 ? 'Подтверждено'
                                 : r.status === 'Проблемы нет'
                                 ? 'Проблемы нет'
-                                : 'Ожидает обработки'
+                                : r.status === 'В работе' || r.status === 'Устранено' ? r.status : 'Ожидает обработки'
                             }
                             onChange={(e) => onStatusChange?.(r.id, e.target.value as IncidentStatus)}
                             style={{
@@ -1453,6 +1456,8 @@ function PhotoArchive({
                           >
                             <option value="Ожидает обработки">⏳ Ожидает обработки</option>
                             <option value="Подтверждено">🔴 Подтверждено</option>
+                            <option value="В работе">В работе</option>
+                            <option value="Устранено">Устранено</option>
                             <option value="Проблемы нет">🛡️ Проблемы нет</option>
                           </select>
                         </div>
@@ -1468,6 +1473,7 @@ function PhotoArchive({
                     </p>
 
                     <div style={{ paddingTop: '8px', borderTop: '1px solid #282a2e', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <IncidentCostButton incidentId={r.uuid} title={r.title} onOpenCase={() => onNavigateToReport(r.id)} />
                       <button
                         type="button"
                         className="button"
@@ -2263,7 +2269,7 @@ function Analytics({
   })
   const [probItems, setProbItems] = useState<MachineryProbabilityItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [hasCustomOverride, setHasCustomOverride] = useState(false)
+  const [, setHasCustomOverride] = useState(false)
 
   // Automatically select the active stage on today's date (2026-09-24) or restore from localStorage
   useEffect(() => {
@@ -2614,6 +2620,7 @@ function Analytics({
 // 7. Reports Page (Суточный отчёт со сводкой нарушений и ссылками на фотоархив)
 // ----------------------------------------------------------------------------
 function Reports({
+  onOpenCase,
   activeProject,
   incidents,
   highlightedIncidentId,
@@ -2623,6 +2630,7 @@ function Reports({
 }: {
   activeProject?: ProjectItem
   incidents: Incident[]
+  onOpenCase: (id: string) => void
   highlightedIncidentId?: string | null
   onNavigateToArchive: (incidentId: string) => void
   onStatusChange?: (incidentId: string, newStatus: IncidentStatus) => void
@@ -3400,6 +3408,7 @@ function Reports({
                   <article
                     key={inc.id}
                     id={`report-item-${inc.id}`}
+                    tabIndex={-1}
                     className={`report-incident-card ${isHighlighted ? 'highlighted' : ''}`}
                   >
                     {/* Thumbnail if snapshot exists, or clean status icon */}
@@ -3502,7 +3511,7 @@ function Reports({
                                   ? 'Подтверждено'
                                   : inc.status === 'Проблемы нет'
                                   ? 'Проблемы нет'
-                                  : 'Ожидает обработки'
+                                  : inc.status === 'В работе' || inc.status === 'Устранено' ? inc.status : 'Ожидает обработки'
                               }
                               onChange={(e) => onStatusChange?.(inc.id, e.target.value as IncidentStatus)}
                               style={{
@@ -3531,10 +3540,12 @@ function Reports({
                                     : '#f59e0b'
                                 }`,
                               }}
-                              title="Сменить тег ошибки: Ожидает обработки, Проблемы нет или Подтверждено"
+                              title="Изменить статус случая"
                             >
                               <option value="Ожидает обработки">⏳ Ожидает обработки</option>
                               <option value="Подтверждено">🔴 Подтверждено</option>
+                              <option value="В работе">В работе</option>
+                              <option value="Устранено">Устранено</option>
                               <option value="Проблемы нет">🛡️ Проблемы нет</option>
                             </select>
 
@@ -3595,6 +3606,7 @@ function Reports({
                       </div>
                     </div>
 
+                    <IncidentCostButton incidentId={inc.uuid} title={inc.title} onOpenCase={() => onOpenCase(inc.uuid || inc.id)} />
                     {/* Navigation Link to Photo Archive error album (first photo in report) */}
                     {hasSnapshot && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end', justifyContent: 'center' }}>
@@ -4437,6 +4449,7 @@ function mapApiIncident(item: IncidentAlertItem): Incident {
   return {
     id: item.code,
     apiId: item.id,
+    uuid: item.id,
     projectId: item.project_id,
     type: item.discrepancy_type?.startsWith('STREAM_') ? 'Видеопоток' : 'Техника',
     title: item.title || 'Нарушение регламента',
@@ -4475,8 +4488,11 @@ export default function App() {
   const [incidentsList, setIncidentsList] = useState<Incident[]>(incidentsSeed)
   const [violationWindowSeconds, setViolationWindowSeconds] = useState<number>(30)
   const [highlightedIncidentId, setHighlightedIncidentId] = useState<string | null>(null)
+  const [costCase, setCostCase] = useState<{ incidentId?: string; clientId?: string; title: string } | null>(null)
+  const closeCostCase = useCallback(() => setCostCase(null), [])
   const [activeViolationAlert, setActiveViolationAlert] = useState<{
     id: string
+    incidentId?: string
     title: string
     desc: string
     severity: 'ERROR' | 'WARNING'
@@ -4497,6 +4513,7 @@ export default function App() {
         snapshotUrl: string
         detectedLabels: Set<string>
         lastTimestamp: number
+        capturedAt: string
       }
     >
   >(new Map())
@@ -4783,10 +4800,10 @@ export default function App() {
     if (!currentUser) return []
     if (currentUser.role === 'admin') return nav
     if (currentUser.role === 'viewer') {
-      return nav.filter((n) => ['monitoring', 'archive', 'reports', 'alerts'].includes(n.id))
+      return nav.filter((n) => ['management', 'monitoring', 'archive', 'reports', 'alerts'].includes(n.id))
     }
     if (currentUser.role === 'inspector') {
-      return nav.filter((n) => ['monitoring', 'archive', 'progress', 'reports', 'alerts'].includes(n.id))
+      return nav.filter((n) => ['management', 'monitoring', 'archive', 'progress', 'reports', 'alerts'].includes(n.id))
     }
     return nav
   }, [currentUser])
@@ -5083,7 +5100,8 @@ export default function App() {
     detectedLabelsInWindowRef.current.clear()
     streamStartTimeRef.current = isStreamOnline ? Date.now() / 1000 : null
     latestSnapshotRef.current = null
-  }, [uploadedVideoUrl, selectedCameraId, isStreamOnline])
+    sourcesStateRef.current.clear()
+  }, [uploadedVideoUrl, selectedCameraId, isStreamOnline, activeProjectId])
 
   // Stream state transition monitor: emits one-shot report incident on state change ONLY
   useEffect(() => {
@@ -5099,39 +5117,7 @@ export default function App() {
     const camName = curCamObj?.name || 'Камера 1 (Обзор)'
     const nowStr = new Date().toLocaleTimeString('ru-RU').slice(0, 5)
 
-    if (prevState === null) {
-      if (!isStreamOnline) {
-        const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
-        const newIncident: Incident = {
-          id: newId,
-          type: 'Видеопоток',
-          title: 'Отсутствует видеопоток',
-          zone: zoneName,
-          camera: camName,
-          time: nowStr,
-          age: 'Только что',
-          priority: 'Средний',
-          status: 'В работе',
-          assignee: 'Дежурный инженер',
-          sla: '30 мин',
-          confidence: 100,
-          note: 'Трансляция с камер объекта отсутствует. Загрузите видеозапись СМР или подключите сетевую камеру для запуска мониторинга.',
-          severity: 'WARNING',
-          discrepancyType: 'STREAM_OFFLINE',
-        }
-        setIncidentsList((prev) => [newIncident, ...prev])
-        activeProjectId && createIncident({
-          project_id: activeProjectId,
-          title: newIncident.title,
-          description: newIncident.note,
-          severity: 'WARNING',
-          discrepancy_type: 'STREAM_OFFLINE',
-          zone_name: zoneName,
-          camera_name: camName,
-        }).catch((e) => console.warn('Failed to persist stream offline incident:', e))
-      }
-      return
-    }
+    if (prevState === null || !activeProjectId || !currentUser) return
 
     if (prevState === 'OFFLINE' && currentState === 'ONLINE') {
       streamStartTimeRef.current = Date.now() / 1000
@@ -5141,6 +5127,7 @@ export default function App() {
       const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
       const newIncident: Incident = {
         id: newId,
+        projectId: activeProjectId,
         type: 'Видеопоток',
         title: 'Видеопоток активен',
         zone: zoneName,
@@ -5160,7 +5147,7 @@ export default function App() {
       }
       setIncidentsList((prev) => [newIncident, ...prev])
       toast(uploadedVideoName ? `Видео «${uploadedVideoName}» активно: детекция техники запущена` : 'Видеопоток активен: детекция техники запущена')
-      activeProjectId && createIncident({
+      createIncident({
         project_id: activeProjectId,
         title: newIncident.title,
         description: newIncident.note,
@@ -5168,7 +5155,10 @@ export default function App() {
         discrepancy_type: 'STREAM_ONLINE',
         zone_name: zoneName,
         camera_name: camName,
-      }).catch((e) => console.warn('Failed to persist stream online incident:', e))
+      }).then((saved) => setIncidentsList((prev) => [
+        { ...newIncident, id: saved.code, uuid: saved.id, apiId: saved.id, projectId: saved.project_id, status: mapApiStatus(saved.status) },
+        ...prev.filter((item) => item.id !== newId && item.uuid !== saved.id),
+      ])).catch((e) => console.warn('Failed to persist stream online incident:', e))
     } else if (prevState === 'ONLINE' && currentState === 'OFFLINE') {
       streamStartTimeRef.current = null
       detectedLabelsInWindowRef.current.clear()
@@ -5177,6 +5167,7 @@ export default function App() {
       const newId = `INC-${Math.floor(100 + Math.random() * 900)}`
       const newIncident: Incident = {
         id: newId,
+        projectId: activeProjectId,
         type: 'Видеопоток',
         title: 'Потеря видеопотока',
         zone: zoneName,
@@ -5194,7 +5185,7 @@ export default function App() {
       }
       setIncidentsList((prev) => [newIncident, ...prev])
       toast('Внимание: потерян видеопоток объекта')
-      activeProjectId && createIncident({
+      createIncident({
         project_id: activeProjectId,
         title: newIncident.title,
         description: newIncident.note,
@@ -5202,7 +5193,10 @@ export default function App() {
         discrepancy_type: 'STREAM_LOST',
         zone_name: zoneName,
         camera_name: camName,
-      }).catch((e) => console.warn('Failed to persist stream lost incident:', e))
+      }).then((saved) => setIncidentsList((prev) => [
+        { ...newIncident, id: saved.code, uuid: saved.id, apiId: saved.id, projectId: saved.project_id, status: mapApiStatus(saved.status) },
+        ...prev.filter((item) => item.id !== newId && item.uuid !== saved.id),
+      ])).catch((e) => console.warn('Failed to persist stream lost incident:', e))
     }
   }, [isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, activeProjectId, toast])
 
@@ -5216,14 +5210,18 @@ export default function App() {
       sourceName?: string
     ) => {
       // Do not run violation detection or create alerts when video stream is offline
-      if (!isStreamOnline) {
+      if (!isStreamOnline || !activeProjectId) {
         streamStartTimeRef.current = null
         detectedLabelsInWindowRef.current.clear()
         return
       }
 
-      const nowSec = Date.now() / 1000
-      if (streamStartTimeRef.current === null) {
+      const capturedAt = uploadedVideoUrl
+        ? new Date(new Date(videoTimestamp).getTime() + timeSeconds * 1000)
+        : new Date()
+      if (!Number.isFinite(capturedAt.getTime())) return
+      const nowSec = capturedAt.getTime() / 1000
+      if (streamStartTimeRef.current === null || streamStartTimeRef.current > nowSec) {
         streamStartTimeRef.current = nowSec
       }
 
@@ -5238,12 +5236,14 @@ export default function App() {
           snapshotUrl: snapshotDataUrl,
           detectedLabels: new Set<string>(),
           lastTimestamp: Date.now(),
+          capturedAt: capturedAt.toISOString(),
         }
         sourcesStateRef.current.set(sId, sState)
       }
       if (snapshotDataUrl) {
         sState.snapshotUrl = snapshotDataUrl
         sState.lastTimestamp = Date.now()
+        sState.capturedAt = capturedAt.toISOString()
         latestSnapshotRef.current = snapshotDataUrl
       }
       for (const d of dets) {
@@ -5264,7 +5264,8 @@ export default function App() {
       streamStartTimeRef.current = nowSec
 
       // Resolve active stage & analytical assumption (what machinery should be present)
-      const activeStage = getCurrentStageByDate(stages) || stages[0]
+      const activeStage = stages.find((stage) => new Date(stage.planned_start) <= capturedAt && capturedAt <= new Date(stage.planned_end))
+      if (!activeStage) return
       const stageName = activeStage?.name || 'Монолитные конструкции'
       const rules = getEffectiveStageRules(activeStage)
 
@@ -5307,7 +5308,7 @@ export default function App() {
             url: state.snapshotUrl,
             cameraName: `${cam.code} · ${cam.name}`,
             isPrimary: idx === 0,
-            capturedAt: new Date().toISOString(),
+            capturedAt: state.capturedAt,
           })
         }
       })
@@ -5319,7 +5320,7 @@ export default function App() {
             url: src.snapshotUrl,
             cameraName: src.sourceName,
             isPrimary: albumPhotos.length === 0,
-            capturedAt: new Date().toISOString(),
+            capturedAt: src.capturedAt,
           })
         }
       }
@@ -5329,7 +5330,7 @@ export default function App() {
           url: effectiveSnapshot,
           cameraName: camName,
           isPrimary: true,
-          capturedAt: new Date().toISOString(),
+          capturedAt: capturedAt.toISOString(),
         })
       }
 
@@ -5356,6 +5357,7 @@ export default function App() {
 
         const newIncident: Incident = {
           id: newId,
+          projectId: activeProjectId,
           type: 'Техника',
           title: cleanTitle,
           zone: zoneName,
@@ -5390,9 +5392,14 @@ export default function App() {
         }, 12000)
 
         // Asynchronously persist to backend DB & snapshot storage with album_snapshots
-        activeProjectId && createIncident({
+        createIncident({
           project_id: activeProjectId,
-          stage_id: activeStage?.id,
+          stage_id: activeStage.id,
+          zone_id: activeZoneObj?.id,
+          camera_id: curCam?.id,
+          captured_at: capturedAt.toISOString(),
+          model_status: 'valid',
+          rule_version: 'legacy-stage-profile-v1',
           title: cleanTitle,
           description: cleanNote,
           severity,
@@ -5409,7 +5416,17 @@ export default function App() {
           })),
         })
           .then((saved) => {
-            setIncidentsList((prev) => [mapApiIncident(saved), ...prev.filter((item) => item.id !== newId && item.apiId !== saved.id)])
+            setActiveViolationAlert(prev => prev?.id === newId ? { ...prev, incidentId: saved.id } : prev)
+            setCostCase(prev => prev?.clientId === newId ? { ...prev, incidentId: saved.id } : prev)
+            const mapped = mapApiIncident(saved)
+            setIncidentsList((prev) => [
+              {
+                ...mapped,
+                snapshotUrl: mapped.snapshotUrl || firstCameraPhoto,
+                albumPhotos: mapped.albumPhotos?.length ? mapped.albumPhotos : albumPhotos,
+              },
+              ...prev.filter((item) => item.id !== newId && item.apiId !== saved.id),
+            ])
             refreshAlerts().catch(() => {})
           })
           .catch((e) => console.warn('Failed to persist incident:', e))
@@ -5470,14 +5487,31 @@ export default function App() {
       uploadedVideoName,
       activeProjectId,
       refreshAlerts,
+      videoTimestamp,
       toast,
     ]
   )
+
+  const openCostCase = useCallback((id: string) => {
+    const incident = incidentsList.find(item => item.uuid === id || item.id === id)
+    if (!incident) return
+    if (incident.projectId) setActiveProjectId(incident.projectId)
+    setHighlightedIncidentId(incident.id)
+    setPage('reports')
+    setCostCase(null)
+    requestAnimationFrame(() => {
+      const card = document.getElementById(`report-item-${incident.id}`)
+      card?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      card?.focus({ preventScroll: true })
+    })
+  }, [incidentsList])
 
   const title = titles[page] ?? titles.monitoring
 
   const pageBody = useMemo(() => {
     switch (page) {
+      case 'management':
+        return <CaseCostsPanel key={`${currentUser?.username}:${activeProject?.id}`} incidents={incidentsList} projectId={activeProject?.id} onOpenCase={incident => openCostCase(incident.uuid || incident.id)} />
       case 'monitoring':
         return (
           <Monitoring
@@ -5508,10 +5542,7 @@ export default function App() {
             incidents={incidentsList}
             violationWindowSeconds={violationWindowSeconds}
             highlightedIncidentId={highlightedIncidentId}
-            onNavigateToReport={(id) => {
-              setHighlightedIncidentId(id)
-              setPage('reports')
-            }}
+            onNavigateToReport={openCostCase}
             onStatusChange={handleIncidentStatusChange}
             toast={toast}
           />
@@ -5539,7 +5570,8 @@ export default function App() {
         return (
           <Reports
             activeProject={activeProject}
-            incidents={incidentsList}
+            onOpenCase={openCostCase}
+            incidents={incidentsList.filter(incident => incident.projectId === activeProject?.id)}
             highlightedIncidentId={highlightedIncidentId}
             onNavigateToArchive={(id) => {
               setHighlightedIncidentId(id)
@@ -5624,6 +5656,7 @@ export default function App() {
     violationWindowSeconds,
     highlightedIncidentId,
     handleFrameAnalysis,
+    openCostCase,
   ])
 
   if (isAuthChecking) {
@@ -6145,7 +6178,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="page-heading">
+        {page !== 'management' && <div className="page-heading">
           <div>
             <h1>{title[0]}</h1>
             <p>{title[1]}</p>
@@ -6153,7 +6186,7 @@ export default function App() {
           <div className="data-fresh">
             <span />Данные актуальны · 8 сек
           </div>
-        </div>
+        </div>}
 
         <div className="page-content">{pageBody}</div>
       </div>
@@ -6565,6 +6598,8 @@ export default function App() {
         </div>
       )}
 
+      {costCase && <IncidentCostDialog incidentId={costCase.incidentId} title={costCase.title} onClose={closeCostCase} onOpenCase={costCase.incidentId ? () => openCostCase(costCase.incidentId!) : undefined} />}
+
       {/* Active Realtime Violation Alert Banner (Compact, No photo, No section navigation buttons) */}
       {activeViolationAlert && (
         <div
@@ -6615,6 +6650,7 @@ export default function App() {
             <p style={{ fontSize: '10.5px', opacity: 0.9, margin: 0, lineHeight: 1.35, color: '#f1f5f9' }}>
               {activeViolationAlert.desc}
             </p>
+            <button type="button" className="case-cost-button" onClick={() => setCostCase({ incidentId: activeViolationAlert.incidentId, clientId: activeViolationAlert.id, title: activeViolationAlert.title })}>Цена бездействия</button>
           </div>
         </div>
       )}
