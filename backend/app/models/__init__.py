@@ -30,6 +30,7 @@ from app.models.enums import (
     UserRole,
     ZoneRiskLevel,
 )
+from app.models.alert import AlertNotification
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.project import (
     Camera,
@@ -69,6 +70,7 @@ __all__ = [
     "Incident",
     "IncidentEvent",
     "IncidentEvidence",
+    "AlertNotification",
     "VideoAsset",
     "User",
     # Временная шкала и отчёты

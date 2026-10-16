@@ -10,7 +10,14 @@ from app.api.deps import CurrentUser, DbSession
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.enums import UserRole
 from app.models.user import User
-from app.schemas.auth import TokenResponse, UserLoginRequest, UserRegisterRequest, UserResponse
+from app.schemas.auth import (
+    AdminRecipient,
+    TokenResponse,
+    UserEmailUpdate,
+    UserLoginRequest,
+    UserRegisterRequest,
+    UserResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +71,7 @@ def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
             username=new_user.username,
             name=new_user.name,
             role=str(new_user.role.value) if hasattr(new_user.role, "value") else str(new_user.role),
+            email=new_user.email,
             created_at=new_user.created_at,
         ),
     )
@@ -101,6 +109,7 @@ def login_user(data: UserLoginRequest, db: DbSession) -> TokenResponse:
             username=user.username or user.name,
             name=user.name,
             role=str(user.role.value) if hasattr(user.role, "value") else str(user.role),
+            email=user.email,
             created_at=user.created_at,
         ),
     )
@@ -114,5 +123,26 @@ def get_current_user_profile(current_user: CurrentUser) -> UserResponse:
         username=current_user.username or current_user.name,
         name=current_user.name,
         role=str(current_user.role.value) if hasattr(current_user.role, "value") else str(current_user.role),
+        email=current_user.email,
         created_at=current_user.created_at,
     )
+
+
+@router.patch("/me/email", response_model=UserResponse)
+def update_email(data: UserEmailUpdate, current_user: CurrentUser, db: DbSession) -> UserResponse:
+    if data.email:
+        duplicate = db.scalar(select(User).where(User.email == data.email, User.id != current_user.id))
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Этот email уже используется")
+    current_user.email = data.email
+    db.commit()
+    db.refresh(current_user)
+    return get_current_user_profile(current_user)
+
+
+@router.get("/admins", response_model=list[AdminRecipient])
+def list_admin_recipients(current_user: CurrentUser, db: DbSession) -> list[AdminRecipient]:
+    users = db.scalars(
+        select(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True)).order_by(User.name)
+    ).all()
+    return [AdminRecipient(id=user.id, username=user.username or user.name, name=user.name) for user in users]

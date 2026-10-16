@@ -79,6 +79,13 @@ export interface IncidentAlertItem {
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
   discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'NEUTRAL_INFO' | string
   status?: string | null
+  assigned_user_id?: string | null
+  assignee_name?: string | null
+  sla_deadline?: string | null
+  verification_status?: string
+  last_checked_at?: string | null
+  escalated_at?: string | null
+  verification_details?: Record<string, unknown>
   machinery_type?: string
   stage_probability?: number
   observed_count?: number
@@ -90,7 +97,7 @@ export interface IncidentAlertItem {
 }
 
 export interface IncidentCreatePayload {
-  project_id?: string
+  project_id: string
   stage_id?: string | null
   stage_name?: string | null
   zone_name?: string | null
@@ -146,6 +153,49 @@ export interface ProjectItem {
   cameras: CameraItem[]
   stages_count: number
   owner_username?: string | null
+  alert_error_deadline_minutes?: number
+  alert_warning_deadline_minutes?: number
+  escalation_user_id?: string | null
+}
+
+export interface ProjectAlertSettings {
+  project_id: string
+  owner_username: string | null
+  alert_error_deadline_minutes: number
+  alert_warning_deadline_minutes: number
+  escalation_user_id: string | null
+}
+
+export interface AlertNotificationItem {
+  id: string
+  incident_id: string
+  project_id: string
+  incident_code: string
+  incident_status: string
+  assignee_name: string | null
+  sla_deadline: string | null
+  verification_status: string
+  escalated_at: string | null
+  kind: 'assigned' | 'verified' | 'escalated'
+  title: string
+  body: string
+  created_at: string
+  read_at: string | null
+  email_status: string
+}
+
+export interface IncidentEventItem {
+  id: string
+  event_type: string
+  comment: string | null
+  created_at: string
+  user_id: string | null
+}
+
+export interface AdminRecipient {
+  id: string
+  username: string
+  name: string
 }
 
 function getApiBaseUrl(): string {
@@ -198,6 +248,7 @@ export interface UserProfile {
   username: string
   name: string
   role: string
+  email?: string | null
   created_at: string
 }
 
@@ -295,6 +346,38 @@ export async function fetchCurrentUser(): Promise<UserProfile | null> {
 
 export function logoutUser(): void {
   setStoredToken(null)
+}
+
+export async function updateMyEmail(email: string | null): Promise<UserProfile> {
+  const res = await fetch(`${API_PREFIX}/auth/me/email`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ email }),
+  })
+  if (!res.ok) throw new Error('Не удалось сохранить email')
+  return await res.json()
+}
+
+export async function fetchAdminRecipients(): Promise<AdminRecipient[]> {
+  const res = await fetch(`${API_PREFIX}/auth/admins`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить администраторов')
+  return await res.json()
+}
+
+export async function updateProjectAlertSettings(
+  projectId: string,
+  settings: Omit<ProjectAlertSettings, 'project_id'>
+): Promise<ProjectAlertSettings> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/alert-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(settings),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}))
+    throw new Error(error.detail || 'Не удалось сохранить настройки алертов')
+  }
+  return await res.json()
 }
 
 // ----------------------------------------------------------------------------
@@ -965,7 +1048,7 @@ export async function updateIncidentConfig(
 ): Promise<{ violation_evaluation_window_seconds: number }> {
   const res = await fetch(`${API_PREFIX}/incidents/config`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ violation_evaluation_window_seconds: seconds }),
   })
   if (!res.ok) throw new Error('Ошибка обновления периода фиксации нарушений')
@@ -975,7 +1058,7 @@ export async function updateIncidentConfig(
 export async function createIncident(data: IncidentCreatePayload): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Ошибка регистрации инцидента')
@@ -1064,19 +1147,19 @@ function normalizeIncidentItem(item: IncidentAlertItem): IncidentAlertItem {
 export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
   try {
     const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
-    const res = await fetch(url)
+    const res = await fetch(url, { headers: getAuthHeaders() })
     if (res.ok) {
       const data: IncidentAlertItem[] = await res.json()
       return data.map(normalizeIncidentItem)
     }
   } catch {
-    // Return mock incidents
+    // Keep the inbox truthful while the API is unavailable.
   }
-  return getFallbackIncidents().map(normalizeIncidentItem)
+  return []
 }
 
 export async function fetchIncidentAlbum(incidentId: string): Promise<IncidentAlbumData> {
-  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`)
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`, { headers: getAuthHeaders() })
   if (!res.ok) throw new Error('Ошибка получения альбома инцидента')
   return await res.json()
 }
@@ -1087,10 +1170,30 @@ export async function updateIncidentStatus(
 ): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/status`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ status }),
   })
   if (!res.ok) throw new Error('Ошибка обновления статуса инцидента')
+  return await res.json()
+}
+
+export async function fetchAlerts(): Promise<AlertNotificationItem[]> {
+  const res = await fetch(`${API_PREFIX}/alerts`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить алерты')
+  return await res.json()
+}
+
+export async function markAlertRead(alertId: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/alerts/${alertId}/read`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error('Не удалось отметить алерт прочитанным')
+}
+
+export async function fetchIncidentEvents(incidentId: string): Promise<IncidentEventItem[]> {
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/events`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить историю инцидента')
   return await res.json()
 }
 
@@ -1190,41 +1293,6 @@ function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
       },
     ],
   }
-}
-
-function getFallbackIncidents(): IncidentAlertItem[] {
-  return [
-    {
-      id: 'inc-001',
-      code: 'INC-042',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'ERROR',
-      discrepancy_type: 'MISSING_MANDATORY',
-      machinery_type: 'Экскаватор',
-      stage_probability: 0.96,
-      observed_count: 0,
-      snapshot_url: '/media/snapshots/inc_042.jpg',
-      album_photos: [
-        { url: '/media/snapshots/inc_042.jpg', camera_name: 'CAM-03 · Котлован (основной ракурс)', is_primary: true },
-        { url: '/media/snapshots/inc_042_cam2.jpg', camera_name: 'CAM-01 · Въезд на стройплощадку', is_primary: false },
-      ],
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'inc-002',
-      code: 'INC-043',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'WARNING',
-      discrepancy_type: 'MISSING_RECOMMENDED',
-      machinery_type: 'Погрузчик',
-      stage_probability: 0.72,
-      observed_count: 0,
-      album_photos: [],
-      created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    },
-  ]
 }
 
 export interface DetectionBoxItem {

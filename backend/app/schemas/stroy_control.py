@@ -180,6 +180,13 @@ class IncidentResponse(BaseModel):
     machinery_type: str | None = None
     stage_probability: float | None = None
     status: str = "pending"
+    assigned_user_id: uuid.UUID | None = None
+    assignee_name: str | None = None
+    sla_deadline: datetime | None = None
+    verification_status: str = "pending"
+    last_checked_at: datetime | None = None
+    escalated_at: datetime | None = None
+    verification_details: dict[str, Any] = Field(default_factory=dict)
     observed_count: int = 0
     frame_snapshot_url: str | None = None
     snapshot_url: str | None = None
@@ -203,7 +210,7 @@ class IncidentStatusUpdateRequest(BaseModel):
 
 
 class IncidentCreateRequest(BaseModel):
-    project_id: uuid.UUID | None = None
+    project_id: uuid.UUID
     stage_id: uuid.UUID | None = None
     stage_name: str | None = None
     zone_name: str | None = None
@@ -336,6 +343,20 @@ class ProjectItem(BaseModel):
     cameras: list[CameraItem] = Field(default_factory=list)
     stages_count: int = 0
     owner_username: str | None = None
+    alert_error_deadline_minutes: int = 120
+    alert_warning_deadline_minutes: int = 1440
+    escalation_user_id: uuid.UUID | None = None
+
+
+class ProjectAlertSettingsUpdate(BaseModel):
+    owner_username: str | None = None
+    alert_error_deadline_minutes: int = Field(..., ge=1, le=10080)
+    alert_warning_deadline_minutes: int = Field(..., ge=1, le=43200)
+    escalation_user_id: uuid.UUID | None = None
+
+
+class ProjectAlertSettings(ProjectAlertSettingsUpdate):
+    project_id: uuid.UUID
 
 
 class DetectionBoxItem(BaseModel):

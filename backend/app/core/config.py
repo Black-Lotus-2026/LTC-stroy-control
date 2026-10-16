@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     # Период проверки и фиксации нарушений (в секундах).
     # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
     violation_evaluation_window_seconds: int = 30
+
+    # Optional SMTP delivery. In-app notifications work without these values.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str | None = None
+    smtp_starttls: bool = True
 
     @computed_field  # type: ignore[prop-decorator]
     @property

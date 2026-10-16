@@ -52,7 +52,16 @@ import {
   updateIncidentStatus,
   toRussianMachineryName,
   cleanViolationText,
+  type IncidentAlertItem,
+  type AlertNotificationItem,
+  type AdminRecipient,
+  fetchAlerts,
+  markAlertRead,
+  fetchAdminRecipients,
+  updateProjectAlertSettings,
+  updateMyEmail,
 } from './api/stroyControlApi'
+import { AlertCenter } from './components/AlertCenter'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'monitoring', label: 'Наблюдение', icon: 'video' },
@@ -60,6 +69,7 @@ const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'progress', label: 'Прогресс', icon: 'progress' },
   { id: 'analytics', label: 'Аналитика', icon: 'chart' },
   { id: 'reports', label: 'Отчёты', icon: 'file' },
+  { id: 'alerts', label: 'Алерты', icon: 'bell' },
   { id: 'settings', label: 'Настройки', icon: 'settings' },
 ]
 
@@ -69,6 +79,7 @@ const titles: Record<PageKey, [string, string]> = {
   progress: ['Прогресс', 'Календарный график СМР и контроль сроков (Гант)'],
   analytics: ['Аналитика', 'Вероятностные профили спецтехники по этапам СМР'],
   reports: ['Отчёты', 'Сводка нарушений за смену и контроль регламентов'],
+  alerts: ['Алерты', 'Задачи ответственным, сроки проверки и эскалации'],
   settings: ['Настройки', 'Объекты, стройплощадки, камеры и правила'],
 }
 
@@ -3951,6 +3962,10 @@ function Settings({
   onDeleteCamera,
   violationWindowSeconds = 30,
   onUpdateViolationWindow,
+  currentUser,
+  adminRecipients,
+  onSaveAlertSettings,
+  onSaveEmail,
   toast,
 }: {
   activeProject?: ProjectItem
@@ -3972,6 +3987,10 @@ function Settings({
   onDeleteCamera: (camera: CameraItem) => void
   violationWindowSeconds?: number
   onUpdateViolationWindow?: (seconds: number) => Promise<void>
+  currentUser: UserProfile | null
+  adminRecipients: AdminRecipient[]
+  onSaveAlertSettings: (projectId: string, data: { owner_username: string | null; alert_error_deadline_minutes: number; alert_warning_deadline_minutes: number; escalation_user_id: string | null }) => Promise<void>
+  onSaveEmail: (email: string | null) => Promise<void>
   toast: (s: string) => void
 }) {
   const [activeTab, setActiveTab] = useState<'general' | 'zones' | 'cameras'>('general')
@@ -3986,10 +4005,21 @@ function Settings({
   // Violation window setting state
   const [windowInput, setWindowInput] = useState<number>(violationWindowSeconds)
   const [isSavingWindow, setIsSavingWindow] = useState(false)
+  const [alertOwner, setAlertOwner] = useState(activeProject?.owner_username || '')
+  const [alertChief, setAlertChief] = useState(activeProject?.escalation_user_id || '')
+  const [errorMinutes, setErrorMinutes] = useState(activeProject?.alert_error_deadline_minutes || 120)
+  const [warningMinutes, setWarningMinutes] = useState(activeProject?.alert_warning_deadline_minutes || 1440)
+  const [emailInput, setEmailInput] = useState(currentUser?.email || '')
+  const [isSavingAlerts, setIsSavingAlerts] = useState(false)
+  const [isSavingEmail, setIsSavingEmail] = useState(false)
 
   useEffect(() => {
     setWindowInput(violationWindowSeconds)
   }, [violationWindowSeconds])
+
+  useEffect(() => {
+    setEmailInput(currentUser?.email || '')
+  }, [currentUser?.email])
 
   // Synchronize when activeProject changes
   useEffect(() => {
@@ -3997,7 +4027,11 @@ function Settings({
     setCode(activeProject?.code || '')
     setAddress(activeProject?.address || '')
     setObjectKind(activeProject?.object_kind || 'Жильё')
-  }, [activeProject?.id])
+    setAlertOwner(activeProject?.owner_username || '')
+    setAlertChief(activeProject?.escalation_user_id || '')
+    setErrorMinutes(activeProject?.alert_error_deadline_minutes || 120)
+    setWarningMinutes(activeProject?.alert_warning_deadline_minutes || 1440)
+  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes])
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -4209,6 +4243,68 @@ function Settings({
                 </div>
               </div>
             </div>
+
+            <div className="alert-settings-card">
+              <span className="section-kicker">АЛЕРТЫ И ЭСКАЛАЦИЯ</span>
+              <h3>Кому направлять нарушение и когда проверять исправление</h3>
+              <p>После истечения срока система повторно анализирует камеры. Если проблема осталась или данные недоступны, руководитель получает эскалацию.</p>
+              <div className="form-grid">
+                <label>
+                  Ответственный за объект
+                  <input value={alertOwner} disabled={currentUser?.role !== 'admin'} onChange={(e) => setAlertOwner(e.target.value)} placeholder="Логин пользователя" />
+                </label>
+                <label>
+                  Руководитель для эскалации
+                  <select value={alertChief} disabled={currentUser?.role !== 'admin'} onChange={(e) => setAlertChief(e.target.value)}>
+                    <option value="">Первый активный администратор</option>
+                    {adminRecipients.map((admin) => <option key={admin.id} value={admin.id}>{admin.name} ({admin.username})</option>)}
+                  </select>
+                </label>
+                <label>
+                  Срок для ERROR, мин
+                  <input type="number" min={1} max={10080} value={errorMinutes} onChange={(e) => setErrorMinutes(Number(e.target.value))} />
+                </label>
+                <label>
+                  Срок для WARNING, мин
+                  <input type="number" min={1} max={43200} value={warningMinutes} onChange={(e) => setWarningMinutes(Number(e.target.value))} />
+                </label>
+              </div>
+              <button
+                className="button primary"
+                disabled={!activeProject || isSavingAlerts}
+                onClick={async () => {
+                  if (!activeProject) return
+                  setIsSavingAlerts(true)
+                  try {
+                    await onSaveAlertSettings(activeProject.id, {
+                      owner_username: alertOwner.trim() || null,
+                      escalation_user_id: alertChief || null,
+                      alert_error_deadline_minutes: errorMinutes,
+                      alert_warning_deadline_minutes: warningMinutes,
+                    })
+                  } catch (error) {
+                    toast(error instanceof Error ? error.message : 'Не удалось сохранить настройки алертов')
+                  } finally {
+                    setIsSavingAlerts(false)
+                  }
+                }}
+              >
+                {isSavingAlerts ? 'Сохранение…' : 'Сохранить алерты'}
+              </button>
+              <div className="alert-email-settings">
+                <label>
+                  Мой email для копии алертов
+                  <input type="email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="name@example.com" />
+                </label>
+                <button className="button" disabled={isSavingEmail} onClick={async () => {
+                  setIsSavingEmail(true)
+                  try { await onSaveEmail(emailInput.trim() || null) }
+                  catch (error) { toast(error instanceof Error ? error.message : 'Не удалось сохранить email') }
+                  finally { setIsSavingEmail(false) }
+                }}>Сохранить email</button>
+                <small>Письма отправляются, если на сервере настроен SMTP. Алерты в приложении работают всегда.</small>
+              </div>
+            </div>
           </>
         )}
 
@@ -4336,6 +4432,41 @@ function mapApiStatus(rawStatus?: string | null): IncidentStatus {
   return 'Ожидает обработки'
 }
 
+function mapApiIncident(item: IncidentAlertItem): Incident {
+  const snapshot = normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url)
+  return {
+    id: item.code,
+    apiId: item.id,
+    projectId: item.project_id,
+    type: item.discrepancy_type?.startsWith('STREAM_') ? 'Видеопоток' : 'Техника',
+    title: item.title || 'Нарушение регламента',
+    zone: item.zone_name || 'Основная площадка',
+    camera: item.camera_name || 'Камера 1',
+    time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '',
+    age: 'Недавно',
+    priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
+    status: mapApiStatus(item.status),
+    assignee: item.assignee_name || 'Не назначен',
+    sla: item.sla_deadline ? new Date(item.sla_deadline).toLocaleString('ru-RU') : '—',
+    slaDeadline: item.sla_deadline,
+    verificationStatus: item.verification_status,
+    escalatedAt: item.escalated_at,
+    confidence: 95,
+    note: item.description || '',
+    severity: item.severity,
+    snapshotUrl: snapshot,
+    albumPhotos: item.album_photos?.map((p) => ({
+      url: normalizeSnapshotUrl(p.url) || p.url,
+      cameraName: p.camera_name,
+      isPrimary: p.is_primary,
+      capturedAt: p.captured_at,
+    })) || [],
+    stageName: item.stage_name || undefined,
+    discrepancyType: item.discrepancy_type,
+    manual_override: Boolean(item.manual_override),
+  }
+}
+
 export default function App() {
   const [page, setPage] = useState<PageKey>('monitoring')
   const [collapsed, setCollapsed] = useState(false)
@@ -4423,6 +4554,9 @@ export default function App() {
 
   // User Authentication State
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [alertsList, setAlertsList] = useState<AlertNotificationItem[]>([])
+  const [alertsLoading, setAlertsLoading] = useState(false)
+  const [adminRecipients, setAdminRecipients] = useState<AdminRecipient[]>([])
   const [isAuthChecking, setIsAuthChecking] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
@@ -4450,52 +4584,51 @@ export default function App() {
       })
       .catch(() => {})
 
-    fetchIncidents()
-      .then((apiIncs) => {
-        if (apiIncs && apiIncs.length > 0) {
-          const mapped: Incident[] = apiIncs.map((item) => {
-            return {
-              id: item.code,
-              type: 'Техника',
-              title: item.title || 'Нарушение регламента',
-              zone: item.zone_name || 'Основная площадка',
-              camera: item.camera_name || 'Камера 1',
-              time: item.created_at ? new Date(item.created_at).toLocaleTimeString('ru-RU').slice(0, 5) : '14:30',
-              age: 'Недавно',
-              priority: item.severity === 'ERROR' ? 'Критический' : 'Средний',
-              status: mapApiStatus(item.status),
-              assignee: 'Не назначен',
-              sla: item.severity === 'ERROR' ? '15 мин' : '45 мин',
-              confidence: 95,
-              note: item.description || '',
-              severity: item.severity,
-              snapshotUrl: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url),
-              albumPhotos: item.album_photos && item.album_photos.length > 0
-                ? item.album_photos.map((p) => ({
-                    url: normalizeSnapshotUrl(p.url) || p.url,
-                    cameraName: p.camera_name,
-                    isPrimary: p.is_primary,
-                    capturedAt: p.captured_at,
-                  }))
-                : (item.frame_snapshot_url || item.snapshot_url)
-                ? [
-                    {
-                      url: normalizeSnapshotUrl(item.frame_snapshot_url || item.snapshot_url) || '',
-                      cameraName: item.camera_name || 'Камера 1',
-                      isPrimary: true,
-                    },
-                  ]
-                : [],
-              stageName: item.stage_name || undefined,
-              discrepancyType: item.discrepancy_type,
-              manual_override: Boolean(item.manual_override),
-            }
-          })
-          setIncidentsList(mapped)
-        }
-      })
-      .catch(() => {})
   }, [])
+
+  const refreshIncidents = useCallback(async () => {
+    if (!currentUser || !activeProjectId) return
+    const items = await fetchIncidents(activeProjectId)
+    setIncidentsList(items.map(mapApiIncident))
+  }, [currentUser?.id, activeProjectId])
+
+  const refreshAlerts = useCallback(async () => {
+    if (!currentUser) return
+    try {
+      setAlertsList(await fetchAlerts())
+    } finally {
+      setAlertsLoading(false)
+    }
+  }, [currentUser?.id])
+
+  useEffect(() => {
+    if (!currentUser || !activeProjectId) {
+      setIncidentsList([])
+      return
+    }
+    refreshIncidents().catch(() => {})
+    const timer = window.setInterval(() => refreshIncidents().catch(() => {}), 15000)
+    return () => window.clearInterval(timer)
+  }, [currentUser?.id, activeProjectId, refreshIncidents])
+
+  useEffect(() => {
+    if (!currentUser) {
+      setAlertsList([])
+      return
+    }
+    setAlertsLoading(true)
+    refreshAlerts().catch(() => setAlertsLoading(false))
+    const timer = window.setInterval(() => refreshAlerts().catch(() => {}), 15000)
+    return () => window.clearInterval(timer)
+  }, [currentUser?.id, refreshAlerts])
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') {
+      fetchAdminRecipients().then(setAdminRecipients).catch(() => setAdminRecipients([]))
+    } else {
+      setAdminRecipients([])
+    }
+  }, [currentUser?.id, currentUser?.role])
 
   const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -4650,10 +4783,10 @@ export default function App() {
     if (!currentUser) return []
     if (currentUser.role === 'admin') return nav
     if (currentUser.role === 'viewer') {
-      return nav.filter((n) => ['monitoring', 'archive', 'reports'].includes(n.id))
+      return nav.filter((n) => ['monitoring', 'archive', 'reports', 'alerts'].includes(n.id))
     }
     if (currentUser.role === 'inspector') {
-      return nav.filter((n) => ['monitoring', 'archive', 'progress', 'reports'].includes(n.id))
+      return nav.filter((n) => ['monitoring', 'archive', 'progress', 'reports', 'alerts'].includes(n.id))
     }
     return nav
   }, [currentUser])
@@ -4896,15 +5029,51 @@ export default function App() {
 
   // Handle manual incident status change ("Ожидает обработки", "Проблемы нет", "Подтверждено")
   const handleIncidentStatusChange = async (incidentId: string, newStatus: IncidentStatus) => {
-    setIncidentsList((prev) =>
-      prev.map((i) => (i.id === incidentId ? { ...i, status: newStatus, manual_override: true } : i))
-    )
-    toast(`Тег инцидента изменен: «${newStatus}»`)
-    try {
-      await updateIncidentStatus(incidentId, newStatus)
-    } catch {
-      // already updated in UI
+    const incident = incidentsList.find((item) => item.id === incidentId)
+    if (!incident?.apiId) {
+      toast('Инцидент ещё не сохранён на сервере')
+      return
     }
+    try {
+      const result = await updateIncidentStatus(incident.apiId, newStatus)
+      setIncidentsList((prev) => prev.map((item) => item.id === incidentId ? mapApiIncident(result) : item))
+      toast(newStatus === 'Устранено' ? 'Повторная проверка запрошена' : `Статус: «${newStatus}»`)
+      refreshAlerts().catch(() => {})
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Не удалось изменить статус')
+    }
+  }
+
+  const handleAlertRead = (alert: AlertNotificationItem) => {
+    if (alert.read_at) return
+    markAlertRead(alert.id)
+      .then(() => setAlertsList((prev) => prev.map((item) => item.id === alert.id ? { ...item, read_at: new Date().toISOString() } : item)))
+      .catch(() => toast('Не удалось отметить алерт прочитанным'))
+  }
+
+  const handleAlertAction = async (alert: AlertNotificationItem, status: string) => {
+    try {
+      await updateIncidentStatus(alert.incident_id, status)
+      await Promise.all([refreshAlerts(), refreshIncidents()])
+      toast(status === 'resolved' ? 'Повторная проверка запрошена' : 'Статус инцидента обновлён')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Не удалось обновить инцидент')
+    }
+  }
+
+  const handleAlertSettingsSave = async (
+    projectId: string,
+    data: { owner_username: string | null; alert_error_deadline_minutes: number; alert_warning_deadline_minutes: number; escalation_user_id: string | null }
+  ) => {
+    const saved = await updateProjectAlertSettings(projectId, data)
+    setProjectsList((prev) => prev.map((project) => project.id === projectId ? { ...project, ...saved } : project))
+    toast('Настройки алертов сохранены')
+  }
+
+  const handleEmailSave = async (email: string | null) => {
+    const user = await updateMyEmail(email)
+    setCurrentUser(user)
+    toast('Email для уведомлений сохранён')
   }
 
   // Reset detection observations when video or camera switches
@@ -4951,7 +5120,8 @@ export default function App() {
           discrepancyType: 'STREAM_OFFLINE',
         }
         setIncidentsList((prev) => [newIncident, ...prev])
-        createIncident({
+        activeProjectId && createIncident({
+          project_id: activeProjectId,
           title: newIncident.title,
           description: newIncident.note,
           severity: 'WARNING',
@@ -4990,7 +5160,8 @@ export default function App() {
       }
       setIncidentsList((prev) => [newIncident, ...prev])
       toast(uploadedVideoName ? `Видео «${uploadedVideoName}» активно: детекция техники запущена` : 'Видеопоток активен: детекция техники запущена')
-      createIncident({
+      activeProjectId && createIncident({
+        project_id: activeProjectId,
         title: newIncident.title,
         description: newIncident.note,
         severity: 'WARNING',
@@ -5023,7 +5194,8 @@ export default function App() {
       }
       setIncidentsList((prev) => [newIncident, ...prev])
       toast('Внимание: потерян видеопоток объекта')
-      createIncident({
+      activeProjectId && createIncident({
+        project_id: activeProjectId,
         title: newIncident.title,
         description: newIncident.note,
         severity: 'ERROR',
@@ -5032,7 +5204,7 @@ export default function App() {
         camera_name: camName,
       }).catch((e) => console.warn('Failed to persist stream lost incident:', e))
     }
-  }, [isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, toast])
+  }, [isStreamOnline, activeZones, activeZoneId, camerasList, selectedCameraId, uploadedVideoName, activeProjectId, toast])
 
   // Realtime Frame Analysis & Multi-Camera Violation Evaluator
   const handleFrameAnalysis = useCallback(
@@ -5218,7 +5390,9 @@ export default function App() {
         }, 12000)
 
         // Asynchronously persist to backend DB & snapshot storage with album_snapshots
-        createIncident({
+        activeProjectId && createIncident({
+          project_id: activeProjectId,
+          stage_id: activeStage?.id,
           title: cleanTitle,
           description: cleanNote,
           severity,
@@ -5231,30 +5405,12 @@ export default function App() {
           album_snapshots: albumPhotos.map((p) => ({
             snapshot_base64: p.url,
             camera_name: p.cameraName,
+            is_primary: p.isPrimary,
           })),
         })
           .then((saved) => {
-            const serverUrl = normalizeSnapshotUrl(saved.frame_snapshot_url || saved.snapshot_url)
-            const serverAlbum = saved.album_photos?.map((p) => ({
-              url: normalizeSnapshotUrl(p.url) || p.url,
-              cameraName: p.camera_name,
-              isPrimary: p.is_primary,
-              capturedAt: p.captured_at,
-            }))
-            if (serverUrl || (serverAlbum && serverAlbum.length > 0)) {
-              setIncidentsList((prev) =>
-                prev.map((i) => {
-                  if (i.id === newId) {
-                    return {
-                      ...i,
-                      snapshotUrl: i.snapshotUrl || serverUrl,
-                      albumPhotos: (serverAlbum && serverAlbum.length > 0) ? serverAlbum : i.albumPhotos,
-                    }
-                  }
-                  return i
-                })
-              )
-            }
+            setIncidentsList((prev) => [mapApiIncident(saved), ...prev.filter((item) => item.id !== newId && item.apiId !== saved.id)])
+            refreshAlerts().catch(() => {})
           })
           .catch((e) => console.warn('Failed to persist incident:', e))
       }
@@ -5312,6 +5468,8 @@ export default function App() {
       selectedCameraId,
       uploadedVideoUrl,
       uploadedVideoName,
+      activeProjectId,
+      refreshAlerts,
       toast,
     ]
   )
@@ -5391,6 +5549,20 @@ export default function App() {
             toast={toast}
           />
         )
+      case 'alerts':
+        return (
+          <AlertCenter
+            alerts={alertsList}
+            loading={alertsLoading}
+            onRead={handleAlertRead}
+            onAction={handleAlertAction}
+            onOpen={(alert) => {
+              setActiveProjectId(alert.project_id)
+              setHighlightedIncidentId(alert.incident_code)
+              setPage('reports')
+            }}
+          />
+        )
       case 'settings':
         return (
           <Settings
@@ -5422,6 +5594,10 @@ export default function App() {
             onDeleteCamera={handleDeleteCamera}
             violationWindowSeconds={violationWindowSeconds}
             onUpdateViolationWindow={handleUpdateViolationWindow}
+            currentUser={currentUser}
+            adminRecipients={adminRecipients}
+            onSaveAlertSettings={handleAlertSettingsSave}
+            onSaveEmail={handleEmailSave}
             toast={toast}
           />
         )
@@ -5441,6 +5617,10 @@ export default function App() {
     videoTimestamp,
     activeProjectId,
     incidentsList,
+    alertsList,
+    alertsLoading,
+    adminRecipients,
+    currentUser,
     violationWindowSeconds,
     highlightedIncidentId,
     handleFrameAnalysis,
@@ -5797,6 +5977,19 @@ export default function App() {
             <Icon name="clock" size={16} />
             <span>{currentFormattedDate}, {currentFormattedTime}</span>
           </button>
+          {currentUser && (
+            <button
+              className="button alert-bell"
+              title="Открыть мои алерты"
+              aria-label={`Алерты: ${alertsList.filter((item) => !item.read_at).length} новых`}
+              onClick={() => setPage('alerts')}
+            >
+              <Icon name="bell" size={17} />
+              {alertsList.some((item) => !item.read_at) && (
+                <span className="alert-bell-count">{alertsList.filter((item) => !item.read_at).length}</span>
+              )}
+            </button>
+          )}
           {currentUser ? (
             <div style={{ position: 'relative' }}>
               <button

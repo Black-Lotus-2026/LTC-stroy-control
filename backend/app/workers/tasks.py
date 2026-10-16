@@ -42,3 +42,19 @@ def generate_due_reports_task() -> dict[str, int]:
 
     with session_scope() as db:
         return run_due_report_schedules(db)
+
+
+@shared_task(name="alerts.verify_due")
+def verify_due_alerts_task() -> dict[str, int]:
+    from app.services.alert_service import run_due_verifications
+
+    with session_scope() as db:
+        return run_due_verifications(db)
+
+
+@shared_task(name="alerts.deliver_emails")
+def deliver_alert_emails_task() -> dict[str, int]:
+    from app.services.alert_service import deliver_pending_emails
+
+    with session_scope() as db:
+        return deliver_pending_emails(db)

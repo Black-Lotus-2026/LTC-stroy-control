@@ -149,6 +149,9 @@ class IncidentEventType(StrEnum):
     COMMENTED = "commented"
     REJECTED = "rejected"
     AUTO_RESOLVED = "auto_resolved"  # закрыто самой системой
+    VERIFICATION_FAILED = "verification_failed"
+    VERIFICATION_UNAVAILABLE = "verification_unavailable"
+    ESCALATED = "escalated"
 
 
 class EvidenceKind(StrEnum):
