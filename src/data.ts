@@ -1,4 +1,4 @@
-export type PageKey = 'monitoring' | 'archive' | 'progress' | 'analytics' | 'reports' | 'settings' | 'management'
+export type PageKey = 'monitoring' | 'archive' | 'progress' | 'analytics' | 'reports' | 'alerts' | 'settings' | 'management'
 export type IncidentStatus =
   | 'Ожидает обработки'
   | 'Подтверждено'
@@ -20,6 +20,7 @@ export interface Camera {
 
 export interface Incident {
   id: string
+  apiId?: string
   uuid?: string
   projectId?: string
   type: string
@@ -32,6 +33,9 @@ export interface Incident {
   status: IncidentStatus
   assignee: string
   sla: string
+  slaDeadline?: string | null
+  verificationStatus?: string
+  escalatedAt?: string | null
   confidence: number
   grouped?: number
   note: string

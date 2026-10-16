@@ -47,6 +47,15 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     status: Mapped[str] = mapped_column(String(32), default="active")
     owner_username: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
+    alert_error_deadline_minutes: Mapped[int] = mapped_column(
+        Integer, default=120, server_default="120"
+    )
+    alert_warning_deadline_minutes: Mapped[int] = mapped_column(
+        Integer, default=1440, server_default="1440"
+    )
+    escalation_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
 
     zones: Mapped[list[Zone]] = relationship(
         back_populates="project", cascade="all, delete-orphan"

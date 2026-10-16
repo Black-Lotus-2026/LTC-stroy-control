@@ -79,6 +79,13 @@ export interface IncidentAlertItem {
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
   discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'NEUTRAL_INFO' | string
   status?: string | null
+  assigned_user_id?: string | null
+  assignee_name?: string | null
+  sla_deadline?: string | null
+  verification_status?: string
+  last_checked_at?: string | null
+  escalated_at?: string | null
+  verification_details?: Record<string, unknown>
   machinery_type?: string
   stage_probability?: number
   observed_count?: number
@@ -86,7 +93,6 @@ export interface IncidentAlertItem {
   snapshot_url?: string | null
   album_photos?: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
   manual_override?: boolean
-  assignee_name?: string | null
   created_at?: string
 }
 
@@ -153,6 +159,49 @@ export interface ProjectItem {
   cameras: CameraItem[]
   stages_count: number
   owner_username?: string | null
+  alert_error_deadline_minutes?: number
+  alert_warning_deadline_minutes?: number
+  escalation_user_id?: string | null
+}
+
+export interface ProjectAlertSettings {
+  project_id: string
+  owner_username: string | null
+  alert_error_deadline_minutes: number
+  alert_warning_deadline_minutes: number
+  escalation_user_id: string | null
+}
+
+export interface AlertNotificationItem {
+  id: string
+  incident_id: string
+  project_id: string
+  incident_code: string
+  incident_status: string
+  assignee_name: string | null
+  sla_deadline: string | null
+  verification_status: string
+  escalated_at: string | null
+  kind: 'assigned' | 'verified' | 'escalated'
+  title: string
+  body: string
+  created_at: string
+  read_at: string | null
+  email_status: string
+}
+
+export interface IncidentEventItem {
+  id: string
+  event_type: string
+  comment: string | null
+  created_at: string
+  user_id: string | null
+}
+
+export interface AdminRecipient {
+  id: string
+  username: string
+  name: string
 }
 
 function getApiBaseUrl(): string {
@@ -205,6 +254,7 @@ export interface UserProfile {
   username: string
   name: string
   role: string
+  email?: string | null
   created_at: string
 }
 
@@ -302,6 +352,38 @@ export async function fetchCurrentUser(): Promise<UserProfile | null> {
 
 export function logoutUser(): void {
   setStoredToken(null)
+}
+
+export async function updateMyEmail(email: string | null): Promise<UserProfile> {
+  const res = await fetch(`${API_PREFIX}/auth/me/email`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ email }),
+  })
+  if (!res.ok) throw new Error('Не удалось сохранить email')
+  return await res.json()
+}
+
+export async function fetchAdminRecipients(): Promise<AdminRecipient[]> {
+  const res = await fetch(`${API_PREFIX}/auth/admins`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить администраторов')
+  return await res.json()
+}
+
+export async function updateProjectAlertSettings(
+  projectId: string,
+  settings: Omit<ProjectAlertSettings, 'project_id'>
+): Promise<ProjectAlertSettings> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/alert-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(settings),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}))
+    throw new Error(error.detail || 'Не удалось сохранить настройки алертов')
+  }
+  return await res.json()
 }
 
 // ----------------------------------------------------------------------------
@@ -972,7 +1054,7 @@ export async function updateIncidentConfig(
 ): Promise<{ violation_evaluation_window_seconds: number }> {
   const res = await fetch(`${API_PREFIX}/incidents/config`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ violation_evaluation_window_seconds: seconds }),
   })
   if (!res.ok) throw new Error('Ошибка обновления периода фиксации нарушений')
@@ -1095,6 +1177,26 @@ export async function updateIncidentStatus(
   return await res.json()
 }
 
+export async function fetchAlerts(): Promise<AlertNotificationItem[]> {
+  const res = await fetch(`${API_PREFIX}/alerts`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить алерты')
+  return await res.json()
+}
+
+export async function markAlertRead(alertId: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/alerts/${alertId}/read`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error('Не удалось отметить алерт прочитанным')
+}
+
+export async function fetchIncidentEvents(incidentId: string): Promise<IncidentEventItem[]> {
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/events`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить историю инцидента')
+  return await res.json()
+}
+
 // ----------------------------------------------------------------------------
 // Fallback Mock Data Providers
 // ----------------------------------------------------------------------------
@@ -1192,8 +1294,6 @@ function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
     ],
   }
 }
-
-
 
 export interface DetectionBoxItem {
   class_id: number

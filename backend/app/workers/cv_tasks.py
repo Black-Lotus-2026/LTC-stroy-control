@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 from celery import shared_task
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.incident import Incident
+from app.models.enums import IncidentCategory, IncidentPriority, IncidentStatus, IncidentType
+from app.models.project import Project
 from app.models.schedule import ScheduleTask
 from app.services.detector import MachineryDetector
 from app.services.rule_engine import RuleEngine
+from app.services.alert_service import OPEN_STATUSES, assign_initial_alert
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,10 @@ def process_video_frame_sync(
         stage = db.get(ScheduleTask, stage_id)
         if not stage:
             logger.warning("Stage %s not found for frame processing", stage_id)
+            return []
+        project = db.get(Project, project_id)
+        if not project or stage.project_id != project_id:
+            logger.warning("Project %s does not match stage %s", project_id, stage_id)
             return []
 
         # 1. Run YOLO inference
@@ -67,12 +76,31 @@ def process_video_frame_sync(
                     }
                 )
 
-                # Persist incident
-                inc_code = f"INC-{uuid.uuid4().hex[:6].upper()}"
+                dedup_key = f"{project_id}:{stage.id}:{ev.discrepancy_type}:{ev.machinery_name}"
+                if db.get_bind().dialect.name == "postgresql":
+                    lock_id = int.from_bytes(
+                        hashlib.blake2b(dedup_key.encode(), digest_size=8).digest(),
+                        "big", signed=True,
+                    )
+                    db.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+                existing = db.scalar(select(Incident).where(
+                    Incident.dedup_key == dedup_key,
+                    Incident.status.in_(OPEN_STATUSES),
+                ).with_for_update())
+                if existing:
+                    existing.observation_count += 1
+                    existing.last_seen_at = datetime.now(UTC)
+                    continue
+
+                inc_code = f"INC-{uuid.uuid4().hex[:8].upper()}"
                 incident = Incident(
                     code=inc_code,
                     project_id=project_id,
                     schedule_task_id=stage.id,
+                    category=IncidentCategory.EQUIPMENT,
+                    type=(IncidentType.EQUIPMENT_UNEXPECTED if ev.discrepancy_type == "UNCHARACTERISTIC_PRESENT" else IncidentType.EQUIPMENT_MISSING),
+                    priority=(IncidentPriority.CRITICAL if ev.severity == "ERROR" else IncidentPriority.MEDIUM),
+                    status=IncidentStatus.PENDING,
                     title=f"Отклонение по технике: {ev.machinery_name}",
                     description=ev.description,
                     discrepancy_type=ev.discrepancy_type,
@@ -81,9 +109,12 @@ def process_video_frame_sync(
                     observed_count=ev.observed_count,
                     first_seen_at=datetime.now(UTC),
                     last_seen_at=datetime.now(UTC),
-                    dedup_key=f"{stage.id}_{ev.machinery_name}_{ev.discrepancy_type}",
+                    dedup_key=dedup_key,
+                    explanation={"severity": ev.severity.lower(), "camera_name": camera_name},
                 )
                 db.add(incident)
+                db.flush()
+                assign_initial_alert(db, incident, project)
 
         db.commit()
         return violations

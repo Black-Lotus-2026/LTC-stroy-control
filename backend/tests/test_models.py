@@ -27,6 +27,9 @@ EXPECTED_TABLES = {
     "incident_evidence",
     "video_assets",
     "users",
+    "observation_logs",
+    "report_schedules",
+    "generated_reports",
 }
 
 
@@ -52,3 +55,8 @@ def test_enum_values_are_lowercase_strings() -> None:
 def test_ppe_status_is_three_valued() -> None:
     """«Каска не видна» и «каски нет» обязаны различаться."""
     assert {s.value for s in PPEStatus} == {"present", "not_visible", "absent"}
+
+
+def test_report_keeps_agent_trace_and_source_range() -> None:
+    columns = Base.metadata.tables["generated_reports"].columns
+    assert {"range_start", "range_end", "content", "agent_version"} <= set(columns.keys())
