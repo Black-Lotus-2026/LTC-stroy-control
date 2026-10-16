@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import re
-from typing import Any
 import uuid
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from sqlalchemy import select
 
-from app.api.deps import DbSession
+from app.api.deps import CurrentUser, DbSession
 from app.models.schedule import ScheduleTask
 from app.schemas.stroy_control import (
     CascadeShiftRequest,
@@ -22,6 +21,7 @@ from app.schemas.stroy_control import (
     StageUpdateRequest,
 )
 from app.services.detector import MACHINERY_CLASSES
+from app.services.management.context import require_project
 from app.services.schedule_engine import ScheduleEngine
 from app.services.stage_matcher import StageMachineryService
 
@@ -39,10 +39,20 @@ def _parse_uuid(val: Any) -> uuid.UUID | None:
         return None
 
 
+def _project_scope(db, project_id, user, *, write=False):
+    parsed = _parse_uuid(project_id)
+    if parsed is None:
+        raise HTTPException(422, "Выберите объект строительства")
+    require_project(db, parsed, user, write=write)
+    return parsed
+
+
 @router.get("/stages", response_model=list[StageItem])
-def get_stages(db: DbSession, project_id: str | None = None) -> list[StageItem]:
+def get_stages(
+    db: DbSession, user: CurrentUser, project_id: str | None = None
+) -> list[StageItem]:
     """Получить список этапов СМР для отображения на диаграмме Ганта."""
-    parsed_id = _parse_uuid(project_id)
+    parsed_id = _project_scope(db, project_id, user)
     query = select(ScheduleTask).order_by(ScheduleTask.order_index)
     if parsed_id:
         query = query.where(ScheduleTask.project_id == parsed_id)
@@ -67,11 +77,13 @@ def get_stages(db: DbSession, project_id: str | None = None) -> list[StageItem]:
 
 @router.delete("/stages", status_code=200)
 @router.post("/clear", status_code=200)
-def clear_stages(db: DbSession, project_id: str | None = None) -> dict[str, Any]:
+def clear_stages(
+    db: DbSession, user: CurrentUser, project_id: str | None = None
+) -> dict[str, Any]:
     """Очистить календарный план (все этапы или конкретного объекта)."""
     from sqlalchemy import delete
 
-    parsed_id = _parse_uuid(project_id)
+    parsed_id = _project_scope(db, project_id, user, write=True)
     stmt = delete(ScheduleTask)
     if parsed_id:
         stmt = stmt.where(ScheduleTask.project_id == parsed_id)
@@ -82,10 +94,10 @@ def clear_stages(db: DbSession, project_id: str | None = None) -> dict[str, Any]
 
 @router.post("/load-demo", response_model=ScheduleImportResponse)
 def load_demo(
-    db: DbSession, project_id: str | None = None
+    db: DbSession, user: CurrentUser, project_id: str | None = None
 ) -> ScheduleImportResponse:
     """Загрузить эталонный демо-файл календарного плана 'Многоквартирный жилой дом'."""
-    parsed_id = _parse_uuid(project_id)
+    parsed_id = _project_scope(db, project_id, user, write=True)
     engine = ScheduleEngine(db)
     stages = engine.load_demo_schedule(parsed_id)
     items = [
@@ -114,7 +126,8 @@ def load_demo(
 @router.post("/upload", response_model=ScheduleImportResponse)
 async def upload_schedule(
     db: DbSession,
-    file: UploadFile = File(...),
+    user: CurrentUser,
+    file: Annotated[UploadFile, File()],
     project_id: str | None = None,
 ) -> ScheduleImportResponse:
     """Загрузить пользовательский файл графика СМР (.xlsx или .csv)."""
@@ -129,12 +142,14 @@ async def upload_schedule(
         )
 
     content = await file.read()
-    parsed_id = _parse_uuid(project_id)
+    parsed_id = _project_scope(db, project_id, user, write=True)
     engine = ScheduleEngine(db)
     try:
         stages = engine.import_schedule_bytes(content, file.filename, parsed_id)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Ошибка разбора файла графика: {e}")
+        raise HTTPException(
+            status_code=422, detail=f"Ошибка разбора файла графика: {e}"
+        ) from e
 
     items = [
         StageItem(
@@ -164,27 +179,10 @@ def update_stage(
     stage_id: str,
     payload: StageUpdateRequest,
     db: DbSession,
+    user: CurrentUser,
 ) -> StageItem:
-    """Обновить параметры этапа (название, даты, длительность) при ручном редактировании или drag-and-drop."""
-    target_uuid = None
-    try:
-        target_uuid = uuid.UUID(stage_id)
-    except ValueError:
-        pass
-
-    stage = db.get(ScheduleTask, target_uuid) if target_uuid else None
-    if not stage:
-        idx_match = re.search(r"\d+", stage_id)
-        if idx_match:
-            target_idx = int(idx_match.group())
-            all_stages = db.scalars(
-                select(ScheduleTask).where(ScheduleTask.order_index == target_idx)
-            ).all()
-            if all_stages:
-                stage = all_stages[0]
-
-    if not stage:
-        raise HTTPException(status_code=404, detail="Этап не найден")
+    """Обновить название, даты и длительность этапа."""
+    stage = _owned_stage(stage_id, db, user, write=True)
 
     if payload.name is not None:
         stage.name = payload.name
@@ -218,36 +216,33 @@ def update_stage(
 def cascade_shift(
     payload: CascadeShiftRequest,
     db: DbSession,
+    user: CurrentUser,
 ) -> CascadeShiftResponse:
     """Сдвинуть все последующие этапы на N дней при отставании текущего этапа."""
+    _owned_stage(str(payload.delayed_stage_id), db, user, write=True)
     engine = ScheduleEngine(db)
     try:
         return engine.cascade_shift(payload.delayed_stage_id, payload.delay_days)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 def _find_stage(stage_id: str, db: DbSession) -> ScheduleTask | None:
-    target_uuid = None
-    try:
-        target_uuid = uuid.UUID(stage_id)
-    except ValueError:
-        pass
+    target = _parse_uuid(stage_id)
+    return db.get(ScheduleTask, target) if target else None
 
-    stage = db.get(ScheduleTask, target_uuid) if target_uuid else None
-    if not stage:
-        idx_match = re.search(r"\d+", stage_id)
-        if idx_match:
-            target_idx = int(idx_match.group())
-            all_stages = db.scalars(
-                select(ScheduleTask).where(ScheduleTask.order_index == target_idx)
-            ).all()
-            if all_stages:
-                stage = all_stages[0]
+
+def _owned_stage(stage_id, db, user, *, write=False):
+    stage = _find_stage(stage_id, db)
+    if stage is None:
+        raise HTTPException(404, "Этап не найден")
+    require_project(db, stage.project_id, user, write=write)
     return stage
 
 
-def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbabilityResponse:
+def _build_stage_probability_response(
+    stage: ScheduleTask | None,
+) -> StageProbabilityResponse:
     matcher = StageMachineryService()
     stage_name = stage.name if stage else "Общестроительные работы"
     prob_profile = matcher.estimate_machinery_probabilities(stage_name)
@@ -266,10 +261,15 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
 
     items: list[MachineryProbabilityItem] = []
     # Map all 10 specialized classes
-    for cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
-        override_val = overrides.get(code) or overrides.get(raw_label) or overrides.get(label_ru)
+    for _cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
+        override_val = (
+            overrides.get(code) or overrides.get(raw_label) or overrides.get(label_ru)
+        )
         if override_val is not None:
-            if isinstance(override_val, str) and override_val.strip().upper() in status_to_prob:
+            if (
+                isinstance(override_val, str)
+                and override_val.strip().upper() in status_to_prob
+            ):
                 prob = status_to_prob[override_val.strip().upper()]
             else:
                 try:
@@ -313,8 +313,12 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
     return StageProbabilityResponse(
         stage_id=stage.id if stage else uuid.uuid4(),
         stage_name=stage.name if stage else stage_name,
-        matched_catalog_stage=stage.matched_catalog_name if stage else "Общестроительные работы",
-        similarity_confidence=stage.catalog_similarity if (stage and stage.catalog_similarity is not None) else 0.95,
+        matched_catalog_stage=stage.matched_catalog_name
+        if stage
+        else "Общестроительные работы",
+        similarity_confidence=stage.catalog_similarity
+        if (stage and stage.catalog_similarity is not None)
+        else 0.95,
         probabilities=items,
         top_machinery=top_machinery,
         has_custom_override=bool(overrides and len(overrides) > 0),
@@ -323,12 +327,10 @@ def _build_stage_probability_response(stage: ScheduleTask | None) -> StageProbab
 
 @router.get("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
 def get_stage_probabilities(
-    stage_id: str, db: DbSession
+    stage_id: str, db: DbSession, user: CurrentUser
 ) -> StageProbabilityResponse:
     """Получить распределение вероятностей техники для детального экрана этапа."""
-    stage = _find_stage(stage_id, db)
-    if not stage:
-        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
+    stage = _owned_stage(stage_id, db, user)
     return _build_stage_probability_response(stage)
 
 
@@ -337,13 +339,10 @@ def update_stage_probabilities(
     stage_id: str,
     payload: StageMachineryOverrideRequest,
     db: DbSession,
+    user: CurrentUser,
 ) -> StageProbabilityResponse:
     """Ручная настройка статуса/вероятности техники на этапе."""
-    stage = _find_stage(stage_id, db)
-    if not stage:
-        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Этап не найден")
+    stage = _owned_stage(stage_id, db, user, write=True)
 
     current_overrides = dict(stage.machinery_probabilities or {})
     current_overrides.update(payload.overrides)
@@ -353,17 +352,16 @@ def update_stage_probabilities(
     return _build_stage_probability_response(stage)
 
 
-@router.delete("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
+@router.delete(
+    "/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse
+)
 def reset_stage_probabilities(
     stage_id: str,
     db: DbSession,
+    user: CurrentUser,
 ) -> StageProbabilityResponse:
     """Сбросить ручные настройки техники к расчётам по справочнику/AI."""
-    stage = _find_stage(stage_id, db)
-    if not stage:
-        stage = db.scalars(select(ScheduleTask).order_by(ScheduleTask.order_index)).first()
-    if not stage:
-        raise HTTPException(status_code=404, detail="Этап не найден")
+    stage = _owned_stage(stage_id, db, user, write=True)
 
     stage.machinery_probabilities = {}
     db.commit()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Incident } from '../../data'
+import { filterIncidents, incidentKind, isDeviation, isOpenIncident } from '../../domain/incidentPresentation'
 import { isValidUuid } from '../../api/stroyControlApi'
 import { managementApi, type InactionCurve, type InactionPoint, type CostBasis } from '../../api/managementApi'
 import './incident-cost.css'
@@ -27,14 +28,48 @@ export function IncidentCostDialog(props: CostCaseProps & { onClose: () => void 
   return createPortal(<CostModal {...props} />, document.body)
 }
 
-export function CaseCostsPanel({ incidents, projectId, onOpenCase }: { incidents: Incident[]; projectId?: string; onOpenCase: (incident: Incident) => void }) {
-  const cases = incidents.filter(item => item.projectId === projectId && item.severity !== 'NEUTRAL' && item.discrepancyType !== 'STREAM_ONLINE')
-  return <section className="case-cost-list">
-    <h2>Отклонения</h2>
-    {cases.length ? <ul>{cases.map(item => <li key={item.uuid || item.id}>
-      <div><strong>{item.title}</strong><span>{item.zone} · {item.time}</span></div>
-      <IncidentCostButton incidentId={item.uuid} title={item.title} onOpenCase={() => onOpenCase(item)} />
-    </li>)}</ul> : <p className="case-cost-empty">Отклонений пока нет.</p>}
+export function CaseCostsPanel({ incidents, projectId, zoneId, onOpenCase }: { incidents: Incident[]; projectId?: string; zoneId?: string | null; onOpenCase: (incident: Incident) => void }) {
+  const [view, setView] = useState<'open' | 'all'>('open')
+  const headingId = useId()
+  const cases = filterIncidents(incidents, projectId, zoneId).filter(isDeviation)
+  const openCases = cases.filter(isOpenIncident)
+  const visibleCases = view === 'open' ? openCases : cases
+  return <section className="case-cost-list" aria-labelledby={headingId}>
+    <header className="case-cost-list-heading">
+      <div><h1 id={headingId}>Отклонения</h1><p>Проверьте случай и назначьте следующий шаг.</p></div>
+      <div className="case-cost-list-filter" role="group" aria-label="Показать отклонения">
+        <button type="button" aria-pressed={view === 'open'} onClick={() => setView('open')}>Открытые <span>{openCases.length}</span></button>
+        <button type="button" aria-pressed={view === 'all'} onClick={() => setView('all')}>Все <span>{cases.length}</span></button>
+      </div>
+    </header>
+    {visibleCases.length ? <ul className="case-cost-rows">{visibleCases.map(item => {
+      const closed = !isOpenIncident(item)
+      const created = item.createdAt ? new Date(item.createdAt) : null
+      const hasDate = created && !Number.isNaN(created.getTime())
+      return <li className={`case-cost-row${closed ? ' case-cost-row-closed' : ''}`} key={item.uuid || item.id}>
+        <div className="case-cost-row-main">
+          <button type="button" className="case-cost-case-title" onClick={() => onOpenCase(item)}>
+            <span className={`case-cost-severity case-cost-severity-${incidentKind(item)}`} aria-hidden="true" />
+            <span>{item.title}</span><span className="case-cost-case-arrow" aria-hidden="true">↗</span>
+          </button>
+          <div className="case-cost-row-meta">
+            <span>{item.zone || 'Зона не указана'}</span>
+            <span className="case-cost-meta-divider" aria-hidden="true">·</span>
+            <time dateTime={hasDate ? item.createdAt : undefined}>{hasDate ? new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(created) : item.time || 'Время не указано'}</time>
+            <span className="case-cost-meta-divider" aria-hidden="true">·</span>
+            <span className="case-cost-assignee">Ответственный: {item.assignee?.trim() || 'Не назначен'}</span>
+          </div>
+        </div>
+        <div className="case-cost-row-actions">
+          <span className={`case-cost-case-status${closed ? ' case-cost-case-status-closed' : ''}`}>{item.status}</span>
+          <IncidentCostButton incidentId={item.uuid} title={item.title} onOpenCase={() => onOpenCase(item)} />
+        </div>
+      </li>
+    })}</ul> : <div className="case-cost-list-empty" role="status">
+      <span className="case-cost-empty-mark" aria-hidden="true">✓</span>
+      <h2>{cases.length ? 'Открытых отклонений нет' : 'Отклонений пока нет'}</h2>
+      <p>{cases.length ? 'Посмотрите закрытые случаи во вкладке «Все».' : 'После анализа новых фото отклонения появятся здесь.'}</p>
+    </div>}
   </section>
 }
 

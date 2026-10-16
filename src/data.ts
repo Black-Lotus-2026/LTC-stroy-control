@@ -20,9 +20,14 @@ export interface Camera {
 
 export interface Incident {
   id: string
+  canUpdate?: boolean
+  canDismiss?: boolean
+  assignedUserId?: string | null
   apiId?: string
   uuid?: string
   projectId?: string
+  zoneId?: string | null
+  createdAt?: string
   type: string
   title: string
   zone: string

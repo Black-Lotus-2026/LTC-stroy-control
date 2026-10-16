@@ -6,6 +6,10 @@ import {
 } from '../api/stroyControlApi'
 
 interface AlertCenterProps {
+  error?: string
+  onRetry: () => void
+  canAct: boolean
+  canOpen: (alert: AlertNotificationItem) => boolean
   alerts: AlertNotificationItem[]
   loading: boolean
   onRead: (alert: AlertNotificationItem) => void
@@ -13,7 +17,8 @@ interface AlertCenterProps {
   onOpen: (alert: AlertNotificationItem) => void
 }
 
-function deadlineText(value: string | null, now: number): string {
+function deadlineText(value: string | null, now: number, status?: string): string {
+  if (status === 'resolved' || status === 'false_positive') return 'Закрыто'
   if (!value) return 'Срок не задан'
   const remaining = new Date(value).getTime() - now
   const minutes = Math.ceil(Math.abs(remaining) / 60000)
@@ -22,11 +27,13 @@ function deadlineText(value: string | null, now: number): string {
   return remaining < 0 ? `Просрочено на ${label}` : `Осталось ${label}`
 }
 
-export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: AlertCenterProps) {
+export function AlertCenter({ alerts, loading, error, onRetry, canAct, canOpen, onRead, onAction, onOpen }: AlertCenterProps) {
   const [filter, setFilter] = useState<'all' | 'assigned' | 'escalated'>('all')
   const [selected, setSelected] = useState<string | null>(null)
   const [events, setEvents] = useState<IncidentEventItem[]>([])
   const [busy, setBusy] = useState(false)
+  const [eventsError, setEventsError] = useState('')
+  const [eventsLoading, setEventsLoading] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -35,8 +42,14 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    setEvents([]); setEventsError('')
     if (!selected) return
-    fetchIncidentEvents(selected).then(setEvents).catch(() => setEvents([]))
+    setEventsLoading(true)
+    fetchIncidentEvents(selected).then(items => { if (!cancelled) setEvents(items) })
+      .catch(() => { if (!cancelled) setEventsError('Не удалось загрузить историю') })
+      .finally(() => { if (!cancelled) setEventsLoading(false) })
+    return () => { cancelled = true }
   }, [selected, alerts])
 
   const visible = alerts.filter((alert) => filter === 'all' || alert.kind === filter)
@@ -56,9 +69,7 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
       <section className="alert-list panel">
         <div className="alert-heading">
           <div>
-            <span className="section-kicker">ЦЕНТР АЛЕРТОВ</span>
-            <h2>Мои задачи и эскалации</h2>
-            <p>Ответственный получает задачу; после срока система проверяет камеры и сообщает результат.</p>
+            <h2>Задачи и эскалации</h2>
           </div>
           <span className="alert-unread">{alerts.filter((item) => !item.read_at).length} новых</span>
         </div>
@@ -67,8 +78,9 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
           <button className={filter === 'assigned' ? 'active' : ''} onClick={() => setFilter('assigned')}>Мои задачи</button>
           <button className={filter === 'escalated' ? 'active' : ''} onClick={() => setFilter('escalated')}>Эскалации</button>
         </div>
+        {error && <div className="workspace-error" role="alert">{error}<button className="button" onClick={onRetry}>Повторить</button></div>}
         {loading && alerts.length === 0 && <p className="alert-empty">Загрузка алертов…</p>}
-        {!loading && visible.length === 0 && <p className="alert-empty">Алертов пока нет.</p>}
+        {!loading && !error && visible.length === 0 && <p className="alert-empty">Задач пока нет.</p>}
         <div className="alert-items">
           {visible.map((alert) => {
             const overdue = Boolean(alert.sla_deadline && new Date(alert.sla_deadline).getTime() < now && alert.incident_status !== 'resolved')
@@ -86,7 +98,7 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
                 </div>
                 <b>{alert.title}</b>
                 <span>{alert.body}</span>
-                <small className={overdue ? 'overdue' : ''}>{deadlineText(alert.sla_deadline, now)}</small>
+                <small className={overdue ? 'overdue' : ''}>{deadlineText(alert.sla_deadline, now, alert.incident_status)}</small>
               </button>
             )
           })}
@@ -95,7 +107,7 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
 
       <section className="alert-detail panel">
         {!selectedAlert ? (
-          <p className="alert-empty">Выберите алерт, чтобы увидеть срок, действия и историю проверки.</p>
+          <p className="alert-empty">Выберите задачу.</p>
         ) : (
           <>
             <span className="section-kicker">{selectedAlert.incident_code}</span>
@@ -105,21 +117,23 @@ export function AlertCenter({ alerts, loading, onRead, onAction, onOpen }: Alert
               <div><span>Ответственный</span><strong>{selectedAlert.assignee_name || 'Не назначен'}</strong></div>
               <div><span>Исправить до</span><strong>{selectedAlert.sla_deadline ? new Date(selectedAlert.sla_deadline).toLocaleString('ru-RU') : '—'}</strong></div>
               <div><span>Проверка</span><strong>{selectedAlert.verification_status === 'passed' ? 'Исправлено' : selectedAlert.verification_status === 'failed' ? 'Нарушение осталось' : selectedAlert.verification_status === 'unavailable' ? 'Нет данных с камер' : selectedAlert.verification_status === 'requested' ? 'Запрошена' : 'Ожидается'}</strong></div>
-              <div><span>Срок</span><strong className={selectedAlert.escalated_at ? 'overdue' : ''}>{deadlineText(selectedAlert.sla_deadline, now)}</strong></div>
+              <div><span>Срок</span><strong className={selectedAlert.escalated_at ? 'overdue' : ''}>{deadlineText(selectedAlert.sla_deadline, now, selectedAlert.incident_status)}</strong></div>
             </div>
             <div className="alert-actions">
-              {selectedAlert.kind === 'assigned' && ['pending', 'confirmed'].includes(selectedAlert.incident_status) && (
+              {canAct && selectedAlert.kind === 'assigned' && ['pending', 'confirmed'].includes(selectedAlert.incident_status) && (
                 <button className="button" disabled={busy} onClick={() => takeAction(selectedAlert, 'in_progress')}>Взять в работу</button>
               )}
-              {selectedAlert.kind === 'assigned' && ['pending', 'confirmed', 'in_progress'].includes(selectedAlert.incident_status) && (
+              {canAct && selectedAlert.kind === 'assigned' && ['pending', 'confirmed', 'in_progress'].includes(selectedAlert.incident_status) && (
                 <button className="button primary" disabled={busy || selectedAlert.verification_status === 'requested'} onClick={() => takeAction(selectedAlert, 'resolved')}>Исправлено — проверить</button>
               )}
-              {selectedAlert.kind === 'escalated' && selectedAlert.incident_status !== 'resolved' && selectedAlert.incident_status !== 'false_positive' && (
+              {canAct && selectedAlert.kind === 'escalated' && selectedAlert.incident_status !== 'resolved' && selectedAlert.incident_status !== 'false_positive' && (
                 <button className="button" disabled={busy} onClick={() => takeAction(selectedAlert, 'false_positive')}>Отклонить как ошибку</button>
               )}
-              <button className="button" onClick={() => onOpen(selectedAlert)}>Открыть инцидент ↗</button>
+              {canOpen(selectedAlert) && <button className="button" onClick={() => onOpen(selectedAlert)}>Открыть случай ↗</button>}
             </div>
             <h3>История</h3>
+            {eventsLoading && <p role="status">Загружаем историю…</p>}
+            {eventsError && <p role="alert">{eventsError}</p>}
             <ol className="alert-timeline">
               {events.map((event) => (
                 <li key={event.id}>
