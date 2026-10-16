@@ -21,7 +21,7 @@ celery_app = Celery(
     "stroy_control",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.tasks"],
+    include=["app.workers.tasks", "app.workers.management_tasks"],
 )
 
 celery_app.conf.update(
@@ -44,11 +44,17 @@ celery_app.conf.update(
     # процессе. Включается настройкой CELERY_EAGER=true.
     task_always_eager=settings.celery_eager,
     task_eager_propagates=settings.celery_eager,
+    broker_connection_timeout=3,
+    task_publish_retry=False,
 )
 
 # Периодические задачи. Расписание заполняется по мере появления пайплайна:
 # опрос камер (ingest) и прогон правил (evaluate) живут здесь.
 celery_app.conf.beat_schedule = {
+    "management-reap-expired": {
+        "task": "management.reap_expired",
+        "schedule": 60.0,
+    },
     "heartbeat": {
         "task": "system.heartbeat",
         "schedule": crontab(minute="*"),

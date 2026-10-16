@@ -25,6 +25,7 @@ from app.models.enums import (
     ZoneRiskLevel,
 )
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
+from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.project import (
     Camera,
     CameraHealthEvent,
@@ -40,6 +41,7 @@ from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
 
 __all__ = [
+    "ManagementRun", "ManagementRunStep", "TaskDependency",
     # Справочники
     "ObjectClass",
     "WorkType",

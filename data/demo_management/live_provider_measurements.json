@@ -1,0 +1,483 @@
+{
+  "measurements": [
+    {
+      "run_id": "f50e13fc-400a-460b-8f62-2e96df6330b5",
+      "post_ms": 163.643,
+      "ready_ms_including_poll": 46130.05,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "partial",
+      "llm_calls": 3,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 1526,
+            "prompt_tokens": 1351,
+            "completion_tokens": 175
+          },
+          "model": "mistralai/mistral-small-24b-instruct-2501",
+          "prompt_version": "management.evidence.v1"
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_timeout",
+          "attempts": 1,
+          "usage": {},
+          "model": "mistralai/mistral-small-24b-instruct-2501",
+          "prompt_version": "management.actions.v1"
+        },
+        {
+          "role": "reviewer",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_timeout",
+          "attempts": 1,
+          "usage": {},
+          "model": "mistralai/mistral-small-24b-instruct-2501",
+          "prompt_version": "management.reviewer.v1"
+        }
+      ]
+    },
+    {
+      "run_id": "a59d5086-6bda-45c1-8fc2-60e3d1370f4c",
+      "post_ms": 126.177,
+      "ready_ms_including_poll": 11920.362,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "partial",
+      "llm_calls": 4,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 1322,
+            "prompt_tokens": 1220,
+            "completion_tokens": 102
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.evidence.v1"
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "output_validation_failed",
+          "attempts": 2,
+          "usage": {
+            "total_tokens": 6700,
+            "prompt_tokens": 5681,
+            "completion_tokens": 1019
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.actions.v1"
+        },
+        {
+          "role": "reviewer",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "output_validation_failed",
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3072,
+            "prompt_tokens": 2940,
+            "completion_tokens": 132
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.reviewer.v1"
+        }
+      ]
+    },
+    {
+      "run_id": "30d1a901-02d0-4cbc-8070-1b03d402705c",
+      "episode": "baseline",
+      "post_ms": 137.379,
+      "ready_ms_including_poll": 9786.484,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "partial",
+      "llm_calls": 4,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 2,
+          "usage": {
+            "total_tokens": 3312,
+            "prompt_tokens": 2997,
+            "completion_tokens": 315
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.evidence.v1",
+          "validation_errors": []
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null,
+          "validation_errors": []
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "output_validation_failed",
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3477,
+            "prompt_tokens": 3273,
+            "completion_tokens": 204
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.actions.v2",
+          "validation_errors": [
+            "missing_or_duplicate_alternatives"
+          ]
+        },
+        {
+          "role": "reviewer",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_timeout",
+          "attempts": 1,
+          "usage": {},
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.reviewer.v2",
+          "validation_errors": []
+        }
+      ]
+    },
+    {
+      "run_id": "718d6736-a51d-4f5d-8d1b-82a49a83fbb8",
+      "episode": "baseline",
+      "post_ms": 122.141,
+      "ready_ms_including_poll": 1802.903,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "deterministic",
+      "llm_calls": 3,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_auth_error",
+          "attempts": 1,
+          "usage": {},
+          "model": "google/gemini-2.5-flash-lite",
+          "prompt_version": "management.evidence.v2",
+          "validation_errors": []
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null,
+          "validation_errors": []
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_auth_error",
+          "attempts": 1,
+          "usage": {},
+          "model": "google/gemini-2.5-flash-lite",
+          "prompt_version": "management.actions.v3",
+          "validation_errors": []
+        },
+        {
+          "role": "reviewer",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "provider_auth_error",
+          "attempts": 1,
+          "usage": {},
+          "model": "google/gemini-2.5-flash-lite",
+          "prompt_version": "management.reviewer.v2",
+          "validation_errors": []
+        }
+      ]
+    },
+    {
+      "run_id": "898cb5d6-e3fe-4726-916e-559509883dcb",
+      "episode": "baseline",
+      "post_ms": 17.273,
+      "ready_ms_including_poll": 9230.754,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "partial",
+      "llm_calls": 4,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 2,
+          "usage": {
+            "total_tokens": 3368,
+            "prompt_tokens": 3049,
+            "completion_tokens": 319
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.evidence.v2",
+          "validation_errors": []
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null,
+          "validation_errors": []
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "output_validation_failed",
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3678,
+            "prompt_tokens": 3312,
+            "completion_tokens": 366
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.actions.v3",
+          "validation_errors": [
+            "numbers_in_prose"
+          ]
+        },
+        {
+          "role": "reviewer",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3310,
+            "prompt_tokens": 3278,
+            "completion_tokens": 32
+          },
+          "model": "openai/gpt-4.1-nano",
+          "prompt_version": "management.reviewer.v2",
+          "validation_errors": []
+        }
+      ]
+    },
+    {
+      "run_id": "0d64197f-bf4f-49a0-87f3-b3d9a7393f9d",
+      "episode": "baseline",
+      "post_ms": 18.323,
+      "ready_ms_including_poll": 13879.763,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "llm",
+      "llm_calls": 3,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 1603,
+            "prompt_tokens": 1514,
+            "completion_tokens": 89
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.evidence.v2",
+          "validation_errors": []
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null,
+          "validation_errors": []
+        },
+        {
+          "role": "actions",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 4024,
+            "prompt_tokens": 3333,
+            "completion_tokens": 691
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.actions.v4",
+          "validation_errors": []
+        },
+        {
+          "role": "reviewer",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3821,
+            "prompt_tokens": 3650,
+            "completion_tokens": 171
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.reviewer.v2",
+          "validation_errors": []
+        }
+      ]
+    },
+    {
+      "run_id": "6ffe8657-071f-43c3-980e-f7c53051c8c4",
+      "episode": "camera_unavailable",
+      "post_ms": 139.468,
+      "ready_ms_including_poll": 17195.386,
+      "observed_statuses": [
+        "running",
+        "partial"
+      ],
+      "status": "partial",
+      "effective_mode": "partial",
+      "llm_calls": 4,
+      "steps": [
+        {
+          "role": "evidence",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 1556,
+            "prompt_tokens": 1486,
+            "completion_tokens": 70
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.evidence.v2",
+          "validation_errors": []
+        },
+        {
+          "role": "calculation",
+          "status": "completed",
+          "generation": "deterministic",
+          "error": null,
+          "attempts": 0,
+          "usage": {},
+          "model": null,
+          "prompt_version": null,
+          "validation_errors": []
+        },
+        {
+          "role": "actions",
+          "status": "failed",
+          "generation": "deterministic",
+          "error": "output_validation_failed",
+          "attempts": 2,
+          "usage": {
+            "total_tokens": 7675,
+            "prompt_tokens": 6789,
+            "completion_tokens": 886
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.actions.v4",
+          "validation_errors": [
+            "cost_criterion_mismatch"
+          ]
+        },
+        {
+          "role": "reviewer",
+          "status": "completed",
+          "generation": "llm",
+          "error": null,
+          "attempts": 1,
+          "usage": {
+            "total_tokens": 3401,
+            "prompt_tokens": 3301,
+            "completion_tokens": 100
+          },
+          "model": "openai/gpt-4o-mini",
+          "prompt_version": "management.reviewer.v2",
+          "validation_errors": []
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Includes failed development attempts; not a reliability benchmark.",
+    "Usage missing for timed-out or denied calls; monetary estimates cannot prove actual billing."
+  ]
+}

@@ -20,6 +20,7 @@ dependencies = [
     "rapidfuzz>=3.9",
     "ultralytics>=8.3,<9",
     "pyjwt>=2.8",
+    "httpx>=0.28,<0.29",
 ]
 
 [project.optional-dependencies]

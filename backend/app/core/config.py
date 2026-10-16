@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # процессе, без брокера. Нужен, чтобы демонстрация не зависела от Redis
     # и чтобы тесты не поднимали воркер. См. docs/decisions/0002-celery.md
     celery_eager: bool = False
+
+    # Management uses a separate adapter; never expose credentials in API or logs.
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = "openai/gpt-4o-mini"
+    management_queue_timeout_seconds: int = 300
+    management_run_timeout_seconds: int = 90
 
     # --- Хранилище кадров ---
     storage_backend: Literal["local"] = "local"

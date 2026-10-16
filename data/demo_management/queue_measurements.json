@@ -1,0 +1,62 @@
+{
+  "api_restart_saved_card_verified": true,
+  "poll_interval_ms": 50,
+  "measurements": [
+    {
+      "run_id": "05a2b138-18a6-401b-a457-8cfd772a0c26",
+      "post_ms": 179.372,
+      "ready_ms_including_poll": 421.567,
+      "observed_statuses": [
+        "queued",
+        "running",
+        "completed"
+      ],
+      "llm_calls": 0,
+      "effective_mode": "deterministic"
+    },
+    {
+      "run_id": "cd4223bc-c1d5-4744-934f-3452c3d0fbc6",
+      "post_ms": 14.189,
+      "ready_ms_including_poll": 76.037,
+      "observed_statuses": [
+        "queued",
+        "completed"
+      ],
+      "llm_calls": 0,
+      "effective_mode": "deterministic"
+    },
+    {
+      "run_id": "0495cb3c-9964-46ce-afe0-8259692f49d2",
+      "post_ms": 14.901,
+      "ready_ms_including_poll": 77.032,
+      "observed_statuses": [
+        "queued",
+        "completed"
+      ],
+      "llm_calls": 0,
+      "effective_mode": "deterministic"
+    },
+    {
+      "run_id": "800bc94b-8ce9-487f-a658-737e20d40ae2",
+      "post_ms": 13.897,
+      "ready_ms_including_poll": 75.66,
+      "observed_statuses": [
+        "queued",
+        "completed"
+      ],
+      "llm_calls": 0,
+      "effective_mode": "deterministic"
+    },
+    {
+      "run_id": "943f0312-3853-4ca9-b2c8-00749385d6bf",
+      "post_ms": 13.873,
+      "ready_ms_including_poll": 76.115,
+      "observed_statuses": [
+        "queued",
+        "completed"
+      ],
+      "llm_calls": 0,
+      "effective_mode": "deterministic"
+    }
+  ]
+}
