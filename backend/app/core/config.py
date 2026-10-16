@@ -66,8 +66,27 @@ class Settings(BaseSettings):
 
     # --- CORS: адреса, с которых ходит фронтенд ---
     cors_origins: list[str] = Field(
-        default=["http://localhost:5173", "http://localhost:4173"]
+        default=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
     )
+
+    # --- JWT Authentication ---
+    jwt_secret_key: str = "stroy-control-super-secure-jwt-secret-key-2026-production"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_days: int = 30
+
+    # --- Контроль нарушений спецтехники ---
+    # Период проверки и фиксации нарушений (в секундах).
+    # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
+    violation_evaluation_window_seconds: int = 30
 
     @computed_field  # type: ignore[prop-decorator]
     @property

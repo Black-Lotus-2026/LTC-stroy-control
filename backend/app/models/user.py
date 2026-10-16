@@ -17,6 +17,8 @@ from app.models.enums import UserRole
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
+    username: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, default=None)
+    hashed_password: Mapped[str | None] = mapped_column(String(256), default=None)
     name: Mapped[str] = mapped_column(String(128))
     email: Mapped[str | None] = mapped_column(String(256), unique=True, default=None)
     position: Mapped[str | None] = mapped_column(String(128), default=None)

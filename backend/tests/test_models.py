@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "incidents",
     "incident_events",
     "incident_evidence",
+    "video_assets",
     "users",
     "observation_logs",
     "report_schedules",

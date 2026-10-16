@@ -46,6 +46,7 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     object_kind: Mapped[str | None] = mapped_column(String(64), default=None)
 
     status: Mapped[str] = mapped_column(String(32), default="active")
+    owner_username: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
 
     zones: Mapped[list[Zone]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
@@ -71,7 +72,8 @@ class ProjectSettings(TimestampMixin, Base):
     __tablename__ = "project_settings"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"),
+        PgUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
         primary_key=True,
     )
 

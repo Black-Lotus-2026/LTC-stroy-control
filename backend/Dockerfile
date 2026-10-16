@@ -10,7 +10,7 @@ WORKDIR /app
 
 # libpq нужен psycopg, curl — для healthcheck в compose.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq5 curl \
+        libpq5 curl libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Зависимости ставятся отдельным слоем: пересобираются только при изменении

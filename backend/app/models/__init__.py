@@ -43,6 +43,7 @@ from app.models.report import GeneratedReport, ObservationLog, ReportSchedule
 from app.models.rules import CostRate, RuleSet, WorkRequirement
 from app.models.schedule import ScheduleTask
 from app.models.user import User
+from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
 
 __all__ = [
@@ -68,6 +69,7 @@ __all__ = [
     "Incident",
     "IncidentEvent",
     "IncidentEvidence",
+    "VideoAsset",
     "User",
     # Временная шкала и отчёты
     "ObservationLog",

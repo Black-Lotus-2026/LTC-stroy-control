@@ -1,16 +1,17 @@
 # Короткие команды для повседневной работы. Всё, что нужно знать новому
 # участнику: make up, make logs, make down.
 
-.PHONY: help up down logs ps rebuild migrate revision import-catalog seed-report-demo shell test lint fmt
+.PHONY: help up down logs ps rebuild migrate revision import-catalog seed-report-demo generate-demo shell test lint fmt
 
 help:  ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-up:  ## Поднять весь стенд (api, worker, beat, postgres, redis)
+up:  ## Поднять весь стенд
 	docker compose up --build -d
-	@echo "API:     http://localhost:8000"
-	@echo "Swagger: http://localhost:8000/docs"
+	@echo "Frontend: http://localhost:5173"
+	@echo "API:      http://localhost:8000"
+	@echo "Swagger:  http://localhost:8000/docs"
 
 down:  ## Остановить стенд (данные сохраняются)
 	docker compose down
@@ -38,6 +39,9 @@ import-catalog:  ## Загрузить справочник видов рабо�
 
 seed-report-demo:  ## Создать mock-логи и расписания для отчётного агента
 	docker compose exec api python -m app.cli seed-report-demo
+
+generate-demo:  ## Сгенерировать эталонный демо-файл календарного плана (Многоквартирный жилой дом)
+	docker compose exec api python -m app.scripts.generate_demo_schedule
 
 shell:  ## Python-консоль внутри контейнера api
 	docker compose exec api python

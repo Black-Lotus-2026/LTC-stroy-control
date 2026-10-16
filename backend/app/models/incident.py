@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -84,6 +85,11 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Ожидаемая форма: {"summary": str, "factors": [...], "limitations": [...]}
     explanation: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
 
+    # Специфичные поля контроля техники СМР и порогов
+    discrepancy_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    machinery_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    stage_probability: Mapped[float | None] = mapped_column(Float, default=None)
+
     status: Mapped[IncidentStatus] = mapped_column(
         enum_column(IncidentStatus), default=IncidentStatus.PENDING, index=True
     )
@@ -102,9 +108,7 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    observation_count: Mapped[int] = mapped_column(
-        Integer, default=1, server_default="1"
-    )
+    observation_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
@@ -161,9 +165,7 @@ class IncidentEvent(UUIDPrimaryKeyMixin, Base):
     incident_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("incidents.id", ondelete="CASCADE"), index=True
     )
-    event_type: Mapped[IncidentEventType] = mapped_column(
-        enum_column(IncidentEventType)
-    )
+    event_type: Mapped[IncidentEventType] = mapped_column(enum_column(IncidentEventType))
 
     old_status: Mapped[IncidentStatus | None] = mapped_column(
         enum_column(IncidentStatus), default=None
@@ -178,9 +180,7 @@ class IncidentEvent(UUIDPrimaryKeyMixin, Base):
     )
 
     comment: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     incident: Mapped[Incident] = relationship(back_populates="events")
     user: Mapped[User | None] = relationship()
@@ -212,9 +212,7 @@ class IncidentEvidence(UUIDPrimaryKeyMixin, Base):
         JSONB, default=list, server_default="[]"
     )
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     incident: Mapped[Incident] = relationship(back_populates="evidence")
     frame: Mapped[Frame] = relationship()

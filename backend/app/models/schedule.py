@@ -5,7 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -47,6 +48,21 @@ class ScheduleTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     status: Mapped[ScheduleTaskStatus] = mapped_column(
         enum_column(ScheduleTaskStatus), default=ScheduleTaskStatus.PLANNED
+    )
+
+    # Порядковый номер в очереди графика для каскадного сдвига
+    order_index: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", index=True
+    )
+    duration_days: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+    # Привязка к эталонному справочнику работ и оценка сходства
+    matched_catalog_name: Mapped[str | None] = mapped_column(String(512), default=None)
+    catalog_similarity: Mapped[float | None] = mapped_column(Float, default=None)
+
+    # Распределение вероятностей техники на этапе {class_name: probability}
+    machinery_probabilities: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}"
     )
 
     # Плановый прогресс на текущий момент и наблюдаемый факт. Оба в долях 0..1.

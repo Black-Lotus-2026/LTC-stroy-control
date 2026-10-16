@@ -52,12 +52,14 @@ services:
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction_machinery.pt}
     volumes:
       # Код примонтирован — правки применяются без пересборки образа.
       - ./backend:/app
       - storage_data:/app/var/storage
       # Исходные файлы организаторов (справочник работ, ссылки на датасеты).
       - ./data:/app/data:ro
+      - ./info:/app/info:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -82,10 +84,12 @@ services:
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction_machinery.pt}
     volumes:
       - ./backend:/app
       - storage_data:/app/var/storage
       - ./data:/app/data:ro
+      - ./info:/app/info:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,6 +110,24 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      VITE_API_URL: http://127.0.0.1:8000
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./package.json:/app/package.json
+      - ./vite.config.ts:/app/vite.config.ts
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

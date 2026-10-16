@@ -104,9 +104,7 @@ class WorkRequirement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     work_type: Mapped[WorkType] = relationship()
     object_class: Mapped[ObjectClass] = relationship()
 
-    __table_args__ = (
-        UniqueConstraint("rule_set_id", "work_type_id", "object_class_id"),
-    )
+    __table_args__ = (UniqueConstraint("rule_set_id", "work_type_id", "object_class_id"),)
 
     def __repr__(self) -> str:
         return f"<WorkRequirement {self.kind} x{self.min_count}>"
