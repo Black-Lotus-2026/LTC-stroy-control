@@ -130,15 +130,8 @@ class MachineryProbabilityItem(BaseModel):
         ..., description="MANDATORY, RECOMMENDED, NEUTRAL, UNCHARACTERISTIC"
     )
     requirement_level: str = Field(
-        ..., description="Обязательная / Рекомендованная / Допустимая / Не допускается / Не учитывается"
+        ..., description="Обязательная / Рекомендованная / Допустимая / Не допускается"
     )
-    # What the catalog says before any manual change, so the UI can show "changed" and reset it.
-    base_probability: float | None = None
-    base_classification: str | None = None
-    is_override: bool = False
-    # Per-machine timing set by the operator; None means "use the object-wide setting".
-    warn_after_seconds: int | None = None
-    err_after_seconds: int | None = None
 
 
 class StageProbabilityResponse(BaseModel):
@@ -192,9 +185,6 @@ class IncidentResponse(BaseModel):
     snapshot_url: str | None = None
     album_photos: list[IncidentPhotoItem] = Field(default_factory=list)
     manual_override: bool = False
-    operator_comment: str | None = None
-    decided_at: datetime | None = None
-    observed_at: datetime | None = None
     created_at: datetime
 
 
@@ -210,7 +200,6 @@ class IncidentAlbumResponse(BaseModel):
 
 class IncidentStatusUpdateRequest(BaseModel):
     status: str = Field(..., description="Статус инцидента: pending / confirmed / false_positive или русские эквиваленты")
-    comment: str | None = Field(None, max_length=2000, description="Комментарий оператора к решению")
 
 
 class IncidentCreateRequest(BaseModel):
@@ -228,8 +217,6 @@ class IncidentCreateRequest(BaseModel):
     description: str
     frame_snapshot_base64: str | None = None
     album_snapshots: list[dict[str, Any]] | None = None
-    # When the deviation was observed (for a recording this is the filmed time, not "now")
-    observed_at: datetime | None = None
 
 
 class IncidentConfigResponse(BaseModel):
