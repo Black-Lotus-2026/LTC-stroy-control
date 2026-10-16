@@ -12,8 +12,9 @@ export const LV: Record<Level, { label: string; group: string; explain: string }
   skip: { label: 'Не учитывается', group: 'Не учитывается', explain: 'Не участвует в сверке. Подходит для стационарной техники: башенного крана, бытовок.' },
 }
 export const LV_ORDER: Level[] = ['req', 'rec', 'ok', 'no', 'skip']
-const CLS_TO_LV: Record<string, Level> = { MANDATORY: 'req', RECOMMENDED: 'rec', NEUTRAL: 'ok', UNCHARACTERISTIC: 'no', IGNORED: 'skip' }
-export const LV_TO_CLS: Record<Level, string> = { req: 'MANDATORY', rec: 'RECOMMENDED', ok: 'NEUTRAL', no: 'UNCHARACTERISTIC', skip: 'IGNORED' }
+const CLS_TO_LV: Record<string, Level> = { MANDATORY: 'req', RECOMMENDED: 'rec', NEUTRAL: 'ok', UNCHARACTERISTIC: 'no' }
+/** The server knows four levels; "не учитывается" exists only in this browser for now. */
+export const LV_TO_CLS: Record<Exclude<Level, 'skip'>, string> = { req: 'MANDATORY', rec: 'RECOMMENDED', ok: 'NEUTRAL', no: 'UNCHARACTERISTIC' }
 /** Server thresholds (backend/app/api/v1/schedule.py): >80 / 60–80 / 15–60 / <15 %. */
 export const THRESHOLDS = [
   { v: '> 80%', l: 'обязательна' },
@@ -32,9 +33,11 @@ export interface Settings {
   shiftFrom: number // s since midnight
   shiftTo: number
   startGrace: number // s after shift start before absence counts
+  demo: boolean // substitute demo recognition when the model is unavailable
 }
-export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
-export const STEPS: Record<keyof Settings, number[]> = {
+export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800, demo: true }
+export type NumKey = Exclude<keyof Settings, 'demo'>
+export const STEPS: Record<NumKey, number[]> = {
   window: [10, 15, 30, 60, 120],
   conf: [40, 50, 60, 70, 80, 90],
   warnAfter: [60, 120, 180, 300, 600, 900, 1200, 1800],
@@ -107,29 +110,53 @@ export interface Profile {
   rules: Record<Code, Rule>
   edited: boolean
 }
-export function toProfile(api: ApiProfile, s: Settings): Profile {
+/** What this browser changed on top of the server profile. */
+export interface LocalRule {
+  base: Level // the level before the first change, to return to it
+  skip?: boolean
+  warnAfter?: number
+  errAfter?: number
+  at: number
+}
+export type LocalRules = Partial<Record<Code, LocalRule>>
+export function loadLocalRules(stageId: string): LocalRules {
+  try {
+    return JSON.parse(localStorage.getItem(`sverka:rules:${stageId}`) || '{}')
+  } catch {
+    return {}
+  }
+}
+export function saveLocalRules(stageId: string, r: LocalRules) {
+  try {
+    localStorage.setItem(`sverka:rules:${stageId}`, JSON.stringify(r))
+  } catch {
+    // storage unavailable
+  }
+}
+
+export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}): Profile {
   const rules = {} as Record<Code, Rule>
   for (const code of CODES) {
     const item = api.probabilities.find((m) => toCode(m.machinery_code) === code)
-    const lvl = item ? CLS_TO_LV[item.classification] ?? 'ok' : 'no'
-    const base = item?.base_classification ? CLS_TO_LV[item.base_classification] ?? lvl : lvl
+    const server: Level = item ? CLS_TO_LV[item.classification] ?? 'ok' : 'no'
+    const l = local[code]
     rules[code] = {
       code,
       p: item?.probability ?? 0,
-      baseP: item?.base_probability ?? item?.probability ?? 0,
-      base,
-      lvl,
-      edited: !!item?.is_override,
-      warnAfter: item?.warn_after_seconds ?? s.warnAfter,
-      errAfter: item?.err_after_seconds ?? s.errAfter,
-      ownTiming: item?.warn_after_seconds != null || item?.err_after_seconds != null,
+      baseP: item?.probability ?? 0,
+      base: l?.base ?? server,
+      lvl: l?.skip ? 'skip' : server,
+      edited: !!l,
+      warnAfter: l?.warnAfter ?? s.warnAfter,
+      errAfter: l?.errAfter ?? s.errAfter,
+      ownTiming: l?.warnAfter != null || l?.errAfter != null,
     }
   }
-  return { stageId: api.stage_id, catalog: api.matched_catalog_stage ?? null, similarity: api.similarity_confidence, rules, edited: !!api.has_custom_override }
+  return { stageId: api.stage_id, catalog: api.matched_catalog_stage ?? null, similarity: api.similarity_confidence, rules, edited: Object.keys(local).length > 0 }
 }
 
 /* ── Observation (provided by the engine) ───────────────── */
-export interface Det { code: Code; c: number; x: number; y: number; w: number; h: number }
+export interface Det { code: Code; c: number; x: number; y: number; w: number; h: number; demo?: boolean }
 export type SourceStatus = 'connecting' | 'live' | 'stale' | 'offline' | 'unsupported' | 'idle'
 export interface SourceView {
   id: string
@@ -149,7 +176,7 @@ export interface Observation {
   mode: 'live' | 'recording'
   t: number
   sources: SourceView[]
-  model: 'unknown' | 'ready' | 'down'
+  model: 'unknown' | 'ready' | 'down' | 'demo'
   modelMessage?: string
   modelSince?: number
   frames: number
@@ -200,7 +227,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
   const live = obs.sources.filter((x) => x.status === 'live')
   const analyzable = obs.sources.filter((x) => x.status !== 'unsupported' && x.status !== 'idle')
   const covStart = obs.coverageStart(t)
-  const covered = obs.model === 'ready' && covStart != null && live.length > 0
+  const covered = (obs.model === 'ready' || obs.model === 'demo') && covStart != null && live.length > 0
   const win = s.window * 1000
   const out: Evaluation = { t, stage, slots: [], oop: [], stationary: [], allowed: [], inShift, shiftStart, graceEnd, covered, liveSources: live.length, totalSources: obs.sources.length }
   if (!stage || !prof) return out
@@ -259,9 +286,16 @@ export interface UiEvent {
   /** when it was observed; for a recording this is the filmed time */
   at: number
   album: { url: string; camera: string; primary: boolean; at?: string }[]
-  comment: string | null
   decidedAt: number | null
+  /** created while recognition ran in demo mode */
+  demo: boolean
+  /** an example the server returns for an empty journal; it is not stored, so it cannot be decided */
+  sample: boolean
 }
+/* Lines our events carry in their description, read back to restore context after a reload. */
+export const OBSERVED_LINE = 'Время наблюдения: '
+export const DEMO_LINE = 'Распознавание: демо-режим, модель недоступна.'
+const SAMPLE_IDS = new Set(['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'])
 export const STATUS_WORD: Record<EventStatus, string> = {
   pending: 'Ждёт решения',
   confirmed: 'Подтверждено',
@@ -273,6 +307,9 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
   const kind = a.discrepancy_type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : a.discrepancy_type?.startsWith('MISSING') ? 'missing' : 'other'
   const raw = (a.status || 'pending').toLowerCase()
   const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
+  const description = a.description || ''
+  const observed = description.split('\n').find((l) => l.startsWith(OBSERVED_LINE))?.slice(OBSERVED_LINE.length)
+  const observedAt = observed ? new Date(observed).getTime() : NaN
   return {
     id: a.id,
     code: a.code,
@@ -281,15 +318,16 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     sev: a.severity === 'ERROR' ? 'err' : 'warn',
     status,
     title: a.title || a.code,
-    description: a.description || '',
+    description,
     stageId: a.stage_id ?? null,
     stageName: a.stage_name ?? null,
     zone: a.zone_name ?? null,
     createdAt: new Date(a.created_at).getTime(),
-    at: new Date(a.observed_at || a.created_at).getTime(),
+    at: Number.isFinite(observedAt) ? observedAt : new Date(a.created_at).getTime(),
     album: (a.album_photos || []).map((p, i) => ({ url: media(p.url) || p.url, camera: p.camera_name || `Камера ${i + 1}`, primary: !!p.is_primary, at: p.captured_at })),
-    comment: a.operator_comment ?? null,
-    decidedAt: a.decided_at ? new Date(a.decided_at).getTime() : null,
+    decidedAt: null,
+    demo: description.includes(DEMO_LINE),
+    sample: SAMPLE_IDS.has(a.id),
   }
 }
 /** Session knowledge about an episode: when the absence began and whether it ended. */
@@ -351,10 +389,11 @@ export function verdictOf(ctx: {
       ? { tone: 'none', title: 'Подключаемся к источникам', sub: 'Первый анализ появится через несколько секунд после получения кадра.' }
       : { tone: 'nodata', title: 'Нет кадров ни с одного источника', sub: 'Выводов об отсутствии техники нет, пока кадры не приходят.', actions: [{ label: 'Проверить камеры', act: 'settings:sources', primary: true }] }
   }
+  if (!prof) return { tone: 'none', title: 'Загружаем профиль техники этапа', sub: `Этап ${ev.stage.n} «${ev.stage.name}»: какая техника для него нужна, придёт с сервера через секунду.` }
   if (!ev.covered) return { tone: 'none', title: 'Анализируем первые кадры', sub: 'Сверка начнётся после первого распознанного кадра.' }
 
   const pending = events
-    .filter((e) => e.status === 'pending')
+    .filter((e) => e.status === 'pending' && !e.sample)
     .sort((a, b) => (sevNow(b, episodes.get(b.id), t, prof) === 'err' ? 1 : 0) - (sevNow(a, episodes.get(a.id), t, prof) === 'err' ? 1 : 0) || b.createdAt - a.createdAt)
   const seenReq = ev.slots.filter((x) => x.state === 'seen').map((x) => MACH[x.code].lower)
   const off = obs.sources.filter((x) => x.status === 'offline' || x.status === 'stale')
@@ -378,7 +417,7 @@ export function verdictOf(ctx: {
     return { tone: sevNow(e, ep, t, prof), title: liveTitle(e, ep, t, true), sub, actions: [{ label: 'Разобрать', act: 'case', id: e.id, primary: true }] }
   }
   // a confirmed deviation is still a deviation until the machine is back
-  const held = events.find((e) => (e.status === 'confirmed' || e.status === 'in_progress') && episodes.get(e.id) && episodes.get(e.id)!.to == null)
+  const held = events.find((e) => !e.sample && (e.status === 'confirmed' || e.status === 'in_progress') && episodes.get(e.id) && episodes.get(e.id)!.to == null)
   if (held)
     return {
       tone: sevNow(held, episodes.get(held.id), t, prof),
@@ -390,15 +429,15 @@ export function verdictOf(ctx: {
     const c = off[0]
     return { tone: 'warn', title: `Источник «${c.name}» ${c.status === 'stale' ? 'присылает застывший кадр' : 'без сигнала'}`, sub: `Работают ${live.length} из ${obs.sources.length}. Для зоны этого источника вывод об отсутствии техники не делается.`, actions: [{ label: 'Проверить', act: 'settings:sources', primary: true }] }
   }
+  if (ev.oop.length) {
+    const o = ev.oop[0]
+    return { tone: 'warn', title: `${MACH[o.code].name} на этапе «${ev.stage.name}»`, sub: `Техника не характерна для этапа. Если останется ещё ${durShort(Math.max(0, s.oopAfter * 1000 - o.dur))}, будет создано отклонение.` }
+  }
   const gathering = ev.slots.find((x) => x.state === 'gathering')
   if (gathering) return { tone: 'ok', title: 'Сбор техники после начала смены', sub: `До ${hhmm(ev.graceEnd)} отсутствие техники не считается отклонением.${seenReq.length ? ` Уже на месте: ${seenReq.join(', ')}.` : ''}` }
   const waiting = ev.slots.find((x) => x.state === 'waiting')
   if (waiting && waiting.missFor != null)
     return { tone: 'ok', title: 'Работы идут по плану', sub: `${MACH[waiting.code].name} не виден ${durShort(waiting.missFor)}. Если не появится ещё ${durShort(waiting.warnAfter * 1000 - waiting.missFor)}, система предупредит.` }
-  if (ev.oop.length) {
-    const o = ev.oop[0]
-    return { tone: 'warn', title: `${MACH[o.code].name} на этапе «${ev.stage.name}»`, sub: `Техника не характерна для этапа. Если останется ещё ${durShort(Math.max(0, s.oopAfter * 1000 - o.dur))}, будет создано отклонение.` }
-  }
   const req = ev.slots.filter((x) => x.lvl === 'req')
   return {
     tone: 'ok',

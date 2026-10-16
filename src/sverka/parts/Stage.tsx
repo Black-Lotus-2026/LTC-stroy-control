@@ -118,9 +118,11 @@ export function Stage({
               <i className="dot" />
               <span>{obs.mode === 'recording' && src.status === 'live' ? 'Запись' : STATUS_WORD[src.status]}</span>
             </span>
-            <span className="chip-mat">
+            <span className="chip-mat f-count">
               {obs.model === 'down'
                 ? 'Распознавание недоступно'
+                : obs.model === 'demo' && src.status === 'live'
+                  ? `Демо: ${dets.length} ${plural(dets.length, 'объект', 'объекта', 'объектов')}`
                 : src.status !== 'live'
                   ? 'Анализ по источнику невозможен'
                   : `${dets.length} ${plural(dets.length, 'объект', 'объекта', 'объектов')} на кадре`}
@@ -194,7 +196,7 @@ function Boxes({ dets, prof, focus, sourceId }: { dets: Observation['sources'][n
         return (
           <div
             key={d.code + i}
-            className={`box ${cls}${d.y < 0.08 ? ' lbl-in' : ''}${focus === d.code ? ' focus' : ''}`}
+            className={`box ${cls}${d.demo ? ' demo' : ''}${d.y < 0.08 ? ' lbl-in' : ''}${focus === d.code ? ' focus' : ''}`}
             data-box={d.code}
             style={{ left: `${d.x * 100}%`, top: `${d.y * 100}%`, width: `${d.w * 100}%`, height: `${d.h * 100}%` }}
           >
@@ -293,7 +295,7 @@ function Strip({
         <span>
           Окно сверки {settings.window} с · порог {settings.conf}%
         </span>
-        <span className="proto-line">{covered ? 'Анализ идёт, пока открыта эта вкладка' : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
+        <span className="proto-line">{obs.model === 'demo' ? 'Демо-распознавание: модель недоступна' : covered ? 'Анализ идёт, пока открыта эта вкладка' : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
       </div>
       <div className="frame-tools">
         <button type="button" className="toggle" role="switch" aria-checked={boxes} onClick={() => setBoxes(!boxes)}>

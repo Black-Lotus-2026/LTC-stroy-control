@@ -231,14 +231,20 @@ export function RuleEditor({
         <small>Уже созданные события не изменятся. Новое правило действует с {hhmm(Date.now())}.</small>
       </div>
       <div className="src-line">
-        По справочнику: {LV[r.base].label.toLowerCase()}, {Math.round(r.baseP * 100)}%{stage.catalog ? ` · ${stage.catalog}` : ''}
-        {r.edited && <><br />Изменено вручную, сейчас {Math.round(r.p * 100)}%{r.ownTiming ? ', свои пороги времени' : ''}</>}
+        {r.edited ? `До изменения: ${LV[r.base].label.toLowerCase()}` : `Профиль этапа: ${LV[r.lvl].label.toLowerCase()}, ${Math.round(r.p * 100)}%`}
+        {stage.catalog ? ` · ${stage.catalog}` : ''}
+        {(draft.lvl === 'skip' || r.ownTiming || draft.warnAfter !== settings.warnAfter || draft.errAfter !== settings.errAfter) && (
+          <>
+            <br />
+            «Не учитывать» и свои пороги времени хранятся в этом браузере; уровень требования сохраняется на сервере.
+          </>
+        )}
       </div>
       {err && <div className="err-line">{err}</div>}
       <div className="pop-actions">
         {r.edited && (
           <button type="button" className="btn ghost small" onClick={reset} disabled={!!busy}>
-            {busy === 'reset' ? 'Сбрасываем…' : 'Вернуть как в справочнике'}
+            {busy === 'reset' ? 'Сбрасываем…' : 'Вернуть как было'}
           </button>
         )}
         <button type="button" className="btn small" onClick={close}>

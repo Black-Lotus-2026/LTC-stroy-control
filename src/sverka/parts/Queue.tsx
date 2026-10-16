@@ -104,7 +104,6 @@ export function Queue({
                     </button>
                     <br />
                     {STATUS_WORD[e.status]}
-                    {e.comment ? ` · ${e.comment}` : ''}
                   </span>
                 </li>
               ))}
@@ -210,7 +209,7 @@ function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode;
             <span className="mono">{hhmm(e.at)}</span>
           </span>
           <span className="q-sub">
-            {[e.zone, SEV_WORD[sev], ep ? (ep.to ? 'завершилось' : 'продолжается') : e.stageName].filter(Boolean).join(' · ')}
+            {[e.sample ? 'пример с сервера' : e.demo ? 'демо' : null, e.zone, SEV_WORD[sev], ep ? (ep.to ? 'завершилось' : 'продолжается') : e.stageName].filter(Boolean).join(' · ')}
           </span>
         </span>
         <span className="q-thumb">{thumb ? <img alt="" src={thumb} /> : null}</span>

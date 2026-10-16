@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import type { ImportResult, ProjectItem, StreamCheck } from '../api'
+import type { ImportResult, ProjectItem } from '../api'
 import type { Observation, Stage } from '../model'
 import { fmtDay } from '../lib/format'
-import { CameraForm, RecordingForm } from './Settings'
+import { CameraForm, RecordingForm, type Probe } from './Settings'
 
 const KINDS = ['Жильё', 'Административные здания', 'Офисно-деловой центр', 'Образование', 'ДОУ', 'Здравоохранение', 'Спорт', 'Культура', 'Дороги']
 
@@ -36,7 +36,7 @@ export function Setup({
   onDemoPlan: () => Promise<ImportResult>
   onUploadPlan: (f: File) => Promise<ImportResult>
   onAddCamera: (n: string, u: string) => Promise<void>
-  onCheck: (u: string) => Promise<StreamCheck>
+  onCheck: Probe
   onRecording: (f: File, start: number) => void
   onClose: () => void
 }) {
@@ -178,8 +178,8 @@ export function Setup({
             </div>
           </div>
 
-          <div className="s-step" data-done={ready && live && obs.model === 'ready' && !!stageNow} data-locked={!ready}>
-            {n(4, ready && live && obs.model === 'ready' && !!stageNow)}
+          <div className="s-step" data-done={ready && live && obs.model !== 'down' && obs.model !== 'unknown' && !!stageNow} data-locked={!ready}>
+            {n(4, ready && live && obs.model !== 'down' && obs.model !== 'unknown' && !!stageNow)}
             <div>
               <h3>Проверка</h3>
               <p>Кадр приходит, распознавание отвечает, на дату наблюдения есть этап плана.</p>
@@ -190,8 +190,8 @@ export function Setup({
                     {live ? 'Кадр получен' : 'Ждём кадр от источника…'}
                   </div>
                   <div>
-                    <i className={obs.model === 'ready' ? '' : obs.model === 'down' ? 'bad' : 'wait'} />
-                    {obs.model === 'ready' ? 'Распознавание работает' : obs.model === 'down' ? `Распознавание недоступно: ${obs.modelMessage || 'нет ответа'}` : 'Проверяем распознавание…'}
+                    <i className={obs.model === 'ready' ? '' : obs.model === 'down' ? 'bad' : obs.model === 'demo' ? 'warn' : 'wait'} />
+                    {obs.model === 'ready' ? 'Распознавание работает' : obs.model === 'demo' ? `Модель недоступна, включено демо-распознавание (${obs.modelMessage || 'нет ответа'})` : obs.model === 'down' ? `Распознавание недоступно: ${obs.modelMessage || 'нет ответа'}` : 'Проверяем распознавание…'}
                   </div>
                   <div>
                     <i className={stageNow ? '' : 'warn'} />

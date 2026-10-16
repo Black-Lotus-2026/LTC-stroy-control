@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CameraItem, ProjectItem, StreamCheck, ZoneItem } from '../api'
-import type { Observation, Settings as S } from '../model'
+import type { CameraItem, ProjectItem, ZoneItem } from '../api'
+import type { NumKey, Observation, Settings as S } from '../model'
 import { DEFAULTS, STEPS, THRESHOLDS } from '../model'
 import { clock, durShort, hhmmss, toLocalInput } from '../lib/format'
 import { Spring, clamp } from '../lib/spring'
 import { CloseIcon } from './common'
+
+export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
 export type SheetTab = 'control' | 'sources' | 'shift'
 
@@ -31,7 +33,7 @@ export function SettingsSheet({
   zones: ZoneItem[]
   onAddCamera: (name: string, url: string) => Promise<void>
   onDeleteCamera: (id: string) => Promise<void>
-  onCheck: (url: string) => Promise<StreamCheck>
+  onCheck: Probe
   onRecording: (f: File, start: number) => void
   onClose: () => void
 }) {
@@ -86,7 +88,7 @@ export function SettingsSheet({
     return () => removeEventListener('keydown', k)
   })
 
-  const set = (k: keyof S, d: number) => {
+  const set = (k: NumKey, d: number) => {
     const steps = STEPS[k]
     let i = steps.findIndex((v) => v >= settings[k])
     if (i < 0) i = steps.length - 1
@@ -94,7 +96,7 @@ export function SettingsSheet({
     if (n.errAfter <= n.warnAfter) n.errAfter = STEPS.errAfter.find((v) => v > n.warnAfter) ?? n.errAfter
     onSettings(n)
   }
-  const row = (p: { k: keyof S; title: string; desc: string; where?: string }) => <SetRow key={p.k} {...p} settings={settings} onStep={set} onSettings={onSettings} />
+  const row = (p: { k: NumKey; title: string; desc: string; where?: string }) => <SetRow key={p.k} {...p} settings={settings} onStep={set} onSettings={onSettings} />
 
   return (
     <>
@@ -133,6 +135,20 @@ export function SettingsSheet({
               {row({ k: "warnAfter", title: "Предупреждение, если обязательной техники нет", desc: "Общее значение. У отдельной техники на этапе можно задать своё в правиле." })}
               {row({ k: "errAfter", title: "Отклонение, если её нет", desc: "После этого времени предупреждение считается отклонением." })}
               {row({ k: "oopAfter", title: "Техника не по этапу", desc: "Создать отклонение, если нехарактерная техника видна дольше этого времени." })}
+              <div className="set-row">
+                <div>
+                  <h4>Демо-распознавание</h4>
+                  <p>Если модель недоступна, детекции подставляются по демо-сцене, чтобы показать весь сценарий. Экран и события помечаются как демо.</p>
+                </div>
+                <button type="button" className="toggle" role="switch" aria-checked={settings.demo} onClick={() => onSettings({ ...settings, demo: !settings.demo })}>
+                  <span className="sw" />
+                  {settings.demo ? 'Включено' : 'Выключено'}
+                </button>
+                <div className="def">
+                  {obs.model === 'demo' ? `Сейчас работает: ${obs.modelMessage || 'модель недоступна'}` : obs.model === 'ready' ? 'Сейчас не нужно: модель отвечает' : 'Включится, если модель не ответит'}
+                  <span>Хранится в этом браузере</span>
+                </div>
+              </div>
               <div className="set-row">
                 <div>
                   <h4>Пороги профиля этапа</h4>
@@ -178,9 +194,9 @@ export function SettingsSheet({
   )
 }
 
-const fmtVal = (k: keyof S, v: number) => (k === 'conf' ? `${v}%` : k === 'window' ? `${v} с` : k === 'shiftFrom' || k === 'shiftTo' ? clock(v) : durShort(v * 1000))
+const fmtVal = (k: NumKey, v: number) => (k === 'conf' ? `${v}%` : k === 'window' ? `${v} с` : k === 'shiftFrom' || k === 'shiftTo' ? clock(v) : durShort(v * 1000))
 
-function SetRow({ k, title, desc, where, settings, onStep, onSettings }: { k: keyof S; title: string; desc: string; where?: string; settings: S; onStep: (k: keyof S, d: number) => void; onSettings: (s: S) => void }) {
+function SetRow({ k, title, desc, where, settings, onStep, onSettings }: { k: NumKey; title: string; desc: string; where?: string; settings: S; onStep: (k: NumKey, d: number) => void; onSettings: (s: S) => void }) {
   return (
     <div className="set-row">
       <div>
@@ -221,7 +237,7 @@ const STATUS_LINE: Record<string, string> = {
   idle: 'Пауза: открыта запись',
 }
 
-function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; onAdd: (n: string, u: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: (u: string) => Promise<StreamCheck>; onRecording: (f: File, start: number) => void }) {
+function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; onAdd: (n: string, u: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
   const [form, setForm] = useState<null | 'camera' | 'recording'>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [checks, setChecks] = useState<Record<string, string>>({})
@@ -274,7 +290,7 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
                       setChecks((x) => ({ ...x, [c.id]: 'Проверяем…' }))
                       try {
                         const r = await onCheck(c.stream_url!)
-                        setChecks((x) => ({ ...x, [c.id]: r.status === 'online' ? `Отвечает: ${r.message || r.protocol}` : r.error || r.suggestion || 'Не отвечает' }))
+                        setChecks((x) => ({ ...x, [c.id]: r.message }))
                       } catch (e) {
                         setChecks((x) => ({ ...x, [c.id]: e instanceof Error ? e.message : 'Не удалось проверить' }))
                       }
@@ -294,7 +310,7 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
       <div className="set-row">
         <div>
           <h4>Распознавание</h4>
-          <p>{obs.model === 'ready' ? `Работает · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
+          <p>{obs.model === 'ready' ? `Работает · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'demo' ? `Модель недоступна (${obs.modelMessage || 'причина не сообщена'}), работает демо-распознавание · кадров: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
         </div>
         <span />
       </div>
@@ -316,7 +332,7 @@ function Sources({ obs, cameras, onAdd, onDelete, onCheck, onRecording }: { obs:
   )
 }
 
-export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u: string) => Promise<void>; onCancel?: () => void; onCheck: (u: string) => Promise<StreamCheck> }) {
+export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u: string) => Promise<void>; onCancel?: () => void; onCheck: Probe }) {
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [state, setState] = useState<{ s: 'idle' | 'busy' | 'error' | 'warn'; msg?: string }>({ s: 'idle' })
@@ -327,8 +343,8 @@ export function CameraForm({ onAdd, onCancel, onCheck }: { onAdd: (n: string, u:
     setState({ s: 'busy', msg: 'Проверяем связь…' })
     try {
       const r = await onCheck(url.trim())
-      if (r.status !== 'online' && r.status !== 'warning') {
-        setState({ s: 'warn', msg: `Камера не ответила: ${r.error || r.suggestion || 'нет ответа'}. Камеру можно сохранить, но кадров не будет, пока связь не появится.` })
+      if (!r.ok) {
+        setState({ s: 'warn', msg: `${r.message}. Камеру можно сохранить, но кадров не будет, пока связь не появится.` })
         return
       }
       await onAdd(name.trim(), url.trim())

@@ -99,26 +99,50 @@ export const deleteCamera = (projectId: string, cameraId: string) =>
 export interface StreamCheck { status: 'online' | 'offline' | 'warning' | 'unknown'; protocol?: string; message?: string; error?: string; suggestion?: string }
 export const checkStream = (url: string) => req<StreamCheck>(`/videos/check-stream?url=${encodeURIComponent(url)}`)
 export const proxyUrl = (url: string) => `${API_PREFIX}/videos/proxy-stream?url=${encodeURIComponent(url)}`
-/** One fresh frame from an HTTP camera; the stream is not held open between frames. */
-export async function cameraFrame(url: string): Promise<Blob> {
-  let res: Response
-  try {
-    res = await fetch(`${API_PREFIX}/videos/frame?url=${encodeURIComponent(url)}&_=${Date.now()}`, { cache: 'no-store' })
-  } catch {
-    throw new ApiError('Нет связи с сервером', 0)
-  }
-  if (!res.ok) {
-    let msg = 'Камера не отдала кадр'
-    try {
-      const b = await res.json()
-      const d = b?.detail ?? b?.error?.message
-      if (typeof d === 'string') msg = d
-    } catch {
-      // not JSON
+/**
+ * One frame from an HTTP camera through the existing proxy: load the stream, take the first
+ * frame, close the connection. Holding MJPEG streams open would use up the browser's six
+ * connections per host and stall every other request to the API.
+ */
+export function grabFrame(url: string, timeoutMs = 6000): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.decoding = 'async'
+    const timer = window.setTimeout(() => {
+      img.onload = img.onerror = null
+      img.removeAttribute('src')
+      reject(new ApiError('Камера не прислала кадр за 6 секунд', 0))
+    }, timeoutMs)
+    img.onload = () => {
+      window.clearTimeout(timer)
+      img.onload = img.onerror = null
+      resolve(img)
     }
-    throw new ApiError(msg, res.status)
+    img.onerror = () => {
+      window.clearTimeout(timer)
+      img.onload = img.onerror = null
+      reject(new ApiError('Камера не ответила через сервер', 0))
+    }
+    img.src = `${proxyUrl(url)}&_=${Date.now()}`
+  })
+}
+
+/** Check a camera before saving it. HTTP: try to get a frame; RTSP: the server checks the port. */
+export async function probeCamera(url: string): Promise<{ ok: boolean; message: string }> {
+  const u = url.trim()
+  if (/^https?:\/\//i.test(u)) {
+    try {
+      const img = await grabFrame(u)
+      const msg = `Кадр получен · ${img.naturalWidth}×${img.naturalHeight}`
+      img.removeAttribute('src')
+      return { ok: true, message: msg }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : 'Камера не ответила' }
+    }
   }
-  return res.blob()
+  const r = await checkStream(u)
+  return { ok: r.status === 'online', message: r.status === 'online' ? r.message || 'Порт отвечает' : r.error || r.suggestion || 'Не отвечает' }
 }
 
 /* schedule */
@@ -135,13 +159,8 @@ export interface ApiMachinery {
   machinery_code: string
   machinery_name_ru: string
   probability: number
-  classification: 'MANDATORY' | 'RECOMMENDED' | 'NEUTRAL' | 'UNCHARACTERISTIC' | 'IGNORED'
+  classification: 'MANDATORY' | 'RECOMMENDED' | 'NEUTRAL' | 'UNCHARACTERISTIC'
   requirement_level: string
-  base_probability?: number | null
-  base_classification?: string | null
-  is_override?: boolean
-  warn_after_seconds?: number | null
-  err_after_seconds?: number | null
 }
 export interface ApiProfile {
   stage_id: string
@@ -193,9 +212,6 @@ export interface ApiIncident {
   status?: string | null
   snapshot_url?: string | null
   album_photos?: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
-  operator_comment?: string | null
-  decided_at?: string | null
-  observed_at?: string | null
   created_at: string
 }
 export interface IncidentCreate {
@@ -211,13 +227,14 @@ export interface IncidentCreate {
   observed_count?: number
   title: string
   description: string
-  observed_at?: string
   album_snapshots?: { camera_name: string; snapshot_base64: string; is_primary?: boolean }[]
 }
 export const incidents = (projectId: string) => req<ApiIncident[]>(`/incidents?project_id=${projectId}&limit=200`)
 export const createIncident = (data: IncidentCreate) => req<ApiIncident>('/incidents', json('POST', data), 'Не удалось сохранить событие')
-export const setIncidentStatus = (id: string, status: string, comment?: string) =>
-  req<ApiIncident>(`/incidents/${id}/status`, json('PATCH', { status, comment: comment || null }), 'Не удалось сохранить решение')
+export const setIncidentStatus = (id: string, status: string) =>
+  req<ApiIncident>(`/incidents/${id}/status`, json('PATCH', { status }), 'Не удалось сохранить решение')
+export const resetProfile = (stageId: string) =>
+  req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`, { method: 'DELETE' }, 'Не удалось сбросить профиль')
 export const incidentConfig = () => req<{ violation_evaluation_window_seconds: number }>('/incidents/config')
 export const setIncidentConfig = (seconds: number) =>
   req<{ violation_evaluation_window_seconds: number }>('/incidents/config', json('PATCH', { violation_evaluation_window_seconds: seconds }), 'Не удалось сохранить окно сверки')

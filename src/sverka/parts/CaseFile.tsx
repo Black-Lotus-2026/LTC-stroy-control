@@ -38,7 +38,7 @@ export function CaseFile({
   obs: Observation
   origin: DOMRect | null
   onClose: () => void
-  onDecide: (status: EventStatus, comment: string) => Promise<void>
+  onDecide: (status: EventStatus) => Promise<void>
   onRule: (code: Code) => void
   onPlan: () => void
 }) {
@@ -46,7 +46,7 @@ export function CaseFile({
   const scrim = useRef<HTMLDivElement | null>(null)
   const closing = useRef(false)
   const [shot, setShot] = useState(() => Math.max(0, ev.album.findIndex((a) => a.primary)))
-  const [comment, setComment] = useState('')
+  const [broken, setBroken] = useState<Set<string>>(new Set())
   const [save, setSave] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
   const rect = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
   const springRef = useRef<Spring | null>(null)
@@ -96,12 +96,11 @@ export function CaseFile({
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const typing = (e.target as HTMLElement).tagName === 'TEXTAREA'
       if (e.key === 'Escape') {
         e.preventDefault()
         close()
       }
-      if (typing || ev.status !== 'pending') return
+      if (ev.status !== 'pending' || ev.sample) return
       const m: Record<string, EventStatus> = { '1': 'confirmed', '2': 'false_positive', '3': 'in_progress' }
       if (m[e.key]) decide(m[e.key])
       if (e.key === 'Tab') {
@@ -124,7 +123,7 @@ export function CaseFile({
     if (save.s === 'saving') return
     setSave({ s: 'saving' })
     try {
-      await onDecide(status, comment.trim())
+      await onDecide(status)
       setSave({ s: 'saved' })
       window.setTimeout(close, 480)
     } catch (e) {
@@ -160,7 +159,7 @@ export function CaseFile({
       h: 'Правило',
       p: r ? (
         <>
-          {MACH[ev.mach].name}: {LV[r.lvl].group.toLowerCase()} техника на этом этапе{r.edited ? <span className="dim"> (изменено, по справочнику {LV[r.base].label.toLowerCase()})</span> : ''}.
+          {MACH[ev.mach].name}: {LV[r.lvl].group.toLowerCase()} техника на этом этапе{r.edited ? <span className="dim"> (изменено, до изменения: {LV[r.base].label.toLowerCase()})</span> : ''}.
           {ev.kind === 'missing' && ` Предупреждение через ${durShort(r.warnAfter * 1000)} без наблюдения, отклонение через ${durShort(r.errAfter * 1000)}.`}
         </>
       ) : (
@@ -206,15 +205,15 @@ export function CaseFile({
       <section className="case" ref={el} role="dialog" aria-modal="true" aria-labelledby="caseTitle">
         <div className="case-ev">
           <div className="ev-main">
-            {photo ? (
+            {photo && !broken.has(photo.url) ? (
               <>
-                <img src={photo.url} alt={`Кадр: ${photo.camera}`} />
+                <img src={photo.url} alt={`Кадр: ${photo.camera}`} onError={() => setBroken((b) => new Set(b).add(photo.url))} />
                 <div className="ticks" />
                 <div className="ev-cap">
                   <span className="chip-mat">
-                    {photo.camera}
-                    {photo.at ? ` · ${hhmmss(new Date(photo.at))}` : ''}
+                    {photo.camera} · {hhmmss(ev.at)}
                   </span>
+                  {ev.demo && <span className="chip-mat off">Демо-распознавание</span>}
                   {photo.primary && (
                     <span className="chip-mat rec">
                       <i className="dot" />В отчёт идёт этот кадр
@@ -225,8 +224,8 @@ export function CaseFile({
             ) : (
               <div className="ev-none">
                 <div>
-                  <strong>Снимков нет</strong>
-                  Кадры для этого события не сохранены. Доказательство нельзя подменить общим фото площадки.
+                  <strong>{photo ? 'Снимок недоступен' : 'Снимков нет'}</strong>
+                  {photo ? 'Файл снимка не загрузился с сервера.' : 'Кадры для этого события не сохранены.'} Доказательство нельзя подменить общим фото площадки.
                 </div>
               </div>
             )}
@@ -275,13 +274,18 @@ export function CaseFile({
             </div>
           </div>
           <div className="decide">
-            {ev.status !== 'pending' ? (
+            {ev.sample ? (
+              <div className="decided">
+                <span>
+                  <b>Пример с сервера.</b> Сервер показывает его, пока журнал объекта пуст. Записи в базе нет, поэтому решение по нему не сохраняется.
+                </span>
+              </div>
+            ) : ev.status !== 'pending' ? (
               <div className="decided">
                 <span>
                   Решение: <b>{STATUS_WORD[ev.status]}</b>
-                  {ev.decidedAt ? ` · ${fmtDay(ev.decidedAt)}, ${hhmm(ev.decidedAt)}` : ''}
+                  {ev.decidedAt ? ` · ${hhmm(ev.decidedAt)}` : ''}
                 </span>
-                {ev.comment && <span>Комментарий: {ev.comment}</span>}
                 {(ev.status === 'confirmed' || ev.status === 'in_progress') && (
                   <div className="decide-row">
                     <button type="button" className="btn" onClick={() => decide('resolved')} disabled={save.s === 'saving'}>
@@ -293,7 +297,6 @@ export function CaseFile({
               </div>
             ) : (
               <>
-                <textarea className="textarea" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Комментарий для журнала, необязательно" aria-label="Комментарий" rows={1} />
                 <div className="decide-row">
                   <button type="button" className="btn primary" onClick={() => decide('confirmed')} disabled={save.s === 'saving'}>
                     Подтвердить <kbd>1</kbd>
@@ -306,7 +309,7 @@ export function CaseFile({
                   </button>
                 </div>
                 <div className="save-state" data-s={save.s === 'idle' ? undefined : save.s}>
-                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : 'Решение и комментарий сохранятся в журнале события.'}
+                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : 'Решение сохранится в журнале события.'}
                 </div>
               </>
             )}

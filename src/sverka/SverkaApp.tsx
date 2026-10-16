@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import * as api from './api'
 import type { ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
-import type { Episode, EventStatus, Level, Observation, Settings, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, LV_TO_CLS, STATUS_WORD, evaluate, loadSettings, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, Stage, UiEvent, VerdictAction } from './model'
+import { DEFAULTS, DEMO_LINE, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { durShort, fmtDay, hhmm, hhmmss } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
@@ -89,6 +89,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   const [stages, setStages] = useState<Stage[]>([])
   const [loaded, setLoaded] = useState(false)
   const [apiProfiles, setApiProfiles] = useState<Map<string, ApiProfile>>(new Map())
+  const [localRules, setLocalRules] = useState<Map<string, LocalRules>>(new Map())
   const [events, setEvents] = useState<UiEvent[]>([])
   const [episodes, setEpisodes] = useState<Map<string, Episode>>(new Map())
   const [settings, setSettingsState] = useState<Settings>(DEFAULTS)
@@ -186,11 +187,12 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   }
 
   /* model */
-  const profiles = useMemo(() => new Map([...apiProfiles].map(([k, v]) => [k, toProfile(v, settings)])), [apiProfiles, settings])
+  const profiles = useMemo(() => new Map([...apiProfiles].map(([k, v]) => [k, toProfile(v, settings, localRules.get(k) ?? loadLocalRules(k))])), [apiProfiles, settings, localRules])
   const t = obs.t
   const stage = stageAt(stages, t)
   const prof = stage ? profiles.get(stage.id) ?? null : null
   engine.conf = settings.conf
+  engine.demo = settings.demo
   engine.windowMs = settings.window * 1000
   engine.stageName = stage?.name
 
@@ -249,16 +251,19 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
 
   /* the system writes events itself, only when it really watched and the model answered */
   useEffect(() => {
-    if (!project || !stage || !prof || !ev.covered || !ev.inShift || obs.model !== 'ready') return
+    if (!project || !stage || !prof || !ev.covered || !ev.inShift || (obs.model !== 'ready' && obs.model !== 'demo')) return
     const live = obs.sources.filter((s) => s.status === 'live')
     const names = live.map((s) => s.name).join(', ')
-    const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; распознавание работает, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
+    const demo = obs.model === 'demo'
+    const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; ${demo ? 'распознавание в демо-режиме' : 'распознавание работает'}, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
+    // context the server has no fields for travels in the description and is read back on reload
+    const tail = (since: number) => [`${OBSERVED_LINE}${new Date(since).toISOString()}`, ...(demo ? [DEMO_LINE] : [])]
     const open = (code: Code, kind: 'missing' | 'oop') => [...meta.current].some(([id, m]) => m.code === code && m.kind === kind && m.stageId === stage.id && !episodes.get(id)?.to)
     const make = (key: string, kind: 'missing' | 'oop', code: Code, since: number, payload: Omit<api.IncidentCreate, 'project_id'>) => {
       const c = created.current.get(key)
       if ((typeof c === 'string') || (typeof c === 'number' && Date.now() < c) || open(code, kind)) return
       // one open event per machine and stage: after a reload, adopt the pending one from the journal
-      const known = events.find((e) => e.status === 'pending' && e.kind === kind && e.mach === code && e.stageId === stage.id)
+      const known = events.find((e) => e.status === 'pending' && !e.sample && e.kind === kind && e.mach === code && e.stageId === stage.id)
       if (known) {
         created.current.set(key, known.id)
         meta.current.set(known.id, { kind, code, stageId: stage.id })
@@ -271,7 +276,6 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
         .createIncident({
           ...payload,
           project_id: project.id,
-          observed_at: new Date(since).toISOString(),
           album_snapshots: shots.map((x, i) => ({ camera_name: x.name, snapshot_base64: x.snapshot, is_primary: selected ? x.id === selected : i === 0 })),
         })
         .then((res) => {
@@ -306,6 +310,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           `Правило: ${MACH[s.code].name} — обязательная техника этапа «${stage.name}» (${Math.round(s.p * 100)}% по справочнику${s.edited ? ', изменено вручную' : ''}); предупреждение через ${durShort(s.warnAfter * 1000)}.`,
           `Наблюдение: с ${hhmmss(s.since)} ${MACH[s.code].lower} не найден ни на одном источнике (${names}).${others.length ? ` При этом замечены: ${others.join(', ')}.` : ''}`,
           quality,
+          ...tail(s.since),
         ].join('\n'),
       })
     }
@@ -326,6 +331,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           `Правило: ${MACH[o.code].name} — нехарактерная техника для этапа «${stage.name}» (${Math.round(o.p * 100)}% по справочнику).`,
           `Наблюдение: с ${hhmmss(o.since)} замечен на источниках: ${o.cams.map((c) => obs.sources.find((x) => x.id === c.src)?.name || c.src).join(', ')}.`,
           quality,
+          ...tail(o.since),
         ].join('\n'),
       })
     }
@@ -345,39 +351,69 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
 
   /* decisions */
   // a swipe answers instantly (undo right away); the case file waits for the server so "saving" stays visible
-  const decide = async (id: string, status: EventStatus, comment = '', quiet = false, optimistic = true) => {
+  const decide = async (id: string, status: EventStatus, quiet = false, optimistic = true) => {
     const before = events.find((e) => e.id === id)
-    if (!before) return
+    if (!before || before.sample) return
     const done = () => {
-      if (!quiet && status !== 'pending') toast(`${STATUS_WORD[status]} · ${before.code}`, { undo: () => void decide(id, 'pending', '', true).catch(() => undefined) })
+      if (!quiet && status !== 'pending') toast(`${STATUS_WORD[status]} · ${before.code}`, { undo: () => void decide(id, 'pending', true).catch(() => undefined) })
     }
     if (optimistic) {
-      setEvents((l) => l.map((e) => (e.id === id ? { ...e, status, comment: comment || e.comment, decidedAt: Date.now() } : e)))
+      setEvents((l) => l.map((e) => (e.id === id ? { ...e, status, decidedAt: Date.now() } : e)))
       done()
     }
     try {
-      const res = await api.setIncidentStatus(id, status, comment)
-      setEvents((l) => l.map((e) => (e.id === id ? toEvent(res, api.mediaUrl) : e)))
+      const res = await api.setIncidentStatus(id, status)
+      setEvents((l) => l.map((e) => (e.id === id ? { ...toEvent(res, api.mediaUrl), decidedAt: status === 'pending' ? null : Date.now() } : e)))
       if (!optimistic) done()
     } catch (e) {
       setEvents((l) => l.map((x) => (x.id === id ? before : x)))
-      if (optimistic) toast(`Решение не сохранено: ${(e as Error).message}`, { error: true, retry: () => void decide(id, status, comment).catch(() => undefined) })
+      if (optimistic) toast(`Решение не сохранено: ${(e as Error).message}`, { error: true, retry: () => void decide(id, status).catch(() => undefined) })
       throw e
     }
   }
 
   /* rules */
+  /* rules: the level goes to the server (shared); "не учитывать" and own timings stay in this browser */
+  const writeLocal = (stageId: string, next: LocalRules) => {
+    saveLocalRules(stageId, next)
+    setLocalRules((m) => new Map(m).set(stageId, next))
+  }
   const applyRule = async (stageId: string, code: Code, d: { lvl: Level; warnAfter: number | null; errAfter: number | null }) => {
-    const p = profiles.get(stageId)!.rules[code]
-    const value = d.lvl === p.base && d.warnAfter == null ? null : { status: LV_TO_CLS[d.lvl], warn_after: d.warnAfter, err_after: d.errAfter }
-    const res = await api.putOverrides(stageId, { [MACH[code].api]: value })
-    setApiProfiles((m) => new Map(m).set(stageId, res))
+    const r = profiles.get(stageId)!.rules[code]
+    const local = { ...(localRules.get(stageId) ?? loadLocalRules(stageId)) }
+    const serverLvl = r.lvl === 'skip' ? (apiLevel(stageId, code) ?? r.base) : r.lvl
+    const rec = { ...(local[code] ?? { base: serverLvl, at: Date.now() }) }
+    rec.skip = d.lvl === 'skip' || undefined
+    rec.warnAfter = d.warnAfter ?? undefined
+    rec.errAfter = d.errAfter ?? undefined
+    const target = d.lvl === 'skip' ? serverLvl : d.lvl
+    if (target !== serverLvl) {
+      const res = await api.putOverrides(stageId, { [MACH[code].api]: LV_TO_CLS[target as Exclude<Level, 'skip'>] })
+      setApiProfiles((m) => new Map(m).set(stageId, res))
+    }
+    // back to where it started and nothing local left: the mark is no longer needed
+    if (target === rec.base && !rec.skip && rec.warnAfter == null && rec.errAfter == null) delete local[code]
+    else local[code] = rec
+    writeLocal(stageId, local)
     toast(`Правило для «${MACH[code].lower}» сохранено · действует с ${hhmm(Date.now())}`)
   }
   const resetRule = async (stageId: string, code: Code) => {
-    const res = await api.putOverrides(stageId, { [MACH[code].api]: null })
-    setApiProfiles((m) => new Map(m).set(stageId, res))
-    toast('Правило возвращено к справочнику')
+    const local = { ...(localRules.get(stageId) ?? loadLocalRules(stageId)) }
+    const rec = local[code]
+    if (!rec) return
+    const serverLvl = apiLevel(stageId, code)
+    if (serverLvl && serverLvl !== rec.base && rec.base !== 'skip') {
+      const res = await api.putOverrides(stageId, { [MACH[code].api]: LV_TO_CLS[rec.base] })
+      setApiProfiles((m) => new Map(m).set(stageId, res))
+    }
+    delete local[code]
+    writeLocal(stageId, local)
+    toast('Правило возвращено к исходному уровню')
+  }
+  const apiLevel = (stageId: string, code: Code): Level | null => {
+    const p = apiProfiles.get(stageId)
+    if (!p) return null
+    return toProfile(p, settings).rules[code].lvl
   }
 
   /* sources */
@@ -483,6 +519,12 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           </>
         )}
         <div className="grow" />
+        {obs.model === 'demo' && (
+          <button type="button" className="demo-badge" onClick={() => setSheet('control')} title={`Модель недоступна: ${obs.modelMessage || 'причина не сообщена'}. Детекции подставляются по демо-сцене.`}>
+            <span className="db-full">Демо-распознавание</span>
+            <span className="db-short">Демо</span>
+          </button>
+        )}
         <TimePill obs={obs} onExit={closeRecording} />
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
@@ -533,7 +575,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           onDemoPlan={() => importPlan(() => api.loadDemoPlan(project!.id))}
           onUploadPlan={(f) => importPlan(() => api.uploadPlan(project!.id, f))}
           onAddCamera={addCamera}
-          onCheck={api.checkStream}
+          onCheck={api.probeCamera}
           onRecording={openRecording}
           onClose={() => {
             setSetupOpen(false)
@@ -575,7 +617,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           obs={obs}
           origin={caseOpen!.origin}
           onClose={() => setCaseOpen(null)}
-          onDecide={(status, comment) => decide(caseEvent.id, status, comment, false, false)}
+          onDecide={(status) => decide(caseEvent.id, status, false, false)}
           onRule={(code) => {
             const sid = caseStage?.id
             setCaseOpen(null)
@@ -615,7 +657,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
           zones={zones}
           onAddCamera={addCamera}
           onDeleteCamera={deleteCamera}
-          onCheck={api.checkStream}
+          onCheck={api.probeCamera}
           onRecording={openRecording}
           onClose={() => setSheet(null)}
         />

@@ -10,6 +10,10 @@
  *
  * Analysis runs in this browser tab. The UI says so; continuous server-side collection is a
  * separate backend task.
+ *
+ * Demo recognition: when the model is unavailable and demo mode is on, detections come from the
+ * demo scene below instead of the detector. Everything downstream works the same way, and every
+ * screen and event says that recognition is a demo.
  */
 import * as api from './api'
 import type { CameraItem } from './api'
@@ -26,7 +30,6 @@ const MAX_DETS = 20_000
 interface Rt {
   view: SourceView
   el: HTMLImageElement | HTMLVideoElement | null
-  objectUrl?: string
   inFlight: boolean
   lastCapture: number
   lastAnalyzed: number
@@ -37,9 +40,23 @@ interface Rt {
 }
 interface Sight { at: number; src: string; c: number }
 
+/* Demo scene: where machines stand on the project's demo frames (src/assets/construction-camera.png
+   and its crops). Camera 1 is the overview, 2 the crane, 3 the west side of the pit. */
+const DEMO_SCENE: Record<'overview' | 'crane' | 'west', Omit<Det, 'demo'>[]> = {
+  overview: [
+    { code: 'excavator', c: 0.93, x: 0.175, y: 0.38, w: 0.275, h: 0.32 },
+    { code: 'tower_crane', c: 0.86, x: 0.528, y: 0.0, w: 0.05, h: 0.37 },
+    { code: 'dump_truck', c: 0.89, x: 0.512, y: 0.5, w: 0.215, h: 0.235 },
+  ],
+  crane: [{ code: 'tower_crane', c: 0.94, x: 0.186, y: 0.0, w: 0.086, h: 0.64 }],
+  west: [{ code: 'excavator', c: 0.91, x: 0.318, y: 0.236, w: 0.5, h: 0.582 }],
+}
+
 export class Engine {
   mode: 'live' | 'recording' = 'live'
-  model: 'unknown' | 'ready' | 'down' = 'unknown'
+  model: 'unknown' | 'ready' | 'down' | 'demo' = 'unknown'
+  /** substitute demo detections when the model is unavailable */
+  demo = true
   modelMessage?: string
   modelSince?: number
   frames = 0
@@ -163,7 +180,6 @@ export class Engine {
     const rt = this.rts.get(id)
     if (!rt) return
     if (rt.el instanceof HTMLImageElement) rt.el.removeAttribute('src')
-    if (rt.objectUrl) URL.revokeObjectURL(rt.objectUrl)
     rt.el?.remove()
     this.rts.delete(id)
   }
@@ -283,23 +299,15 @@ export class Engine {
     this.emit()
   }
 
-  /** Camera: ask the server for one fresh frame, show it, then analyse it. */
+  /** Camera: take one frame from the stream through the server proxy, show it, analyse it. */
   private async pullFrame(rt: Rt) {
-    const img = rt.el as HTMLImageElement
     rt.inFlight = true
     rt.lastCapture = Date.now()
     try {
-      const blob = await api.cameraFrame(rt.view.url!)
-      const url = URL.createObjectURL(blob)
-      await new Promise<void>((ok, fail) => {
-        img.onload = () => ok()
-        img.onerror = () => fail(new Error('Кадр повреждён или имеет неизвестный формат.'))
-        img.src = url
-      })
-      if (rt.objectUrl) URL.revokeObjectURL(rt.objectUrl)
-      rt.objectUrl = url
+      const frame = await api.grabFrame(rt.view.url!)
       rt.inFlight = false
-      this.capture(rt)
+      this.capture(rt, frame)
+      frame.removeAttribute('src') // closes the stream connection
     } catch (e) {
       rt.inFlight = false
       rt.fails++
@@ -311,8 +319,8 @@ export class Engine {
     }
   }
 
-  private capture(rt: Rt) {
-    const el = rt.el!
+  private capture(rt: Rt, source?: HTMLImageElement) {
+    const el = source ?? rt.el!
     if (el instanceof HTMLVideoElement) rt.lastCapture = Date.now()
     const isVideo = el instanceof HTMLVideoElement
     const w0 = isVideo ? el.videoWidth : (el as HTMLImageElement).naturalWidth
@@ -357,6 +365,8 @@ export class Engine {
     rt.view.snapshot = snapshot
     rt.view.lastFrame = at
     rt.fails = 0
+    // the visible picture is the analysed frame itself
+    if (source && rt.el instanceof HTMLImageElement) rt.el.src = snapshot
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {
@@ -368,6 +378,7 @@ export class Engine {
           .detectFrame(blob, this.stageName)
           .then((res) => {
             if (!res.model_ready) {
+              if (this.demo) return this.demoFrame(rt, at, res.message || 'модель не загружена')
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
               return
@@ -385,7 +396,11 @@ export class Engine {
             this.frames++
             this.addCoverage(at)
           })
-          .catch((e: unknown) => this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил'))
+          .catch((e: unknown) => {
+            const msg = e instanceof Error ? e.message : 'сервис не ответил'
+            if (this.demo) this.demoFrame(rt, at, msg)
+            else this.setModel('down', msg)
+          })
           .finally(() => {
             rt.inFlight = false
             this.emit()
@@ -396,19 +411,34 @@ export class Engine {
     )
   }
 
-  private setModel(state: 'ready' | 'down', message?: string) {
+  private setModel(state: 'ready' | 'down' | 'demo', message?: string) {
     if (this.model !== state) this.modelSince = this.now()
     this.model = state
-    this.modelMessage = state === 'down' ? message : undefined
+    this.modelMessage = state === 'ready' ? undefined : message
     this.emit()
+  }
+
+  /** The model is unavailable: answer from the demo scene so the stand can show the whole flow. */
+  private demoFrame(rt: Rt, at: number, reason: string) {
+    this.setModel('demo', reason)
+    const scene = rt.view.kind === 'video' ? 'overview' : (['overview', 'crane', 'west'] as const)[(rt.view.n - 1) % 3]
+    // the dump truck works ten minutes and leaves for six; in a recording it leaves after the first fifth
+    const rec = this.rec
+    const truck = rec ? at - rec.start < Math.max(30_000, 0.2 * (rec.duration || 0)) : Math.floor(at / 60_000) % 16 < 10
+    const dets: Det[] = DEMO_SCENE[scene].filter((d) => d.code !== 'dump_truck' || truck).filter((d) => d.c * 100 >= this.conf).map((d) => ({ ...d, demo: true }))
+    for (const d of dets) this.record(d.code, { at, src: rt.view.id, c: d.c })
+    rt.view.dets = dets
+    rt.lastAnalyzed = Date.now()
+    this.frames++
+    this.addCoverage(at)
   }
   private async pollStatus() {
     try {
       const s = await api.detectorStatus()
-      if (!s.ready) this.setModel('down', s.message || 'модель не загружена')
-      else if (this.model === 'down') this.setModel('ready')
+      if (!s.ready) this.setModel(this.demo ? 'demo' : 'down', s.message || 'модель не загружена')
+      else if (this.model !== 'ready') this.setModel('ready')
     } catch (e) {
-      this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил')
+      this.setModel(this.demo ? 'demo' : 'down', e instanceof Error ? e.message : 'сервис не ответил')
     }
   }
 
