@@ -113,7 +113,7 @@ export interface Palette {
 const PALETTE: Record<Theme, Palette> = {
   dark: { ink: [242, 239, 233], gold: [232, 189, 102], tagBg: 'rgba(12,14,17,0.72)', tagFg: 'rgb(242,239,233)', plate: '#b9b6b0', thread: 'rgb(212,206,194)', shadow: 0.7, beam: [255, 236, 200], lamp: '#ffe9c4' },
   // graphite on drawing paper; the gold goes darker so the plan still reads on white
-  light: { ink: [30, 31, 34], gold: [166, 112, 24], tagBg: 'rgba(253,252,250,0.86)', tagFg: 'rgb(23,25,28)', plate: '#55565b', thread: 'rgb(98,94,86)', shadow: 0.34, beam: [214, 158, 56], lamp: '#d99a2b' },
+  light: { ink: [30, 31, 34], gold: [166, 112, 24], tagBg: 'rgba(253,252,250,0.86)', tagFg: 'rgb(23,25,28)', plate: '#55565b', thread: 'rgb(98,94,86)', shadow: 0.42, beam: [214, 158, 56], lamp: '#d99a2b' },
 }
 export const palette = (t: Theme = theme()) => PALETTE[t]
 export const rgba = (c: V3, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(3)})`

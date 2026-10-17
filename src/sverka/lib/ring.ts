@@ -11,7 +11,8 @@ import { PARALLAX } from './wire'
  * Every letter is a stack of sprites from its back wall to its face, each set by the projection of its
  * own corners. Wall sprites are shaded from the outline's normals: tops catch the light from above,
  * left walls are half lit, right walls fall into shade. Every 9 s a light passes along the name and
- * carries the letters on to the next matte material, graphite → gold → ceramic. The floor mirrors the
+ * carries the letters on to the next matte material, graphite → gold → ceramic (on the light theme gold ⇄
+ * ceramic: the dark letters sit heavily on paper). The floor mirrors the
  * whole blocks, softly. Shape and kit were chosen on docs/ui-concept/intro-sides.html.
  */
 
@@ -32,13 +33,24 @@ interface Material { face: [number, V][]; rim: V; rimK: number; top: V; side: V;
    the upper outlines; walls take `top` where they face up, `side` where they face left, `shade` where
    they face away, darkening by `back` towards the back. `sheen` is a soft reflection sliding over a
    face as it turns to the camera, `glow` the passing light, `refl` the strength of the floor mirror. */
-const MATS: Record<Mat, Material> = {
-  graphite: { face: [[0, [0.24, 0.24, 0.25]], [1, [0.14, 0.14, 0.15]]], rim: [0.6, 0.59, 0.57], rimK: 0.3, top: [0.56, 0.56, 0.57], side: [0.2, 0.2, 0.21], shade: [0.05, 0.05, 0.06], back: 0.5, sheen: [1, 0.98, 0.94], sheenA: 0.05, glow: 0.16, grain: 0.035, refl: 0.2 },
-  gold: { face: [[0, [0.62, 0.47, 0.22]], [1, [0.4, 0.28, 0.11]]], rim: [1, 0.88, 0.62], rimK: 0.32, top: [0.98, 0.83, 0.52], side: [0.44, 0.3, 0.11], shade: [0.15, 0.09, 0.03], back: 0.5, sheen: [1, 0.94, 0.8], sheenA: 0.07, glow: 0.2, grain: 0.03, refl: 0.2 },
-  ceramic: { face: [[0, [0.74, 0.73, 0.71]], [1, [0.56, 0.55, 0.53]]], rim: [1, 1, 1], rimK: 0.28, top: [0.98, 0.97, 0.95], side: [0.46, 0.45, 0.44], shade: [0.2, 0.19, 0.18], back: 0.45, sheen: [1, 1, 1], sheenA: 0.06, glow: 0.18, grain: 0.025, refl: 0.18 },
+/* Two sets: the dark one under a lamp at dusk, the light one in daylight on paper. On paper the
+   shadows are lifted (dark walls read as dirt on a light ground), the gold is warmer and fuller, and
+   the ceramic, white on near-white, is held by its greyer walls and a cooler white than the paper. */
+const MATS: Record<Theme, Partial<Record<Mat, Material>>> = {
+  dark: {
+    graphite: { face: [[0, [0.24, 0.24, 0.25]], [1, [0.14, 0.14, 0.15]]], rim: [0.6, 0.59, 0.57], rimK: 0.3, top: [0.56, 0.56, 0.57], side: [0.2, 0.2, 0.21], shade: [0.05, 0.05, 0.06], back: 0.5, sheen: [1, 0.98, 0.94], sheenA: 0.05, glow: 0.16, grain: 0.035, refl: 0.2 },
+    gold: { face: [[0, [0.62, 0.47, 0.22]], [1, [0.4, 0.28, 0.11]]], rim: [1, 0.88, 0.62], rimK: 0.32, top: [0.98, 0.83, 0.52], side: [0.44, 0.3, 0.11], shade: [0.15, 0.09, 0.03], back: 0.5, sheen: [1, 0.94, 0.8], sheenA: 0.07, glow: 0.2, grain: 0.03, refl: 0.2 },
+    ceramic: { face: [[0, [0.74, 0.73, 0.71]], [1, [0.56, 0.55, 0.53]]], rim: [1, 1, 1], rimK: 0.28, top: [0.98, 0.97, 0.95], side: [0.46, 0.45, 0.44], shade: [0.2, 0.19, 0.18], back: 0.45, sheen: [1, 1, 1], sheenA: 0.06, glow: 0.18, grain: 0.025, refl: 0.18 },
+  },
+  light: {
+    gold: { face: [[0, [0.86, 0.66, 0.3]], [1, [0.66, 0.46, 0.16]]], rim: [1, 0.95, 0.78], rimK: 0.42, top: [1, 0.91, 0.64], side: [0.66, 0.46, 0.17], shade: [0.36, 0.23, 0.07], back: 0.3, sheen: [1, 0.97, 0.86], sheenA: 0.12, glow: 0.26, grain: 0.025, refl: 0.12 },
+    ceramic: { face: [[0, [0.99, 0.99, 1]], [1, [0.86, 0.87, 0.89]]], rim: [1, 1, 1], rimK: 0.3, top: [1, 1, 1], side: [0.66, 0.67, 0.7], shade: [0.42, 0.43, 0.46], back: 0.3, sheen: [1, 1, 1], sheenA: 0.08, glow: 0.2, grain: 0.02, refl: 0.12 },
+  },
 }
-// the order the passing light carries the letters through
-const MAT_SEQ: Mat[] = ['graphite', 'gold', 'ceramic']
+// a face turned from the lamp loses this much light, into this colour (a black dims gold on paper to mud)
+const TURN: Record<Theme, { c: string; k: number }> = { dark: { c: '0,0,0', k: 0.4 }, light: { c: '58,46,28', k: 0.22 } }
+// the order the passing light carries the letters through; the first one also stands alone with reduced motion
+const MAT_SEQ: Record<Theme, Mat[]> = { dark: ['graphite', 'gold', 'ceramic'], light: ['gold', 'ceramic'] }
 
 interface Metrics { c: CanvasRenderingContext2D; cap: number; base: number }
 interface Mask { w: number; h: number; adv: number; mask: HTMLCanvasElement; A: Uint8ClampedArray }
@@ -67,7 +79,7 @@ const ramp = (stops: [number, V][], x: number, out: V) => {
   return out
 }
 
-// built once per page: fonts, sprites and meshes do not change (the tagline and shadows once per theme)
+// built once per page: fonts and meshes do not change; letters, the tagline and shadows once per theme
 let met: Metrics | null = null, tagMet: Metrics | null = null
 const shadows = new Map<Theme, HTMLCanvasElement>()
 const masks = new Map<string, Mask>()
@@ -124,11 +136,11 @@ function softAlpha({ w, h, mask, A }: Mask): Float32Array {
   return out
 }
 // one letter in one material: walls at LEVELS depths and the face
-function letterSprite(ch: string, mat: Mat): Sprite {
-  const key = mat + ':' + ch
+function letterSprite(ch: string, mat: Mat, t: Theme): Sprite {
+  const key = `${t}:${mat}:${ch}`
   const hit = sprites.get(key)
   if (hit) return hit
-  const M = MATS[mat]
+  const M = MATS[t][mat]!
   const gm = glyphMask(ch), { w, h, adv, A } = gm
   const B = softAlpha(gm)
   const n = w * h, nx = new Float32Array(n), ny = new Float32Array(n), edge = new Float32Array(n)
@@ -507,7 +519,7 @@ export class LetterRing {
         met ||= measure(`700 ${FONT_PX}px Stolzl`)
         tagMet ||= measure(`500 ${TAG_PX}px "Vela Sans"`)
         // a letter in a material takes a few milliseconds; spread them so the page keeps moving
-        const jobs = (this.reduce ? MAT_SEQ.slice(0, 1) : MAT_SEQ).flatMap((mt) => LETTERS.map((ch) => () => letterSprite(ch, mt)))
+        const th = theme(), jobs = (this.reduce ? MAT_SEQ[th].slice(0, 1) : MAT_SEQ[th]).flatMap((mt) => LETTERS.map((ch) => () => letterSprite(ch, mt, th)))
         const work = () => {
           if (!this.live) return
           const t = performance.now()
@@ -536,7 +548,7 @@ export class LetterRing {
     const sTag = Math.max(0.026, sh.size * 0.13) / tagMet!.cap
     const adv = (ch: string) => met!.c.measureText(ch).width * (ch === ' ' ? 1.5 : 1)
     const wordLen = [...WORD].reduce((a, ch) => a + adv(ch), 0)
-    const mats = this.reduce ? MAT_SEQ.slice(0, 1) : MAT_SEQ
+    const mats = this.reduce ? MAT_SEQ[t].slice(0, 1) : MAT_SEQ[t]
     this.glyphs = []
     this.floor = []
     let cum = 0, bi = 0
@@ -545,7 +557,7 @@ export class LetterRing {
       const a = adv(ch)
       if (ch !== ' ') {
         const sps: Partial<Record<Mat, Sprite>> = {}
-        for (const mt of mats) sps[mt] = letterSprite(ch, mt)
+        for (const mt of mats) sps[mt] = letterSprite(ch, mt, t)
         this.glyphs.push((byCi[at.length] = { at: cum + a / 2, sp: sps[mats[0]]!, sps, idx: bi++, sc: s, base: met!.base, pad: PAD, rOff: 0, block: true, top: [], mid: [], oc: [] }))
       }
       at.push(cum + a / 2)
@@ -643,8 +655,8 @@ export class LetterRing {
     // a light passing along the name every 9 s carries the letters on to the next material
     const sweep = reduce ? 9 : (((t - 2) % 9) + 9) % 9
     const nL = Math.max(10, Math.min(64, Math.round(depth / 0.004)))
-    const cyc = Math.floor((t - 2) / 9), mod = (x: number) => ((x % 3) + 3) % 3
-    const fromMat = reduce ? MAT_SEQ[0] : MAT_SEQ[mod(cyc)], toMat = reduce ? MAT_SEQ[0] : MAT_SEQ[mod(cyc + 1)]
+    const seq = MAT_SEQ[th], cyc = Math.floor((t - 2) / 9), mod = (x: number) => ((x % seq.length) + seq.length) % seq.length
+    const fromMat = reduce ? seq[0] : seq[mod(cyc)], toMat = reduce ? seq[0] : seq[mod(cyc + 1)]
 
     // the frame of a place on the run: the point on the ring, the text's direction, the face's normal.
     // Blocks stand upright and level, and the face looks at the axis, so at the camera on the far side
@@ -698,7 +710,7 @@ export class LetterRing {
       ox.clearRect(0, 0, sp.w, sp.h)
       ox.drawImage(sp.face, 0, 0)
       ox.globalCompositeOperation = 'source-atop'
-      ox.fillStyle = `rgba(0,0,0,${(0.4 * (1 - light)).toFixed(3)})`
+      ox.fillStyle = `rgba(${TURN[th].c},${(TURN[th].k * (1 - light)).toFixed(3)})`
       ox.fillRect(0, 0, sp.w, sp.h)
       const col = M.sheen.map((x) => Math.round(x * 255)).join(',')
       const band = (pos: number, a: number, wd: number) => {
@@ -881,8 +893,8 @@ export class LetterRing {
       for (const [mat, a] of [[fromMat, 1 - fw], [toMat, fw]] as [Mat, number][]) {
         const sp = g.sps[mat]
         if (a < 0.01 || !sp) continue
-        walls(sp, origin, fr.nIn, U, Vm, vis * a * MATS[mat].refl, 2, yg, xc, kk)
-        put(sp.face, mirror(origin, yg), U, Vm, vis * a * MATS[mat].refl, xc, kk)
+        walls(sp, origin, fr.nIn, U, Vm, vis * a * MATS[th][mat]!.refl, 2, yg, xc, kk)
+        put(sp.face, mirror(origin, yg), U, Vm, vis * a * MATS[th][mat]!.refl, xc, kk)
       }
       const sp = g.sp, yb = g.pad + g.base
       xc.save()
@@ -938,10 +950,10 @@ export class LetterRing {
         rc.restore()
       }
       for (const pr of g.mid) onLetter(it, pr)
-      if (one) put(compose(g, 0, g.sps[one]!, MATS[one], light, Nc, pass), origin, U, Vv, vis)
+      if (one) put(compose(g, 0, g.sps[one]!, MATS[th][one]!, light, Nc, pass), origin, U, Vv, vis)
       else {
-        put(compose(g, 1, b, MATS[toMat], light, Nc, pass), origin, U, Vv, vis)
-        put(compose(g, 0, a, MATS[fromMat], light, Nc, pass, pass), origin, U, Vv, vis)
+        put(compose(g, 1, b, MATS[th][toMat]!, light, Nc, pass), origin, U, Vv, vis)
+        put(compose(g, 0, a, MATS[th][fromMat]!, light, Nc, pass, pass), origin, U, Vv, vis)
       }
       for (const pr of g.top) onLetter(it, pr)
     }

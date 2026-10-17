@@ -1734,12 +1734,17 @@ button.ctx#ctxZone { cursor: pointer; }
 :root[data-theme="light"] .a-paper { box-shadow: 0 24px 60px -24px rgba(52, 42, 24, .35), 0 0 0 1px rgba(30, 27, 20, .06); }
 /* gold as text: the darker one */
 :root[data-theme="light"] .j-stage em { color: var(--plan-2); }
-/* the intro: daylight on the drafting table instead of a lamp at dusk */
+/* the intro: daylight on a paper backdrop instead of a lamp at dusk. The same build of light as the
+   dark one, inverted in value: the paper a shade deeper than the panels and falling off towards the
+   edges and the floor, so the lit patch under the drawing (::after) and the letters in it stand out */
 :root[data-theme="light"] .intro {
   background:
-    radial-gradient(90% 75% at 30% 18%, rgba(255, 255, 255, .7), transparent 70%),
-    radial-gradient(60% 50% at 18% 60%, rgba(255, 255, 255, .35), transparent 70%),
-    var(--bg);
+    radial-gradient(90% 75% at 30% 18%, rgba(255, 255, 255, .55), transparent 70%),
+    radial-gradient(130% 100% at 58% 42%, transparent 45%, rgba(86, 68, 38, .2) 100%),
+    linear-gradient(180deg, #efece5 0%, #e9e5dc 58%, #e1dccf 100%);
+}
+:root[data-theme="light"] .intro::after {
+  background: radial-gradient(closest-side, rgba(255, 253, 248, .92), rgba(255, 246, 226, .5) 52%, transparent);
 }
 :root[data-theme="light"] .it-line span {
   background:
