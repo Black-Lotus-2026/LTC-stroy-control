@@ -874,7 +874,7 @@ function DayRuler({ t, obs, events, onOpenEvent, onSeek, shift }: { t: number; o
         <div key={a} className="d-cov" style={{ left: X(a), width: Math.max(2, X(b) - X(a)) }} title={`Анализ ${hhmm(a)}–${hhmm(b)}`} />
       ))}
       {dayEvents.map((e) => (
-        <button key={e.id} type="button" className="d-ev" data-sev={e.sev} data-done={String(e.status !== 'pending')} style={{ left: X(e.at) }} title={`${hhmm(e.at)} · ${e.title}`} aria-label={`${hhmm(e.at)}: ${e.title}`} onPointerDown={(ev) => ev.stopPropagation()} onClick={(ev) => onOpenEvent(e.id, ev.currentTarget)} />
+        <button key={e.id} type="button" className="d-ev" data-sev={e.sev} data-done={String(e.status !== 'pending' || e.kind === 'stream')} style={{ left: X(e.at) }} title={`${hhmm(e.at)} · ${e.title}`} aria-label={`${hhmm(e.at)}: ${e.title}`} onPointerDown={(ev) => ev.stopPropagation()} onClick={(ev) => onOpenEvent(e.id, ev.currentTarget)} />
       ))}
       {!rec && <div className="d-nowmark" style={{ left: X(Date.now()) }} />}
       <div className="d-axis">

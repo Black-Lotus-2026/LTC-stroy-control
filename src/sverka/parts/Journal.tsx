@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectItem } from '../api'
 import type { EventStatus, Settings, Stage, UiEvent } from '../model'
-import { STATUS_WORD } from '../model'
+import { awaitsDecision, statusWord, toneOf } from '../model'
 import { MACH } from '../lib/machinery'
 import { DAY_MS, MONTHS_G, MONTHS_S, addDays, clock, dayStart, daysBetween, fmtDay, fmtDayLong, fromDateInput, hhmm, plural, toDateInput } from '../lib/format'
 import { Spring, VelocityTracker, capture, clamp, lerp, project, reducedMotion, rubber } from '../lib/spring'
@@ -19,8 +19,11 @@ const PRESETS: { v: Preset; label: string }[] = [
   { v: 'month', label: '30 дней' },
   { v: 'all', label: 'Всё' },
 ]
-const STATUSES: EventStatus[] = ['pending', 'confirmed', 'in_progress', 'false_positive', 'resolved']
-const STATUS_SHORT: Record<EventStatus, string> = { pending: 'Ждут решения', confirmed: 'Подтверждено', in_progress: 'В работе', false_positive: 'Ложные', resolved: 'Устранено' }
+/* camera events need no decision, so they get their own chip instead of «Ждут решения» */
+type StKey = EventStatus | 'stream'
+const stKey = (e: UiEvent): StKey => (e.kind === 'stream' ? 'stream' : e.status)
+const STATUSES: StKey[] = ['pending', 'confirmed', 'in_progress', 'false_positive', 'resolved', 'stream']
+const STATUS_SHORT: Record<StKey, string> = { pending: 'Ждут решения', confirmed: 'Подтверждено', in_progress: 'В работе', false_positive: 'Ложные', resolved: 'Устранено', stream: 'Видеопоток' }
 const A4 = 794 // px, 210 mm at 96 dpi
 
 function spanText(from: number, to: number) {
@@ -40,7 +43,7 @@ function rangeTitle(r: Range) {
   return spanText(r.from, r.to)
 }
 const hay = (e: UiEvent) =>
-  [e.code, e.title, e.stageName, e.zone, e.mach && MACH[e.mach].name, e.album.map((a) => a.camera).join(' '), STATUS_WORD[e.status], e.demo ? 'демо' : '', e.description].join(' ').toLowerCase()
+  [e.code, e.title, e.stageName, e.zone, e.camera, e.mach && MACH[e.mach].name, e.album.map((a) => a.camera).join(' '), statusWord(e), e.demo ? 'демо' : '', e.description].join(' ').toLowerCase()
 
 export function Journal({
   events,
@@ -83,7 +86,7 @@ export function Journal({
   }
   const [range, setRange] = useState<Range>(() => presetRange('all'))
   const [sev, setSev] = useState<SevF>('all')
-  const [st, setSt] = useState<Set<EventStatus>>(new Set())
+  const [st, setSt] = useState<Set<StKey>>(new Set())
   const [q, setQ] = useState('')
   const [view, setView] = useState<'list' | 'shots'>('list')
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
@@ -93,14 +96,15 @@ export function Journal({
 
   /* ── filtering ─────────────────────────────────────────── */
   const query = q.trim().toLowerCase()
-  const passSev = (e: UiEvent) => sev === 'all' || e.sev === sev
+  // deviations and warnings are about the site; camera events are only under «Все» and their own chip
+  const passSev = (e: UiEvent) => sev === 'all' || (e.sev === sev && e.kind !== 'stream')
   const passQ = (e: UiEvent) => !query || hay(e).includes(query)
-  const passSt = (e: UiEvent) => !st.size || st.has(e.status)
+  const passSt = (e: UiEvent) => !st.size || st.has(stKey(e))
   const inRange = (e: UiEvent) => e.at >= range.from && e.at <= range.to
   const base = events.filter((e) => inRange(e) && passQ(e))
-  const sevCounts = { all: base.length, err: base.filter((e) => e.sev === 'err').length, warn: base.filter((e) => e.sev === 'warn').length }
+  const sevCounts = { all: base.length, err: base.filter((e) => e.sev === 'err' && e.kind !== 'stream').length, warn: base.filter((e) => e.sev === 'warn' && e.kind !== 'stream').length }
   const forStatus = base.filter(passSev)
-  const stCounts = Object.fromEntries(STATUSES.map((s) => [s, forStatus.filter((e) => e.status === s).length])) as Record<EventStatus, number>
+  const stCounts = Object.fromEntries(STATUSES.map((s) => [s, forStatus.filter((e) => stKey(e) === s).length])) as Record<StKey, number>
   const shown = forStatus.filter(passSt).sort((x, y) => y.at - x.at)
   const items = shown.filter((e) => !e.sample && !excluded.has(e.id)).sort((x, y) => x.at - y.at)
   const filtered = sev !== 'all' || st.size > 0 || !!query
@@ -122,7 +126,7 @@ export function Journal({
       const i = daysBetween(a, e.at)
       if (i < 0 || i >= n) continue
       const c = cols[i]
-      const p = e.status === 'pending'
+      const p = awaitsDecision(e)
       if (e.sev === 'err') {
         if (p) c.ep++
         else c.ed++
@@ -244,7 +248,8 @@ export function Journal({
   const pickPreset = (p: Preset) => setRange(presetRange(p))
   const real0 = shown.filter((e) => !e.sample)
   const allIn = real0.length > 0 && real0.every((e) => !excluded.has(e.id))
-  const pending = shown.filter((e) => e.status === 'pending' && !e.sample).length
+  const pending = shown.filter(awaitsDecision).length
+  const errN = shown.filter((e) => e.sev === 'err' && e.kind !== 'stream').length
 
   return (
     <>
@@ -261,11 +266,11 @@ export function Journal({
             </h2>
             <p>
               <Roll value={shown.length} /> {plural(shown.length, 'событие', 'события', 'событий')}
-              {shown.some((e) => e.sev === 'err') && (
+              {errN > 0 && (
                 <>
                   {' · '}
                   <span className="t-err">
-                    <Roll value={shown.filter((e) => e.sev === 'err').length} /> {plural(shown.filter((e) => e.sev === 'err').length, 'отклонение', 'отклонения', 'отклонений')}
+                    <Roll value={errN} /> {plural(errN, 'отклонение', 'отклонения', 'отклонений')}
                   </span>
                 </>
               )}
@@ -406,23 +411,23 @@ function Row({ e, stages, included, onToggle, onOpen }: { e: UiEvent; stages: St
   const stage = stages.find((s) => s.id === e.stageId)
   const photo = e.album.find((x) => x.primary) || e.album[0]
   return (
-    <div className="j-row" data-sev={e.sev} data-sample={e.sample || undefined}>
+    <div className="j-row" data-sev={toneOf(e)} data-sample={e.sample || undefined}>
       {e.sample ? <span className="tick-space" /> : <Tick on={included} onChange={onToggle} label={included ? 'Убрать из акта' : 'Включить в акт'} />}
       <button type="button" className="j-open" onClick={(ev) => onOpen(e.id, ev.currentTarget)}>
         <span className="j-time mono">{hhmm(e.at)}</span>
-        <span className="j-sev" data-sev={e.sev}>
-          <SevIcon sev={e.sev} />
+        <span className="j-sev" data-sev={toneOf(e)}>
+          <SevIcon sev={toneOf(e)} />
         </span>
         <span className="j-main">
           <b>{e.title}</b>
           <small>
-            {[stage ? `Этап ${stage.n} «${stage.name}»` : e.stageName, photo?.camera, e.zone].filter(Boolean).join(' · ')}
+            {[stage ? `Этап ${stage.n} «${stage.name}»` : e.stageName, photo?.camera ?? e.camera, e.zone].filter(Boolean).join(' · ')}
             {e.demo && <span className="tag">демо</span>}
             {e.sample && <span className="tag">пример с сервера</span>}
           </small>
         </span>
-        <span className="j-st" data-s={e.status}>
-          {STATUS_WORD[e.status]}
+        <span className="j-st" data-s={stKey(e)}>
+          {statusWord(e)}
         </span>
         <span className="j-thumb">{photo ? <img src={photo.url} alt="" loading="lazy" /> : null}</span>
       </button>
@@ -433,13 +438,13 @@ function Row({ e, stages, included, onToggle, onOpen }: { e: UiEvent; stages: St
 function Shot({ e, included, onToggle, onOpen }: { e: UiEvent; included: boolean; onToggle: (v: boolean) => void; onOpen: (id: string, el: HTMLElement) => void }) {
   const photo = e.album.find((x) => x.primary) || e.album[0]
   return (
-    <div className="j-shot" data-sev={e.sev}>
+    <div className="j-shot" data-sev={toneOf(e)}>
       <button type="button" className="j-open" onClick={(ev) => onOpen(e.id, ev.currentTarget)}>
         <span className="j-pic">
           {photo ? <img src={photo.url} alt="" loading="lazy" /> : <span className="j-nopic">кадр не сохранён</span>}
           <span className="j-cap">
-            <span className="j-sev" data-sev={e.sev}>
-              <SevIcon sev={e.sev} />
+            <span className="j-sev" data-sev={toneOf(e)}>
+              <SevIcon sev={toneOf(e)} />
             </span>
             {fmtDay(e.at)}, {hhmm(e.at)}
             {e.demo && <span className="tag">демо</span>}
@@ -448,9 +453,9 @@ function Shot({ e, included, onToggle, onOpen }: { e: UiEvent; included: boolean
         </span>
         <span className="j-main">
           <b>{e.title}</b>
-          <small className="j-st" data-s={e.status}>
-            {STATUS_WORD[e.status]}
-            {photo ? ` · ${photo.camera}` : ''}
+          <small className="j-st" data-s={stKey(e)}>
+            {statusWord(e)}
+            {photo ? ` · ${photo.camera}` : e.camera ? ` · ${e.camera}` : ''}
           </small>
         </span>
       </button>

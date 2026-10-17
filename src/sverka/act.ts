@@ -5,7 +5,7 @@
  */
 import type { ProjectItem } from './api'
 import type { Settings, Stage, UiEvent } from './model'
-import { STATUS_WORD, parseDescription } from './model'
+import { awaitsDecision, parseDescription, statusWord } from './model'
 import { MACH } from './lib/machinery'
 import { clock, durShort, fmtDate, hhmm, hhmmss, plural } from './lib/format'
 
@@ -58,15 +58,19 @@ export function periodText(from: number, to: number) {
   return a === b ? `${a}, ${hhmm(from)}–${hhmm(to)}` : `${a} ${hhmm(from)} – ${b} ${hhmm(to)}`
 }
 
-const KIND_WORD = { missing: 'Нет обязательной техники', oop: 'Техника не по этапу', other: 'Событие' }
+const KIND_WORD = { missing: 'Нет обязательной техники', oop: 'Техника не по этапу', stream: 'Событие видеопотока', other: 'Событие' }
+const kindWord = (e: UiEvent) => (e.type === 'MISSING_RECOMMENDED' ? 'Нет рекомендуемой техники' : KIND_WORD[e.kind])
 
 export function buildAct(x: ActInput) {
   const { project, items, opts, settings: s } = x
-  const err = items.filter((e) => e.sev === 'err').length
-  const warn = items.length - err
-  const by = (st: string) => items.filter((e) => e.status === st).length
+  // camera events are listed in the act but are neither deviations nor warnings about the site
+  const site = items.filter((e) => e.kind !== 'stream')
+  const stream = items.length - site.length
+  const err = site.filter((e) => e.sev === 'err').length
+  const warn = site.length - err
+  const by = (st: string) => items.filter((e) => e.status === st && e.kind !== 'stream').length
   const demo = items.filter((e) => e.demo).length
-  const pending = by('pending')
+  const pending = items.filter(awaitsDecision).length
   const stagesIn = x.stages.filter((st) => st.start <= x.to && st.end + 864e5 > x.from)
   const sources = [...new Set(items.flatMap((e) => e.album.map((a) => a.camera)))]
   const sel = selectionId(items)
@@ -77,6 +81,7 @@ export function buildAct(x: ActInput) {
       `${demo} ${plural(demo, 'запись создана', 'записи созданы', 'записей создано')} в режиме демо-распознавания: модель была недоступна, детекции подставлены по демо-сцене. Такие записи показывают работу системы и не являются результатом распознавания.`,
     )
   if (pending) notes.push(`${pending} ${plural(pending, 'запись ещё не рассмотрена', 'записи ещё не рассмотрены', 'записей ещё не рассмотрено')} оператором: решение по ним не принято.`)
+  if (stream) notes.push(`${stream} ${plural(stream, 'запись', 'записи', 'записей')} о видеопотоке: когда камера теряла сигнал и когда он возвращался. В эти интервалы наблюдение по камере не велось; решения по таким записям не требуются.`)
   if (!items.length) notes.push('За период в журнале нет событий, отобранных для акта.')
 
   const row = (e: UiEvent, i: number) => {
@@ -86,10 +91,10 @@ export function buildAct(x: ActInput) {
     return `<tr>
   <td class="c-n">${i + 1}</td>
   ${opts.photos ? `<td class="c-ph">${photo ? `<img src="${esc(abs(photo.url))}" alt="">` : '<span class="noph">кадр не сохранён</span>'}</td>` : ''}
-  <td class="c-t"><b>${esc(fmtDate(e.at))}</b><br>${esc(hhmmss(e.at))}${photo ? `<br><span class="mut">${esc(photo.camera)}</span>` : ''}${e.zone ? `<br><span class="mut">${esc(e.zone)}</span>` : ''}</td>
-  <td class="c-e"><span class="sev ${e.sev}">${e.sev === 'err' ? 'Отклонение' : 'Предупреждение'}</span>${e.demo ? ' <span class="tag">демо</span>' : ''}<br><b>${esc(e.title)}</b><br><span class="mut">${esc(KIND_WORD[e.kind])}${e.mach ? `: ${esc(MACH[e.mach].lower)}` : ''}.</span>${d['Наблюдение'] ? `<p>${esc(d['Наблюдение'])}</p>` : ''}</td>
+  <td class="c-t"><b>${esc(fmtDate(e.at))}</b><br>${esc(hhmmss(e.at))}${photo || e.camera ? `<br><span class="mut">${esc(photo?.camera ?? e.camera ?? '')}</span>` : ''}${e.zone ? `<br><span class="mut">${esc(e.zone)}</span>` : ''}</td>
+  <td class="c-e">${e.kind === 'stream' ? '<span class="sev src">Видеопоток</span>' : `<span class="sev ${e.sev}">${e.sev === 'err' ? 'Отклонение' : 'Предупреждение'}</span>`}${e.demo ? ' <span class="tag">демо</span>' : ''}<br><b>${esc(e.title)}</b><br><span class="mut">${esc(kindWord(e))}${e.mach ? `: ${esc(MACH[e.mach].lower)}` : ''}.</span>${d['Наблюдение'] ? `<p>${esc(d['Наблюдение'])}</p>` : ''}</td>
   <td class="c-s">${stage ? `${stage.n}. ` : ''}${esc(stage?.name || e.stageName || '—')}</td>
-  <td class="c-d ${e.status}">${esc(STATUS_WORD[e.status])}</td>
+  <td class="c-d ${e.kind === 'stream' ? 'stream' : e.status}">${esc(statusWord(e))}</td>
 </tr>`
   }
 
@@ -144,10 +149,11 @@ thead { display: table-header-group; }
 .c-d.false_positive { color: #6b6e74; }
 .c-d.resolved { color: #1d7a4a; }
 .c-d.pending { color: #b25a10; }
+.c-d.stream { color: #6b6e74; font-weight: 500; }
 .c-e p { margin: 3px 0 0; color: #33363b; }
 .mut { color: #6b6e74; }
 .sev { font-size: 7pt; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
-.sev.err { color: #b3261e; } .sev.warn { color: #b25a10; }
+.sev.err { color: #b3261e; } .sev.warn { color: #b25a10; } .sev.src { color: #6b6e74; }
 .tag { font-size: 7pt; padding: 0 4px; border: 1px solid #b25a10; color: #b25a10; border-radius: 2px; }
 .method { color: #33363b; }
 .method p { margin: 0 0 4px; }

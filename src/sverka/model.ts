@@ -281,7 +281,9 @@ export type EventStatus = 'pending' | 'confirmed' | 'false_positive' | 'in_progr
 export interface UiEvent {
   id: string
   code: string
-  kind: 'missing' | 'oop' | 'other'
+  kind: 'missing' | 'oop' | 'stream' | 'other'
+  /** discrepancy type as the server stores it, e.g. MISSING_RECOMMENDED or STREAM_LOST */
+  type: string
   mach: Code | null
   sev: 'warn' | 'err'
   status: EventStatus
@@ -290,6 +292,7 @@ export interface UiEvent {
   stageId: string | null
   stageName: string | null
   zone: string | null
+  camera: string | null
   createdAt: number
   /** when it was observed; for a recording this is the filmed time */
   at: number
@@ -311,8 +314,14 @@ export const STATUS_WORD: Record<EventStatus, string> = {
   in_progress: 'В работе',
   resolved: 'Устранено',
 }
+/** Signal lost or back is a fact about a camera, not a hypothesis about the site: nobody confirms it. */
+export const awaitsDecision = (e: UiEvent) => e.status === 'pending' && !e.sample && e.kind !== 'stream'
+export const statusWord = (e: UiEvent) => (e.kind === 'stream' ? 'Видеопоток' : STATUS_WORD[e.status])
+/** how an event looks: a camera that came back is news, not a warning */
+export const toneOf = (e: UiEvent) => (e.type === 'STREAM_ONLINE' ? 'info' : e.sev)
 export function toEvent(a: ApiIncident, media: (u?: string | null) => string | undefined): UiEvent {
-  const kind = a.discrepancy_type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : a.discrepancy_type?.startsWith('MISSING') ? 'missing' : 'other'
+  const type = a.discrepancy_type || ''
+  const kind = type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : type.startsWith('MISSING') ? 'missing' : type.startsWith('STREAM_') ? 'stream' : 'other'
   const raw = (a.status || 'pending').toLowerCase()
   const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
   const description = a.description || ''
@@ -322,7 +331,9 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     id: a.id,
     code: a.code,
     kind,
-    mach: toCode(a.machinery_type),
+    type,
+    // the server answers «Экскаватор» for an event without machinery; a camera event has none
+    mach: kind === 'stream' ? null : toCode(a.machinery_type),
     sev: a.severity === 'ERROR' ? 'err' : 'warn',
     status,
     title: a.title || a.code,
@@ -330,6 +341,7 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     stageId: a.stage_id ?? null,
     stageName: a.stage_name ?? null,
     zone: a.zone_name ?? null,
+    camera: a.camera_name ?? null,
     createdAt: new Date(a.created_at).getTime(),
     at: Number.isFinite(observedAt) ? observedAt : new Date(a.created_at).getTime(),
     album: (a.album_photos || []).map((p, i) => ({ url: media(p.url) || p.url, camera: p.camera_name || `Камера ${i + 1}`, primary: !!p.is_primary, at: p.captured_at })),
@@ -361,7 +373,7 @@ export function liveTitle(e: UiEvent, ep: Episode | undefined, t: number, words 
   return e.title
 }
 export function sevNow(e: UiEvent, ep: Episode | undefined, t: number, prof: Profile | null) {
-  if (e.kind !== 'missing' || !ep || !e.mach || !prof) return e.sev
+  if (e.kind !== 'missing' || e.type === 'MISSING_RECOMMENDED' || !ep || !e.mach || !prof) return e.sev
   const r = prof.rules[e.mach]
   return (ep.to ?? t) - ep.from >= r.errAfter * 1000 ? 'err' : e.sev
 }
@@ -412,7 +424,7 @@ export function verdictOf(ctx: {
   if (!ev.covered) return { tone: 'none', title: 'Анализируем первые кадры', sub: 'Сверка начнётся после первого распознанного кадра.' }
 
   const pending = events
-    .filter((e) => e.status === 'pending' && !e.sample)
+    .filter(awaitsDecision)
     .sort((a, b) => (sevNow(b, episodes.get(b.id), t, prof) === 'err' ? 1 : 0) - (sevNow(a, episodes.get(a.id), t, prof) === 'err' ? 1 : 0) || b.createdAt - a.createdAt)
   const seenReq = ev.slots.filter((x) => x.state === 'seen').map((x) => MACH[x.code].lower)
   const off = obs.sources.filter((x) => x.status === 'offline' || x.status === 'stale')

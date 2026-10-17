@@ -25,7 +25,7 @@ export function Queue({
   onJournal: (el: HTMLElement) => void
 }) {
   const pending = events
-    .filter((e) => e.status === 'pending')
+    .filter((e) => e.status === 'pending' && e.kind !== 'stream')
     .sort((a, b) => (sevNow(b, episodes.get(b.id), t, prof) === 'err' ? 1 : 0) - (sevNow(a, episodes.get(a.id), t, prof) === 'err' ? 1 : 0) || b.createdAt - a.createdAt)
   const done = events.filter((e) => e.status !== 'pending').sort((a, b) => (b.decidedAt ?? b.createdAt) - (a.decidedAt ?? a.createdAt))
   const [doneOpen, setDoneOpen] = useState(false)
