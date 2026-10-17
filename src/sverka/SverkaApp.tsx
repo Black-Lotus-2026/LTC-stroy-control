@@ -7,7 +7,8 @@ import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD,
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
-import { ToastProvider, useToast } from './parts/common'
+import { Seg, ToastProvider, useToast } from './parts/common'
+import { setThemePref, useThemePref, type ThemePref } from './lib/theme'
 import { Verdict } from './parts/Verdict'
 import { Stage as StageView } from './parts/Stage'
 import { Recon } from './parts/Recon'
@@ -965,6 +966,8 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
                 <span><b>Старый интерфейс</b><small>Для сравнения</small></span>
               </a>
               <div className="m-sep" />
+              <ThemeRow />
+              <div className="m-sep" />
               <button type="button" className="m-item" role="menuitem" onClick={onLogout}>
                 <span />
                 <span><b>Выйти</b></span>
@@ -1024,7 +1027,7 @@ function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => v
     })
     s.set(0)
     s.to(1)
-    m.querySelector<HTMLElement>('[aria-checked="true"], .m-item')?.focus()
+    m.querySelector<HTMLElement>('.m-item[aria-checked="true"], .m-item')?.focus()
     const down = (e: PointerEvent) => !m.contains(e.target as Node) && close()
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
@@ -1049,6 +1052,31 @@ function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => v
   return (
     <div className="menu" ref={el} role="menu" style={{ opacity: 0 }}>
       {children}
+    </div>
+  )
+}
+
+const THEMES: { v: ThemePref; label: string }[] = [
+  { v: 'auto', label: 'Авто' },
+  { v: 'light', label: 'Светлая' },
+  { v: 'dark', label: 'Тёмная' },
+]
+
+/** Light or dark, or as the system says; the new colours spread from the button that was pressed. */
+function ThemeRow() {
+  const pref = useThemePref()
+  return (
+    <div className="m-theme">
+      <span>Тема</span>
+      <Seg
+        label="Тема"
+        value={pref}
+        options={THEMES}
+        onChange={(v, el) => {
+          const r = el.getBoundingClientRect()
+          setThemePref(v, { x: r.left + r.width / 2, y: r.top + r.height / 2 })
+        }}
+      />
     </div>
   )
 }

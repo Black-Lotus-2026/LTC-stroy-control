@@ -107,7 +107,7 @@ function Arc({ s }: { s: Slot }) {
   const L = 2 * Math.PI * 9
   return (
     <svg className="s-arc" viewBox="0 0 22 22" aria-hidden="true">
-      <circle cx="11" cy="11" r="9" stroke="rgba(255,255,255,.1)" />
+      <circle cx="11" cy="11" r="9" stroke="var(--track)" />
       <circle cx="11" cy="11" r="9" stroke={col} strokeDasharray={L} strokeDashoffset={L * (1 - frac)} transform="rotate(-90 11 11)" strokeLinecap="round" />
     </svg>
   )

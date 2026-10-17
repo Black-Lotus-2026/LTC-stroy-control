@@ -4,6 +4,7 @@ import type { CameraItem, ProjectItem, UserProfile } from '../api'
 import { dayStart, durShort, fmtDay, hhmm, hhmmss, plural } from '../lib/format'
 import { CODES, MACH, SIL, type Code } from '../lib/machinery'
 import { RING_MEDIA } from '../lib/ring'
+import { palette, rgba, theme } from '../lib/theme'
 import { PARALLAX, type WireScene } from '../lib/wire'
 import { awaitsDecision, loadLocalRules, loadSettings, stageAt, stageDay, toEvent, toProfile, toStages, type Level, type Stage, type UiEvent } from '../model'
 
@@ -320,7 +321,8 @@ function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>
       raf = requestAnimationFrame(frame)
       const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(2, devicePixelRatio || 1)
       const a = aim.current ?? { x: 0, y: 0 }
-      const key = `${w}x${h}:${a.x.toFixed(4)}:${a.y.toFixed(4)}`
+      const th = theme(), pal = palette(th), ink = rgba(pal.ink, 1)
+      const key = `${w}x${h}:${a.x.toFixed(4)}:${a.y.toFixed(4)}:${th}`
       if (key === drawn || !w || !h) return
       drawn = key
       cv.width = Math.round(w * dpr)
@@ -351,7 +353,7 @@ function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>
       }
       sx.lineWidth = 1
       sx.setLineDash([3, 5])
-      sx.strokeStyle = 'rgb(242,239,233)'
+      sx.strokeStyle = ink
       // ground grid
       for (let x = -8; x <= 8; x += 0.5) for (let z = -1.5; z < 6; z += 0.75) seg([x, G, z], [x, G, z + 0.75], 0.09)
       for (let z = -1.5; z <= 6; z += 0.5) for (let x = -8; x < 8; x += 1) seg([x, G, z], [x + 1, G, z], 0.09)
@@ -359,8 +361,8 @@ function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>
       for (const [x, z, h2] of [[-2.2, 0.3, 1.5], [2.5, 2.4, 1.9], [-1.4, 4.2, 1.8], [3.2, -0.2, 1.3]]) {
         const top = P(x, G + h2, z), g1 = P(x - 0.9, G, z - 0.4), g2 = P(x + 0.9, G, z - 0.4)
         const grad = sx.createLinearGradient(top[0], top[1], (g1[0] + g2[0]) / 2, g1[1])
-        grad.addColorStop(0, 'rgba(255,236,200,.085)')
-        grad.addColorStop(1, 'rgba(255,236,200,0)')
+        grad.addColorStop(0, rgba(pal.beam, 0.085))
+        grad.addColorStop(1, rgba(pal.beam, 0))
         sx.globalAlpha = fade(top[2])
         sx.fillStyle = grad
         sx.beginPath()
@@ -370,21 +372,21 @@ function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>
         sx.closePath()
         sx.fill()
         const pool = P(x, G, z - 0.3), rg = sx.createRadialGradient(pool[0], pool[1], 0, pool[0], pool[1], (160 * 5) / (D + pool[2]))
-        rg.addColorStop(0, 'rgba(255,236,200,.07)')
-        rg.addColorStop(1, 'rgba(255,236,200,0)')
+        rg.addColorStop(0, rgba(pal.beam, 0.07))
+        rg.addColorStop(1, rgba(pal.beam, 0))
         sx.fillStyle = rg
         sx.fillRect(pool[0] - 400, pool[1] - 200, 800, 400)
         seg([x, G, z], [x, G + h2, z], 0.4)
         box(x - 0.12, G + h2, z - 0.05, x + 0.12, G + h2 + 0.1, z + 0.05, 0.5)
         const lamp = P(x, G + h2, z - 0.05)
         sx.globalAlpha = 0.9 * fade(lamp[2])
-        sx.fillStyle = '#ffe9c4'
+        sx.fillStyle = pal.lamp
         sx.beginPath()
         sx.arc(lamp[0], lamp[1], 2.2, 0, 7)
         sx.fill()
       }
       // a tower crane far left, in the plan's gold
-      sx.strokeStyle = 'rgb(232,189,102)'
+      sx.strokeStyle = rgba(pal.gold, 1)
       const mx = -3.1, mz = 2.2, mh = 2.2
       for (const [dx, dz] of [[-0.06, -0.06], [0.06, -0.06], [0.06, 0.06], [-0.06, 0.06]]) seg([mx + dx, G, mz + dz], [mx + dx, G + mh, mz + dz], 0.45)
       for (let y = 0; y < mh; y += 0.18) seg([mx - 0.06, G + y, mz - 0.06], [mx + 0.06, G + y + 0.18, mz - 0.06], 0.3)
@@ -394,7 +396,7 @@ function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>
       seg([mx + 1.2, G + mh, mz], [mx + 1.2, G + mh - 0.8, mz], 0.3)
       box(mx - 0.5, G + mh - 0.2, mz - 0.08, mx - 0.3, G + mh, mz + 0.08, 0.4)
       // cabins and a fence on the right, a fence and stacks of material on the left
-      sx.strokeStyle = 'rgb(242,239,233)'
+      sx.strokeStyle = ink
       for (const [x, y] of [[1.9, 0], [2.55, 0], [1.9, 0.32]]) box(x, G + y, 1.1, x + 0.6, G + y + 0.3, 1.35, 0.42)
       for (let x = 1.7; x <= 5; x += 0.3) seg([x, G, -0.5], [x, G + 0.24, -0.5], 0.32)
       seg([1.7, G + 0.22, -0.5], [5, G + 0.22, -0.5], 0.32)

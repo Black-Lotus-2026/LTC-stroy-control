@@ -65,9 +65,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
 /* ── Glyphs ─────────────────────────────────────────────── */
 export const GLYPH: Record<string, string> = {
-  ok: '<circle cx="22" cy="22" r="13" fill="var(--ok)"/><path d="M15.5 22.4l4.4 4.3 8.6-9" fill="none" stroke="#0c0e11" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>',
-  warn: '<path d="M22 6.5 38.5 35.5h-33z" fill="var(--warn)" stroke="var(--warn)" stroke-width="3" stroke-linejoin="round"/><path d="M22 16.5v9" stroke="#0c0e11" stroke-width="2.8" stroke-linecap="round"/><circle cx="22" cy="30.4" r="1.7" fill="#0c0e11"/>',
-  err: '<path d="M22 5.5 38.5 22 22 38.5 5.5 22z" fill="var(--err)" stroke="var(--err)" stroke-width="3" stroke-linejoin="round"/><path d="M22 14.5v9" stroke="#0c0e11" stroke-width="2.8" stroke-linecap="round"/><circle cx="22" cy="28.6" r="1.7" fill="#0c0e11"/>',
+  ok: '<circle cx="22" cy="22" r="13" fill="var(--ok)"/><path d="M15.5 22.4l4.4 4.3 8.6-9" fill="none" stroke="var(--on-status)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  warn: '<path d="M22 6.5 38.5 35.5h-33z" fill="var(--warn)" stroke="var(--warn)" stroke-width="3" stroke-linejoin="round"/><path d="M22 16.5v9" stroke="var(--on-status)" stroke-width="2.8" stroke-linecap="round"/><circle cx="22" cy="30.4" r="1.7" fill="var(--on-status)"/>',
+  err: '<path d="M22 5.5 38.5 22 22 38.5 5.5 22z" fill="var(--err)" stroke="var(--err)" stroke-width="3" stroke-linejoin="round"/><path d="M22 14.5v9" stroke="var(--on-status)" stroke-width="2.8" stroke-linecap="round"/><circle cx="22" cy="28.6" r="1.7" fill="var(--on-status)"/>',
   nodata: '<defs><pattern id="hp" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="1.4" height="5" fill="var(--fg-3)"/></pattern></defs><circle cx="22" cy="22" r="13.5" fill="url(#hp)" stroke="var(--fg-3)" stroke-width="1.5"/>',
   none: '<circle cx="22" cy="22" r="13" fill="none" stroke="var(--fg-3)" stroke-width="1.5" stroke-dasharray="3 3"/>',
 }
@@ -136,8 +136,8 @@ export function Rich({ text }: { text: string }) {
   return <>{parts.map((p, i) => (i % 2 ? <strong key={i}>{p}</strong> : p))}</>
 }
 
-/** Segmented control; the pill travels to the choice on a spring and can be re-targeted mid-flight. */
-export function Seg<T extends string>({ value, options, onChange, label, className = '' }: { value: T; options: { v: T; label: React.ReactNode }[]; onChange: (v: T) => void; label: string; className?: string }) {
+/** Segmented control; the pill travels to the choice on a spring and can be re-targeted mid-flight. `onChange` also gets the button of the choice. */
+export function Seg<T extends string>({ value, options, onChange, label, className = '' }: { value: T; options: { v: T; label: React.ReactNode }[]; onChange: (v: T, el: HTMLElement) => void; label: string; className?: string }) {
   const box = useRef<HTMLDivElement>(null)
   const pill = useRef<HTMLElement>(null)
   const px = useRef(new Spring(0, { response: 0.34, damping: 0.86, rest: 0.2, onUpdate: (v) => pill.current && (pill.current.style.transform = `translateX(${v}px)`) }))
@@ -166,14 +166,14 @@ export function Seg<T extends string>({ value, options, onChange, label, classNa
           role="radio"
           aria-checked={o.v === value}
           tabIndex={o.v === value ? 0 : -1}
-          onClick={() => onChange(o.v)}
+          onClick={(e) => onChange(o.v, e.currentTarget)}
           onKeyDown={(e) => {
             const i = options.findIndex((x) => x.v === value)
             const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
             if (!d) return
             e.preventDefault()
-            const n = options[(i + d + options.length) % options.length]
-            onChange(n.v)
+            const j = (i + d + options.length) % options.length
+            onChange(options[j].v, box.current!.querySelectorAll<HTMLElement>('button')[j])
             window.setTimeout(() => box.current?.querySelector<HTMLElement>('button[aria-checked="true"]')?.focus(), 0)
           }}
         >

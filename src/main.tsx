@@ -33,9 +33,9 @@ if (legacy) {
     document.body.appendChild(back)
   })
 } else {
-  Promise.all([import('./sverka/sverka.css?inline'), import('./sverka/SverkaApp')]).then(([css, mod]) => {
+  Promise.all([import('./sverka/sverka.css?inline'), import('./sverka/SverkaApp'), import('./sverka/lib/theme')]).then(([css, mod, theme]) => {
+    theme.initTheme()
     injectCss(css.default)
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#0c0e11')
     const { SverkaApp } = mod
     root.render(
       <React.StrictMode>

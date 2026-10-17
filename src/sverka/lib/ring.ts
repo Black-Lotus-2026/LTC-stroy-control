@@ -1,4 +1,5 @@
 import { reducedMotion } from './spring'
+import { palette, rgba, theme, type Theme } from './theme'
 import { PARALLAX } from './wire'
 
 /*
@@ -66,8 +67,9 @@ const ramp = (stops: [number, V][], x: number, out: V) => {
   return out
 }
 
-// built once per page: fonts, sprites and meshes do not change
-let met: Metrics | null = null, tagMet: Metrics | null = null, shadow: HTMLCanvasElement | null = null
+// built once per page: fonts, sprites and meshes do not change (the tagline and shadows once per theme)
+let met: Metrics | null = null, tagMet: Metrics | null = null
+const shadows = new Map<Theme, HTMLCanvasElement>()
 const masks = new Map<string, Mask>()
 const sprites = new Map<string, Sprite>()
 let canFilter: boolean | null = null
@@ -190,14 +192,14 @@ function letterSprite(ch: string, mat: Mat): Sprite {
   sprites.set(key, sp)
   return sp
 }
-function tagSprite(ch: string): Sprite {
-  const key = 'tag:' + ch
+function tagSprite(ch: string, t: Theme): Sprite {
+  const key = `tag:${t}:${ch}`
   const hit = sprites.get(key)
   if (hit) return hit
   const adv = tagMet!.c.measureText(ch).width
   const w = Math.ceil(adv) + 4, h = TAG_PX + 4, c = mk(w, h), x = c.getContext('2d')!
   x.font = `500 ${TAG_PX}px "Vela Sans"`
-  x.fillStyle = '#b9b6b0'
+  x.fillStyle = palette(t).plate
   x.fillText(ch, 2, 2 + tagMet!.base)
   const sp = { w, h, adv, walls: [], face: c }
   sprites.set(key, sp)
@@ -481,6 +483,7 @@ export class LetterRing {
   private floor: OnFloor[] = []
   private shape = { ...SHAPE, s: 0, total: 0 }
   private laidOut = ''
+  private shadow: HTMLCanvasElement | null = null
   private media = matchMedia(RING_MEDIA)
   private reduce = reducedMotion()
   private aim = { x: 0, y: 0 }
@@ -523,8 +526,8 @@ export class LetterRing {
     cancelAnimationFrame(this.raf)
   }
 
-  // the run of letters, the tagline and the kit for this screen
-  private layout(w: number, h: number) {
+  // the run of letters, the tagline and the kit for this screen and theme
+  private layout(w: number, h: number, t: Theme) {
     const unit = Math.min(w * 0.36, h * 0.45)
     const fit = Math.min(2.4, Math.max(1.4, (w * 0.52) / (unit * 0.9)))
     const R = Math.min(SHAPE.R, fit + 0.1), k = R / SHAPE.R
@@ -557,20 +560,25 @@ export class LetterRing {
       const pos = (tc + tAdv[j] / 2) * (sTag / s) * spread
       tc += tAdv[j]
       if (ch !== ' ') {
-        const sp = tagSprite(ch)
+        const sp = tagSprite(ch, t)
         this.glyphs.push({ at: pos, sp, sps: {}, idx: 0, sc: sTag, base: tagMet!.base, pad: 2, rOff: -(0.12 + sh.size * 0.25), block: false, top: [], mid: [], oc: [] })
       }
     })
     sh.total = wordLen
+    let shadow = shadows.get(t)
     if (!shadow) {
+      // on paper a lighter, warmer shadow; on the dark floor a deep one
+      const k = palette(t).shadow, c: [number, number, number] = t === 'light' ? [40, 30, 14] : [0, 0, 0]
       shadow = mk(128, 128)
       const x = shadow.getContext('2d')!, g = x.createRadialGradient(64, 64, 0, 64, 64, 64)
-      g.addColorStop(0, 'rgba(0,0,0,.7)')
-      g.addColorStop(0.55, 'rgba(0,0,0,.32)')
-      g.addColorStop(1, 'rgba(0,0,0,0)')
+      g.addColorStop(0, rgba(c, k))
+      g.addColorStop(0.55, rgba(c, k * 0.46))
+      g.addColorStop(1, rgba(c, 0))
       x.fillStyle = g
       x.fillRect(0, 0, 128, 128)
+      shadows.set(t, shadow)
     }
+    this.shadow = shadow
   }
 
   private frame = (now: number) => {
@@ -584,10 +592,12 @@ export class LetterRing {
     rc.setTransform(1, 0, 0, 1, 0, 0)
     rc.clearRect(0, 0, canvas.width, canvas.height)
     if (!this.media.matches || !w || !h) return
-    if (this.laidOut !== `${w}x${h}`) {
-      this.layout(w, h)
-      this.laidOut = `${w}x${h}`
+    const th = theme(), pal = palette(th)
+    if (this.laidOut !== `${w}x${h}:${th}`) {
+      this.layout(w, h, th)
+      this.laidOut = `${w}x${h}:${th}`
     }
+    const shadow = this.shadow
     rc.imageSmoothingQuality = 'high'
     const unit = Math.min(w * 0.36, h * 0.45), D = 5, f = unit * D, cx = w * 0.62, cy = h * 0.47
     const yaw = this.aim.x * PARALLAX.yaw, pitch = 0.3 + this.aim.y * PARALLAX.pitch
@@ -619,7 +629,7 @@ export class LetterRing {
     rc.lineWidth = 1
     rc.setLineDash([3, 6])
     for (const [r, a] of [[R - 0.03, 0.16], [R + depth + 0.03, 0.09]]) {
-      rc.strokeStyle = `rgba(242,239,233,${a})`
+      rc.strokeStyle = rgba(pal.ink, a)
       rc.beginPath()
       for (let k = 0; k <= 160; k++) {
         const q = proj(onRing((k / 160) * 2 * Math.PI, r))
@@ -842,7 +852,7 @@ export class LetterRing {
         // swinging slowly along the letter and a little in and out of it
         const ph = (t * 2 * Math.PI) / 3.4, M = rotM(0, reduce ? 0 : 0.1 * Math.sin(ph), reduce ? 0 : 0.035 * Math.sin(ph + 1.2))
         const d = app3(M, [0, -0.36 * size, 0]), bob = [o[0] + d[0], o[1] + d[1], o[2] + d[2]]
-        wire(fr, [o, bob], 'rgb(212,206,194)', 0.8, vis * 0.85)
+        wire(fr, [o, bob], pal.thread, 0.8, vis * 0.85)
         kit(mesh('plumb'), fr, bob, M, vis)
       }
     }

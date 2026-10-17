@@ -6,6 +6,7 @@
  */
 
 import { reducedMotion } from './spring'
+import { palette, rgba, theme, type Theme } from './theme'
 
 type V2 = [number, number]
 type V3 = [number, number, number]
@@ -380,9 +381,7 @@ const PITCH = 0.3
 export const PARALLAX = { yaw: 0.08, pitch: 0.025 }
 const DIST = 5
 
-const INK: V3 = [242, 239, 233]
-const GOLD: V3 = [232, 189, 102]
-const GL = 5 // colour steps between ink and gold
+const GL = 5 // colour steps between ink and gold (lib/theme.ts has both for each theme)
 const AL = 6 // alpha steps
 
 const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2)
@@ -411,6 +410,7 @@ export class WireScene {
   private bucket: Uint8Array
   private order: Int32Array
   private styles: string[] = []
+  private painted: Theme | null = null
   private idx = 0
   private phase: 'morph' | 'hold' = 'morph'
   private clock = 0
@@ -451,12 +451,6 @@ export class WireScene {
     }
     this.bucket = new Uint8Array(slots)
     this.order = new Int32Array(slots)
-    for (let g = 0; g < GL; g++)
-      for (let a = 0; a < AL; a++) {
-        const m = g / (GL - 1)
-        const c = INK.map((v, i) => Math.round(v + (GOLD[i] - v) * m))
-        this.styles.push(`rgba(${c[0]},${c[1]},${c[2]},${((a + 1) / AL).toFixed(3)})`)
-      }
     // the first subject grows out of its own footprint
     const s0 = shapes[0]
     this.cp.set(s0.pos)
@@ -620,7 +614,21 @@ export class WireScene {
     this.on.onTick?.(this.idx, Math.min(1, (this.phase === 'morph' ? this.clock : this.span + this.hold) / turn))
   }
 
+  /** One stroke style per bucket: ink to gold across, faint to solid along. */
+  private paint(t: Theme) {
+    const { ink, gold } = palette(t)
+    this.painted = t
+    this.styles = []
+    for (let g = 0; g < GL; g++)
+      for (let a = 0; a < AL; a++) {
+        const m = g / (GL - 1)
+        const c = ink.map((v, i) => Math.round(v + (gold[i] - v) * m)) as V3
+        this.styles.push(rgba(c, (a + 1) / AL))
+      }
+  }
+
   private draw() {
+    if (theme() !== this.painted) this.paint(theme())
     const { ctx, w, h, dpr, n, cp, ct, ca, cg, xy, bucket, order } = this
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
@@ -652,7 +660,7 @@ export class WireScene {
 
     // turntable under the subject
     ctx.lineWidth = 1
-    ctx.strokeStyle = `rgba(242,239,233,${(0.14 * lit).toFixed(3)})`
+    ctx.strokeStyle = rgba(palette().ink, 0.14 * lit)
     ctx.beginPath()
     const { g, r } = this.ring
     for (let i = 0; i < 120; i++) {
@@ -744,7 +752,8 @@ export class WireScene {
     if (fr.a * show < 0.02) return
     const { ctx } = this
     const sh = this.shapes[this.idx]
-    const col = sh.gold ? GOLD : INK
+    const pal = palette()
+    const col = sh.gold ? pal.gold : pal.ink
     const L = 12
     ctx.globalAlpha = fr.a * show * 0.85
     ctx.strokeStyle = `rgb(${col[0]},${col[1]},${col[2]})`
@@ -760,7 +769,7 @@ export class WireScene {
     const tw = ctx.measureText(sh.title).width
     const lx = fr.x0
     const ly = fr.y0 - 8 - 20
-    ctx.fillStyle = 'rgba(12,14,17,0.72)'
+    ctx.fillStyle = pal.tagBg
     ctx.beginPath()
     ctx.roundRect(lx, ly, tw + 16, 20, 4)
     ctx.fill()
@@ -768,7 +777,7 @@ export class WireScene {
       ctx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`
       ctx.fillRect(lx, ly, 2, 20)
     }
-    ctx.fillStyle = 'rgb(242,239,233)'
+    ctx.fillStyle = pal.tagFg
     ctx.textBaseline = 'middle'
     ctx.fillText(sh.title, lx + 8, ly + 10.5)
     ctx.globalAlpha = 1

@@ -138,7 +138,7 @@ function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode;
         c.style.transform = v ? `translateX(${v}px)` : ''
         const k = clamp(Math.abs(v) / (it.clientWidth * 0.42), 0, 1)
         const right = v > 0
-        u.style.background = right ? (c.dataset.sev === 'err' ? `rgba(255,90,85,${0.18 + 0.5 * k})` : `rgba(255,143,63,${0.18 + 0.5 * k})`) : `rgba(236,232,224,${0.06 + 0.12 * k})`
+        u.style.background = `color-mix(in srgb, var(--${right ? (c.dataset.sev === 'err' ? 'err' : 'warn') : 'fg'}) ${((right ? 0.18 + 0.5 * k : 0.06 + 0.12 * k) * 100).toFixed(1)}%, transparent)`
         const [cf, fl] = Array.from(u.children) as HTMLElement[]
         cf.style.opacity = right ? String(k) : '0'
         fl.style.opacity = !right ? String(k) : '0'

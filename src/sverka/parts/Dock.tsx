@@ -554,8 +554,8 @@ export function Dock({
             </div>
             <div className="dm-legend">
               <span><i style={{ background: 'var(--plan)' }} />обязательна</span>
-              <span><i style={{ background: 'rgba(207,157,61,.42)' }} />рекомендуется</span>
-              <span><i style={{ background: 'rgba(207,157,61,.12)' }} />допустима</span>
+              <span><i style={{ background: 'color-mix(in srgb, var(--plan) 42%, transparent)' }} />рекомендуется</span>
+              <span><i style={{ background: 'color-mix(in srgb, var(--plan) 12%, transparent)' }} />допустима</span>
               <span><i style={{ background: 'var(--hatch)', boxShadow: 'inset 0 0 0 1px var(--line-2)' }} />не учитывается</span>
               <span><i style={{ background: 'var(--fg)', width: 5, height: 5, borderRadius: '50%' }} />изменено вручную</span>
             </div>
