@@ -32,6 +32,8 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(256))
     address: Mapped[str | None] = mapped_column(Text, default=None)
+    latitude: Mapped[float | None] = mapped_column(Float, default=None)
+    longitude: Mapped[float | None] = mapped_column(Float, default=None)
 
     # Часовой пояс площадки. В базе всё время хранится в UTC, этот пояс
     # используется при переводе на границе API и при разборе календарного плана.

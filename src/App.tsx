@@ -61,6 +61,7 @@ import {
   updateMyEmail,
 } from './api/stroyControlApi'
 import { AlertCenter } from './components/AlertCenter'
+import { WeatherForecast } from './components/WeatherForecast'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'management', label: 'Отклонения', icon: 'alert' },
@@ -543,6 +544,7 @@ function Monitoring({ activeProject, activeZones, camerasList, selectedCameraId,
         {rules && <p>Обязательная техника: {rules.mandatory.join(', ') || 'Не задана'}</p>}
         {activeZones.length === 1 && <small>{activeZones[0].name}</small>}
       </div></details>
+      {activeProject && <WeatherForecast projectId={activeProject.id} configured={activeProject.latitude != null && activeProject.longitude != null} />}
     </main>
   </div>
 }
@@ -571,7 +573,7 @@ function Settings({
   activeProject?: ProjectItem
   onUpdateProject: (
     projectId: string,
-    data: { name: string; code: string; address?: string; object_kind?: string; status?: string }
+    data: { name: string; code: string; address?: string; object_kind?: string; status?: string; latitude?: number | null; longitude?: number | null }
   ) => Promise<void>
   onDeleteProject: (projectId: string) => Promise<void>
   setIsCreateProjectOpen: (b: boolean) => void
@@ -597,13 +599,15 @@ function Settings({
   const [name, setName] = useState(activeProject?.name || '')
   const [code, setCode] = useState(activeProject?.code || '')
   const [address, setAddress] = useState(activeProject?.address || '')
+  const [latitude, setLatitude] = useState(activeProject?.latitude?.toString() ?? '')
+  const [longitude, setLongitude] = useState(activeProject?.longitude?.toString() ?? '')
   const [objectKind, setObjectKind] = useState(activeProject?.object_kind || 'Жильё')
   const [isSaving, setIsSaving] = useState(false)
 
   // Violation window setting state
   const [windowInput, setWindowInput] = useState<number>(violationWindowSeconds)
   const [isSavingWindow, setIsSavingWindow] = useState(false)
-  const projectDirty = name !== (activeProject?.name || '') || code !== (activeProject?.code || '') || address !== (activeProject?.address || '') || objectKind !== (activeProject?.object_kind || 'Жильё')
+  const projectDirty = name !== (activeProject?.name || '') || code !== (activeProject?.code || '') || address !== (activeProject?.address || '') || objectKind !== (activeProject?.object_kind || 'Жильё') || latitude !== (activeProject?.latitude?.toString() ?? '') || longitude !== (activeProject?.longitude?.toString() ?? '')
   const [alertOwner, setAlertOwner] = useState(activeProject?.owner_username || '')
   const [alertChief, setAlertChief] = useState(activeProject?.escalation_user_id || '')
   const [errorMinutes, setErrorMinutes] = useState(activeProject?.alert_error_deadline_minutes || 120)
@@ -626,12 +630,14 @@ function Settings({
     setName(activeProject?.name || '')
     setCode(activeProject?.code || '')
     setAddress(activeProject?.address || '')
+    setLatitude(activeProject?.latitude?.toString() ?? '')
+    setLongitude(activeProject?.longitude?.toString() ?? '')
     setObjectKind(activeProject?.object_kind || 'Жильё')
     setAlertOwner(activeProject?.owner_username || '')
     setAlertChief(activeProject?.escalation_user_id || '')
     setErrorMinutes(activeProject?.alert_error_deadline_minutes || 120)
     setWarningMinutes(activeProject?.alert_warning_deadline_minutes || 1440)
-  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes])
+  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes, activeProject?.latitude, activeProject?.longitude])
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -640,12 +646,18 @@ function Settings({
       toast('Название объекта не может быть пустым')
       return
     }
+    if (Boolean(latitude.trim()) !== Boolean(longitude.trim())) {
+      toast('Для прогноза укажите и широту, и долготу')
+      return
+    }
     setIsSaving(true)
     try {
       await onUpdateProject(activeProject.id, {
         name: name.trim(),
         code: code.trim() || activeProject.code,
         address: address.trim() || undefined,
+        latitude: latitude.trim() ? Number(latitude) : null,
+        longitude: longitude.trim() ? Number(longitude) : null,
         object_kind: objectKind,
       })
     } finally {
@@ -732,6 +744,14 @@ function Settings({
                   onChange={(e) => setAddress(e.target.value)}
                   placeholder="г. Москва, ул. Полярная, 18"
                 />
+              </label>
+              <label>
+                Широта для прогноза погоды
+                <input type="number" min="-90" max="90" step="any" value={latitude} onChange={e => setLatitude(e.target.value)} placeholder="55.7558" />
+              </label>
+              <label>
+                Долгота для прогноза погоды
+                <input type="number" min="-180" max="180" step="any" value={longitude} onChange={e => setLongitude(e.target.value)} placeholder="37.6173" />
               </label>
               <label>
                 Тип объекта
@@ -1393,12 +1413,17 @@ export default function App() {
     const form = e.currentTarget
     const name = (form.elements.namedItem('prj_name') as HTMLInputElement).value
     const address = (form.elements.namedItem('prj_address') as HTMLInputElement).value
+    const latitude = (form.elements.namedItem('prj_latitude') as HTMLInputElement).value
+    const longitude = (form.elements.namedItem('prj_longitude') as HTMLInputElement).value
+    if (Boolean(latitude) !== Boolean(longitude)) { toast('Для прогноза укажите и широту, и долготу'); return }
     const objectKind = (form.elements.namedItem('prj_kind') as HTMLSelectElement).value
 
     try {
       const created = await createProject({
         name,
         address,
+        latitude: latitude ? Number(latitude) : undefined,
+        longitude: longitude ? Number(longitude) : undefined,
         object_kind: objectKind,
         owner_username: currentUser?.username,
       })
@@ -1414,7 +1439,7 @@ export default function App() {
   // Handle Update Project
   const handleUpdateProject = async (
     projectId: string,
-    data: { name: string; code: string; address?: string; object_kind?: string; status?: string }
+    data: { name: string; code: string; address?: string; object_kind?: string; status?: string; latitude?: number | null; longitude?: number | null }
   ) => {
     try {
       const updated = await updateProject(projectId, data)
@@ -2660,6 +2685,8 @@ export default function App() {
                 Адрес объекта
                 <input name="prj_address" placeholder="г. Москва, ул. Строителей, 12" />
               </label>
+              <label>Широта для прогноза<input name="prj_latitude" type="number" min="-90" max="90" step="any" placeholder="55.7558" /></label>
+              <label>Долгота для прогноза<input name="prj_longitude" type="number" min="-180" max="180" step="any" placeholder="37.6173" /></label>
               <label>
                 Категория / Тип объекта
                 <select name="prj_kind" defaultValue="Жильё">

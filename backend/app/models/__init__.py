@@ -47,6 +47,7 @@ from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
+from app.models.weather import WeatherForecast
 
 __all__ = [
     "ManagementRun", "ManagementRunStep", "TaskDependency",
@@ -59,6 +60,7 @@ __all__ = [
     "Zone",
     "Camera",
     "CameraHealthEvent",
+    "WeatherForecast",
     # План и методика
     "ScheduleTask",
     "RuleSet",

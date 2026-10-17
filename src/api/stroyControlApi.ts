@@ -156,6 +156,8 @@ export interface ProjectItem {
   code: string
   name: string
   address?: string | null
+  latitude?: number | null
+  longitude?: number | null
   object_kind?: string | null
   status: string
   zones: ZoneItem[]
@@ -165,6 +167,35 @@ export interface ProjectItem {
   alert_error_deadline_minutes?: number
   alert_warning_deadline_minutes?: number
   escalation_user_id?: string | null
+}
+
+export interface WeatherDay {
+  forecast_date: string
+  fetched_at: string
+  provider: string
+  weather_code: number | null
+  temperature_min_c: number | null
+  temperature_max_c: number | null
+  precipitation_mm: number | null
+  snowfall_cm: number | null
+  wind_gust_kmh: number | null
+  conditions: string[]
+  warnings: string[]
+}
+
+export interface WeatherForecast {
+  project_id: string
+  timezone: string
+  location_configured: boolean
+  days: WeatherDay[]
+}
+
+export function fetchWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather`, {}, 'Не удалось загрузить прогноз')
+}
+
+export function refreshWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather/refresh`, { method: 'POST' }, 'Не удалось обновить прогноз')
 }
 
 export interface ProjectAlertSettings {
@@ -410,6 +441,8 @@ export async function createProject(data: {
   name: string
   code?: string
   address?: string
+  latitude?: number
+  longitude?: number
   object_kind?: string
   owner_username?: string
 }): Promise<ProjectItem> {
@@ -431,6 +464,8 @@ export async function updateProject(
     name?: string
     code?: string
     address?: string
+    latitude?: number | null
+    longitude?: number | null
     object_kind?: string
     status?: string
   }

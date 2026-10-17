@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession, OptionalUser
@@ -13,6 +13,7 @@ from app.models.enums import CameraStatus, UserRole, ZoneRiskLevel
 from app.models.project import Camera, Project, Zone
 from app.models.schedule import ScheduleTask
 from app.models.user import User
+from app.models.weather import WeatherForecast
 from app.schemas.stroy_control import (
     CameraCreate,
     CameraItem,
@@ -63,6 +64,8 @@ def list_projects(db: DbSession, current_user: OptionalUser = None) -> list[Proj
                 code=p.code,
                 name=p.name,
                 address=p.address,
+                latitude=p.latitude,
+                longitude=p.longitude,
                 object_kind=p.object_kind,
                 status=p.status,
                 owner_username=getattr(p, "owner_username", None),
@@ -113,6 +116,8 @@ def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUse
         code=code,
         name=data.name.strip(),
         address=data.address.strip() if data.address else None,
+        latitude=data.latitude,
+        longitude=data.longitude,
         object_kind=data.object_kind.strip() if data.object_kind else "Жильё",
         owner_username=owner,
     )
@@ -125,6 +130,8 @@ def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUse
         code=project.code,
         name=project.name,
         address=project.address,
+        latitude=project.latitude,
+        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
@@ -165,6 +172,8 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
         code=project.code,
         name=project.name,
         address=project.address,
+        latitude=project.latitude,
+        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
@@ -289,6 +298,16 @@ def update_project(
         project.code = data.code.strip()
     if data.address is not None:
         project.address = data.address.strip() if data.address.strip() else None
+    location_changed = (
+        ("latitude" in data.model_fields_set and data.latitude != project.latitude)
+        or ("longitude" in data.model_fields_set and data.longitude != project.longitude)
+    )
+    if "latitude" in data.model_fields_set:
+        project.latitude = data.latitude
+    if "longitude" in data.model_fields_set:
+        project.longitude = data.longitude
+    if location_changed:
+        db.execute(delete(WeatherForecast).where(WeatherForecast.project_id == project.id))
     if data.object_kind is not None and data.object_kind.strip():
         project.object_kind = data.object_kind.strip()
     if data.status is not None and data.status.strip():
@@ -311,6 +330,8 @@ def update_project(
         code=project.code,
         name=project.name,
         address=project.address,
+        latitude=project.latitude,
+        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=project.owner_username,

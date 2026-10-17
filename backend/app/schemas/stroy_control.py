@@ -327,6 +327,8 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., description="Название объекта строительства")
     code: str | None = Field(None, description="Уникальный код объекта")
     address: str | None = Field(None, description="Адрес объекта")
+    latitude: float | None = Field(None, ge=-90, le=90, description="Широта для прогноза погоды")
+    longitude: float | None = Field(None, ge=-180, le=180, description="Долгота для прогноза погоды")
     object_kind: str | None = Field("Жильё", description="Категория/тип объекта")
     owner_username: str | None = Field(None, description="Владелец рабочей области")
 
@@ -335,6 +337,8 @@ class ProjectUpdate(BaseModel):
     name: str | None = Field(None, description="Название объекта строительства")
     code: str | None = Field(None, description="Уникальный код объекта")
     address: str | None = Field(None, description="Адрес объекта")
+    latitude: float | None = Field(None, ge=-90, le=90)
+    longitude: float | None = Field(None, ge=-180, le=180)
     object_kind: str | None = Field(None, description="Категория/тип объекта")
     status: str | None = Field(None, description="Статус объекта")
 
@@ -346,6 +350,8 @@ class ProjectItem(BaseModel):
     code: str
     name: str
     address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     object_kind: str | None = None
     status: str = "active"
     zones: list[ZoneItem] = Field(default_factory=list)

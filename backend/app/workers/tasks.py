@@ -58,3 +58,11 @@ def deliver_alert_emails_task() -> dict[str, int]:
 
     with session_scope() as db:
         return deliver_pending_emails(db)
+
+
+@shared_task(name="weather.refresh_all")
+def refresh_weather_task() -> dict[str, int]:
+    from app.services.weather_service import run_weather_refresh
+
+    with session_scope() as db:
+        return run_weather_refresh(db)
