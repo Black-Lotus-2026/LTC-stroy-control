@@ -96,12 +96,13 @@ export function Journal({
 
   /* ── filtering ─────────────────────────────────────────── */
   const query = q.trim().toLowerCase()
-  const passSev = (e: UiEvent) => sev === 'all' || e.sev === sev
+  // deviations and warnings are about the site; camera events are only under «Все» and their own chip
+  const passSev = (e: UiEvent) => sev === 'all' || (e.sev === sev && e.kind !== 'stream')
   const passQ = (e: UiEvent) => !query || hay(e).includes(query)
   const passSt = (e: UiEvent) => !st.size || st.has(stKey(e))
   const inRange = (e: UiEvent) => e.at >= range.from && e.at <= range.to
   const base = events.filter((e) => inRange(e) && passQ(e))
-  const sevCounts = { all: base.length, err: base.filter((e) => e.sev === 'err').length, warn: base.filter((e) => e.sev === 'warn').length }
+  const sevCounts = { all: base.length, err: base.filter((e) => e.sev === 'err' && e.kind !== 'stream').length, warn: base.filter((e) => e.sev === 'warn' && e.kind !== 'stream').length }
   const forStatus = base.filter(passSev)
   const stCounts = Object.fromEntries(STATUSES.map((s) => [s, forStatus.filter((e) => stKey(e) === s).length])) as Record<StKey, number>
   const shown = forStatus.filter(passSt).sort((x, y) => y.at - x.at)
@@ -248,6 +249,7 @@ export function Journal({
   const real0 = shown.filter((e) => !e.sample)
   const allIn = real0.length > 0 && real0.every((e) => !excluded.has(e.id))
   const pending = shown.filter(awaitsDecision).length
+  const errN = shown.filter((e) => e.sev === 'err' && e.kind !== 'stream').length
 
   return (
     <>
@@ -264,11 +266,11 @@ export function Journal({
             </h2>
             <p>
               <Roll value={shown.length} /> {plural(shown.length, 'событие', 'события', 'событий')}
-              {shown.some((e) => e.sev === 'err') && (
+              {errN > 0 && (
                 <>
                   {' · '}
                   <span className="t-err">
-                    <Roll value={shown.filter((e) => e.sev === 'err').length} /> {plural(shown.filter((e) => e.sev === 'err').length, 'отклонение', 'отклонения', 'отклонений')}
+                    <Roll value={errN} /> {plural(errN, 'отклонение', 'отклонения', 'отклонений')}
                   </span>
                 </>
               )}
