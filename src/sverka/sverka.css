@@ -620,6 +620,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .case-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .sev-tag { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; color: var(--warn); }
 .sev-tag[data-sev="err"] { color: var(--err); }
+.sev-tag[data-sev="info"] { color: var(--info); }
 .sev-tag svg { width: 14px; height: 14px; }
 [tabindex="-1"]:focus { outline: none; }
 .case h2 { margin: 6px 0 4px; font: 400 25px/1.15 var(--f-display); letter-spacing: -0.02em; text-wrap: balance; }
@@ -710,6 +711,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .src-row { display: grid; grid-template-columns: 96px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .src-row img { width: 96px; aspect-ratio: 16/9; object-fit: cover; border-radius: 3px; }
 .src-row b { font-weight: 500; font-size: 13.5px; display: block; }
+.src-row .src-code { font-size: 11.5px; font-weight: 400; color: var(--fg-3); margin-left: 4px; }
 .src-row small { color: var(--fg-3); font-size: 12px; display: block; }
 .src-row small.bad { color: var(--warn); }
 .thresholds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; grid-column: 1 / -1; }
@@ -1010,6 +1012,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .chip[data-s="pending"]::before { background: var(--warn); }
 .chip[data-s="confirmed"]::before, .chip[data-s="in_progress"]::before { background: var(--err); }
 .chip[data-s="resolved"]::before { background: var(--ok); }
+.chip[data-s="stream"]::before { background: var(--info); }
 .chip small { font: 500 11px/1 var(--f-mono); opacity: .6; }
 .chip:hover { color: var(--fg); border-color: var(--line-3); }
 .chip[aria-pressed="true"] { background: var(--fg); color: #121315; border-color: var(--fg); }
@@ -1103,6 +1106,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .j-sev svg { width: 12px; height: 12px; }
 .j-sev[data-sev="err"] { color: var(--err); }
 .j-sev[data-sev="warn"] { color: var(--warn); }
+.j-sev[data-sev="info"] { color: var(--info); }
 .j-main { min-width: 0; }
 .j-main b { display: block; font-weight: 500; font-size: 13.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .j-main small { display: block; font-size: 12px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1112,6 +1116,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .j-st[data-s="confirmed"], .j-st[data-s="in_progress"] { color: var(--err); }
 .j-st[data-s="resolved"] { color: var(--ok); }
 .j-st[data-s="false_positive"] { color: var(--fg-3); }
+.j-st[data-s="stream"] { color: var(--info); }
 .j-thumb { width: 72px; aspect-ratio: 16/9; border-radius: 3px; overflow: hidden; background: var(--bg-2); outline: 1px solid var(--line); }
 .j-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .j-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; padding-top: 12px; }

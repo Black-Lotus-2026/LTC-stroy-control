@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import * as api from './api'
 import type { ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
-import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, Stage, UiEvent, VerdictAction } from './model'
+import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
 import { DEFAULTS, DEMO_LINE, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
@@ -108,6 +108,8 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   const [creating, setCreating] = useState(false)
   const loadToken = useRef(0)
   const meta = useRef(new Map<string, { kind: 'missing' | 'oop'; code: Code; stageId: string }>())
+  // per camera: was it live in this session, and the loss we are writing (resolves true once it is in the journal)
+  const signal = useRef(new Map<string, { live: boolean; lost?: { at: number; written: Promise<boolean> } }>())
   const created = useRef(new Map<string, string | number>())
   const lastSaveError = useRef(0)
 
@@ -134,6 +136,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
     setEpisodes(new Map())
     meta.current.clear()
     created.current.clear()
+    signal.current.clear()
     setLoaded(false)
     setSelected(null)
     setCaseOpen(null)
@@ -323,6 +326,28 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
         ].join('\n'),
       })
     }
+    // recommended machinery only warns, and only once per absence (the legacy UI repeated it every window)
+    for (const s of ev.slots) {
+      if (s.lvl !== 'rec' || s.state !== 'missing' || s.since == null || s.missFor == null || s.missFor < s.warnAfter * 1000) continue
+      make(`${stage.id}|rec|${s.code}|${Math.round(s.since / 1000)}`, 'missing', s.code, s.since, {
+        stage_id: stage.id,
+        stage_name: stage.name,
+        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
+        camera_name: live[0]?.name ?? null,
+        severity: 'WARNING',
+        discrepancy_type: 'MISSING_RECOMMENDED',
+        machinery_type: MACH[s.code].name,
+        stage_probability: s.p,
+        observed_count: 0,
+        title: `${MACH[s.code].name} не замечен ${durShort(s.missFor)}`,
+        description: [
+          `Правило: ${MACH[s.code].name} — рекомендуемая техника этапа «${stage.name}» (${Math.round(s.p * 100)}% по справочнику${s.edited ? ', изменено вручную' : ''}); предупреждение через ${durShort(s.warnAfter * 1000)}, отклонением не становится.`,
+          `Наблюдение: с ${hhmmss(s.since)} ${MACH[s.code].lower} не найден ни на одном источнике (${names}).`,
+          quality,
+          ...tail(s.since),
+        ].join('\n'),
+      })
+    }
     for (const o of ev.oop) {
       if (o.dur < settings.oopAfter * 1000) continue
       make(`${stage.id}|oop|${o.code}|${Math.round(o.since / 1000)}`, 'oop', o.code, o.since, {
@@ -345,6 +370,68 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
       })
     }
   })
+  /* camera signal goes to the journal as in the legacy UI: one record when it is lost, one when it is back */
+  useEffect(() => {
+    if (!project || !loaded) return
+    const now = Date.now()
+    const total = obs.sources.length
+    const liveN = obs.sources.filter((x) => x.status === 'live').length
+    const write = (src: SourceView, type: 'STREAM_LOST' | 'STREAM_OFFLINE' | 'STREAM_ONLINE', at: number, title: string, observation: string, quality: string) =>
+      api
+        .createIncident({
+          project_id: project.id,
+          stage_id: stage?.id ?? null,
+          stage_name: stage?.name ?? null,
+          zone_name: zoneOf(src.id),
+          camera_name: src.name,
+          severity: type === 'STREAM_LOST' ? 'ERROR' : 'WARNING',
+          discrepancy_type: type,
+          title,
+          description: [`Наблюдение: ${observation}`, `Качество данных: ${quality}`, `${OBSERVED_LINE}${new Date(at).toISOString()}`].join('\n'),
+        })
+        .then((res) => {
+          setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
+          return true
+        })
+    for (const src of obs.sources) {
+      if (src.kind !== 'camera') continue
+      const m = signal.current.get(src.id) ?? { live: false }
+      signal.current.set(src.id, m)
+      if (src.status === 'live') {
+        const lost = m.lost
+        if (lost)
+          void lost.written.then((ok) => ok && write(src, 'STREAM_ONLINE', now, `Видеопоток восстановлен: ${src.name}`, `камера «${src.name}» снова присылает кадры с ${hhmmss(now)}; перерыв длился ${durShort(now - lost.at)}.`, `кадры дают ${liveN} из ${total} источников.`)).catch(() => undefined)
+        m.lost = undefined
+        m.live = true
+        continue
+      }
+      const down = src.status === 'offline' || src.status === 'stale'
+      if (!down || m.lost || !src.since || now - src.since < settings.window * 1000 || !ev.inShift) continue
+      // after a reload the loss may already be in the journal: do not write it twice
+      const last = events.filter((e) => e.kind === 'stream' && e.camera === src.name).sort((x, y) => y.at - x.at)[0]
+      if (last && last.type !== 'STREAM_ONLINE') {
+        m.lost = { at: last.at, written: Promise.resolve(true) }
+        continue
+      }
+      const stale = src.status === 'stale'
+      const type = m.live ? 'STREAM_LOST' : 'STREAM_OFFLINE'
+      const title = stale ? `Кадр не меняется: ${src.name}` : m.live ? `Потеря видеопотока: ${src.name}` : `Нет видеопотока: ${src.name}`
+      const msg = src.message ? ` ${src.message.replace(/[.\s]*$/, '.')}` : ''
+      const what = stale
+        ? `кадр с камеры «${src.name}» не меняется с ${hhmmss(src.since)}.`
+        : m.live
+          ? `камера «${src.name}» перестала присылать кадры в ${hhmmss(src.since)}.${msg}`
+          : `с начала наблюдения камера «${src.name}» не присылает кадров.${msg}`
+      const lost: { at: number; written: Promise<boolean> } = { at: src.since, written: Promise.resolve(false) }
+      lost.written = write(src, type, src.since, title, what, `кадры дают ${liveN} из ${total} источников. Пока кадров нет, по зоне этой камеры вывод об отсутствии техники не делается.`).catch(() => {
+        // the server did not take it: try again on a later pass
+        if (m.lost === lost) m.lost = undefined
+        return false
+      })
+      m.lost = lost
+    }
+  })
+
   /* an episode ends when the machine is back (or the wrong one has left) */
   useEffect(() => {
     if (!stage || !ev.covered) return
@@ -446,9 +533,9 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   }
 
   /* sources */
-  const addCamera = async (name: string, url: string, zoneId?: string | null) => {
+  const addCamera = async (name: string, url: string, zoneId?: string | null, code?: string) => {
     if (!project) return
-    const cam = await api.createCamera(project.id, { name, stream_url: url, zone_id: zoneId === undefined ? zones[0]?.id ?? null : zoneId })
+    const cam = await api.createCamera(project.id, { name, code: code || undefined, stream_url: url, zone_id: zoneId === undefined ? zones[0]?.id ?? null : zoneId })
     const next = [...cameras, cam]
     setCameras(next)
     engine.setCameras(next)
@@ -465,9 +552,9 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
       toast((e as Error).message, { error: true })
     }
   }
-  const updateCamera = async (id: string, name: string, url: string, zoneId: string | null) => {
+  const updateCamera = async (id: string, name: string, url: string, zoneId: string | null, code?: string) => {
     if (!project) return
-    const cam = await api.updateCamera(project.id, id, { name, stream_url: url, zone_id: zoneId })
+    const cam = await api.updateCamera(project.id, id, { name, code: code || undefined, stream_url: url, zone_id: zoneId })
     const next = cameras.map((c) => (c.id === id ? cam : c))
     setCameras(next)
     engine.setCameras(next)
@@ -620,7 +707,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   const ruleStage = rule ? stages.find((s) => s.id === rule.stageId) : null
   const ruleProf = rule ? profiles.get(rule.stageId) : null
   const setupVisible = setupOpen || (loaded && !project)
-  const pending = events.filter((e) => e.status === 'pending')
+  const pending = events.filter((e) => e.status === 'pending' && e.kind !== 'stream')
 
   return (
     <div className="app" id="app">
@@ -822,7 +909,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
                   <span className="chk">✓</span>
                   <span>
                     <b>{p.name}</b>
-                    <small>{[p.object_kind, p.address].filter(Boolean).join(' · ') || p.code}</small>
+                    <small>{[p.object_kind, p.address, user.role === 'admin' && p.owner_username ? `владелец ${p.owner_username}` : ''].filter(Boolean).join(' · ') || p.code}</small>
                   </span>
                 </button>
               ))}
@@ -885,7 +972,12 @@ function TimePill({ obs, onExit }: { obs: Observation; onExit: () => void }) {
 
 function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => void; children: React.ReactNode }) {
   const el = useRef<HTMLDivElement>(null)
+  // the app re-renders on every camera frame and passes a fresh onClose each time; the menu must
+  // open once per anchor, not replay its entrance (and grab focus) on every frame
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useLayoutEffect(() => {
+    const close = () => closeRef.current()
     const m = el.current!
     const w = m.offsetWidth
     const left = clamp(anchor.right - w, 8, innerWidth - w - 8)
@@ -903,9 +995,9 @@ function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => v
     s.set(0)
     s.to(1)
     m.querySelector<HTMLElement>('[aria-checked="true"], .m-item')?.focus()
-    const down = (e: PointerEvent) => !m.contains(e.target as Node) && onClose()
+    const down = (e: PointerEvent) => !m.contains(e.target as Node) && close()
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') close()
       const items = Array.from(m.querySelectorAll<HTMLElement>('.m-item'))
       const i = items.indexOf(document.activeElement as HTMLElement)
       if (e.key === 'ArrowDown') {
@@ -923,7 +1015,7 @@ function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => v
       removeEventListener('pointerdown', down, true)
       removeEventListener('keydown', key)
     }
-  }, [anchor, onClose])
+  }, [anchor])
   return (
     <div className="menu" ref={el} role="menu" style={{ opacity: 0 }}>
       {children}

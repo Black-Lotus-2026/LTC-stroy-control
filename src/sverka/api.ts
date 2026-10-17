@@ -99,9 +99,9 @@ export const updateZone = (projectId: string, zoneId: string, data: { name?: str
   req<ZoneItem>(`/projects/${projectId}/zones/${zoneId}`, json('PATCH', data), 'Не удалось сохранить зону')
 export const deleteZone = (projectId: string, zoneId: string) => req<void>(`/projects/${projectId}/zones/${zoneId}`, { method: 'DELETE' }, 'Не удалось удалить зону')
 export const cameras = (projectId: string) => req<CameraItem[]>(`/projects/${projectId}/cameras`)
-export const createCamera = (projectId: string, data: { name: string; stream_url: string; zone_id?: string | null }) =>
+export const createCamera = (projectId: string, data: { name: string; code?: string; stream_url: string; zone_id?: string | null }) =>
   req<CameraItem>(`/projects/${projectId}/cameras`, json('POST', data), 'Не удалось сохранить камеру')
-export const updateCamera = (projectId: string, cameraId: string, data: { name: string; stream_url: string; zone_id: string | null }) =>
+export const updateCamera = (projectId: string, cameraId: string, data: { name: string; code?: string; stream_url: string; zone_id: string | null }) =>
   req<CameraItem>(`/projects/${projectId}/cameras/${cameraId}`, json('PATCH', data), 'Не удалось сохранить камеру')
 export const deleteCamera = (projectId: string, cameraId: string) =>
   req<void>(`/projects/${projectId}/cameras/${cameraId}`, { method: 'DELETE' }, 'Не удалось удалить камеру')
@@ -235,8 +235,8 @@ export interface IncidentCreate {
   zone_name?: string | null
   camera_name?: string | null
   severity: 'ERROR' | 'WARNING'
-  discrepancy_type: 'MISSING_MANDATORY' | 'UNCHARACTERISTIC_PRESENT'
-  machinery_type: string
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE'
+  machinery_type?: string | null
   stage_probability?: number
   observed_count?: number
   title: string

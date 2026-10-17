@@ -17,7 +17,7 @@ export interface ObjectActions {
   onCreateZone: (d: ZoneDraft) => Promise<void>
   onUpdateZone: (id: string, d: ZoneDraft) => Promise<void>
   onDeleteZone: (id: string) => Promise<void>
-  onUpdateCamera: (id: string, name: string, url: string, zoneId: string | null) => Promise<void>
+  onUpdateCamera: (id: string, name: string, url: string, zoneId: string | null, code?: string) => Promise<void>
 }
 export interface ZoneDraft { name: string; code: string; description: string }
 
@@ -43,7 +43,7 @@ export function SettingsSheet({
   cameras: CameraItem[]
   project: ProjectItem
   zones: ZoneItem[]
-  onAddCamera: (name: string, url: string, zoneId?: string | null) => Promise<void>
+  onAddCamera: (name: string, url: string, zoneId?: string | null, code?: string) => Promise<void>
   onDeleteCamera: (id: string) => Promise<void>
   onCheck: Probe
   onRecording: (f: File, start: number) => void
@@ -238,7 +238,7 @@ const STATUS_LINE: Record<string, string> = {
   idle: 'Пауза: открыта запись',
 }
 
-function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
+function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null, code?: string) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null, code?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
   const [form, setForm] = useState<null | 'camera' | 'recording'>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
@@ -266,9 +266,9 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
               <span className="kicker">Камера · изменение</span>
               <CameraForm
                 zones={zones}
-                initial={{ name: c.name, url: c.stream_url || '', zoneId: c.zone_id ?? null }}
+                initial={{ name: c.name, url: c.stream_url || '', zoneId: c.zone_id ?? null, code: c.code || '' }}
                 submitLabel="Сохранить"
-                onAdd={(n, u, z) => onUpdate(c.id, n, u, z ?? null).then(() => setEditing(null))}
+                onAdd={(n, u, z, code) => onUpdate(c.id, n, u, z ?? null, code).then(() => setEditing(null))}
                 onCheck={onCheck}
                 onCancel={() => setEditing(null)}
               />
@@ -278,7 +278,9 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
           <div className="src-row" key={c.id}>
             {v?.snapshot ? <img src={v.snapshot} alt="" /> : <span className="t-snap-none" style={{ position: 'static', width: 96, aspectRatio: '16/9' }}>нет кадра</span>}
             <div>
-              <b>{c.name}</b>
+              <b>
+                {c.name} {c.code && <span className="mono src-code">{c.code}</span>}
+              </b>
               <small className={st === 'live' ? 'ok' : st === 'connecting' || st === 'idle' ? '' : 'bad'}>
                 {STATUS_LINE[st]}
                 {v?.message ? ` · ${v.message}` : ''}
@@ -361,15 +363,16 @@ export function CameraForm({
   initial,
   submitLabel = 'Проверить и сохранить',
 }: {
-  onAdd: (n: string, u: string, zoneId?: string | null) => Promise<void>
+  onAdd: (n: string, u: string, zoneId?: string | null, code?: string) => Promise<void>
   onCancel?: () => void
   onCheck: Probe
   zones?: ZoneItem[]
-  initial?: { name: string; url: string; zoneId: string | null }
+  initial?: { name: string; url: string; zoneId: string | null; code?: string }
   submitLabel?: string
 }) {
   const [name, setName] = useState(initial?.name ?? '')
   const [url, setUrl] = useState(initial?.url ?? '')
+  const [code, setCode] = useState(initial?.code ?? '')
   const [zoneId, setZoneId] = useState<string | null>(initial ? initial.zoneId : zones[0]?.id ?? null)
   const [state, setState] = useState<{ s: 'idle' | 'busy' | 'error' | 'warn'; msg?: string }>({ s: 'idle' })
   const rtsp = /^rtsp:\/\//i.test(url.trim())
@@ -380,7 +383,7 @@ export function CameraForm({
     try {
       // the address did not change: nothing to check again
       if (initial && url.trim() === initial.url.trim()) {
-        await onAdd(name.trim(), url.trim(), zoneId)
+        await onAdd(name.trim(), url.trim(), zoneId, code.trim())
         setState({ s: 'idle' })
         return
       }
@@ -389,10 +392,11 @@ export function CameraForm({
         setState({ s: 'warn', msg: `${r.message}. Камеру можно сохранить, но кадров не будет, пока связь не появится.` })
         return
       }
-      await onAdd(name.trim(), url.trim(), zoneId)
+      await onAdd(name.trim(), url.trim(), zoneId, code.trim())
       if (!initial) {
         setName('')
         setUrl('')
+        setCode('')
       }
       setState({ s: 'idle' })
       if (!initial) onCancel?.()
@@ -412,8 +416,12 @@ export function CameraForm({
           <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://10.20.1.11/mjpeg" required />
         </label>
       </div>
-      {zones.length > 0 && (
-        <div className="form-grid">
+      <div className="form-grid two-col">
+        <label>
+          Код
+          <input className="input mono" value={code} onChange={(e) => setCode(e.target.value)} placeholder="CAM-01" />
+        </label>
+        {zones.length > 0 && (
           <label>
             Зона
             <select className="select" value={zoneId ?? ''} onChange={(e) => setZoneId(e.target.value || null)}>
@@ -425,8 +433,8 @@ export function CameraForm({
               ))}
             </select>
           </label>
-        </div>
-      )}
+        )}
+      </div>
       {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/MJPEG-адрес или серверный шлюз.</p>}
       {state.msg && <p className={state.s === 'error' ? 'err-line' : 'hint'}>{state.msg}</p>}
       <div className="form-actions">
@@ -434,7 +442,7 @@ export function CameraForm({
           {state.s === 'busy' ? 'Проверяем…' : submitLabel}
         </button>
         {state.s === 'warn' && (
-          <button type="button" className="btn small" onClick={() => onAdd(name.trim(), url.trim(), zoneId).then(() => { setState({ s: 'idle' }); if (!initial) onCancel?.() }, (err) => setState({ s: 'error', msg: err.message }))}>
+          <button type="button" className="btn small" onClick={() => onAdd(name.trim(), url.trim(), zoneId, code.trim()).then(() => { setState({ s: 'idle' }); if (!initial) onCancel?.() }, (err) => setState({ s: 'error', msg: err.message }))}>
             Сохранить без проверки
           </button>
         )}

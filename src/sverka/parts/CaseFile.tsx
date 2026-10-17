@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Episode, EventStatus, Observation, Profile, Stage, UiEvent } from '../model'
-import { LV, STATUS_WORD, consequence, liveTitle, parseDescription, sevNow, stageDay } from '../model'
+import { LV, STATUS_WORD, consequence, liveTitle, parseDescription, sevNow, stageDay, toneOf } from '../model'
 import { MACH, type Code } from '../lib/machinery'
 import { durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
@@ -96,7 +96,7 @@ export function CaseFile({
         e.preventDefault()
         close()
       }
-      if ((ev.status !== 'pending' && !redo) || ev.sample) return
+      if ((ev.status !== 'pending' && !redo) || ev.sample || ev.kind === 'stream') return
       const m: Record<string, EventStatus> = { '1': 'confirmed', '2': 'false_positive', '3': 'in_progress' }
       if (m[e.key]) decide(m[e.key])
       if (e.key === 'Tab') {
@@ -128,6 +128,8 @@ export function CaseFile({
   }
 
   const sev = sevNow(ev, ep, obs.t, prof)
+  const tone = toneOf(ev) === 'info' ? 'info' : sev
+  const rec = ev.type === 'MISSING_RECOMMENDED'
   const r = ev.mach && prof ? prof.rules[ev.mach] : null
   const desc = parseDescription(ev.description)
   const day = stage ? stageDay(stage, ev.at) : 0
@@ -156,7 +158,7 @@ export function CaseFile({
       p: r ? (
         <>
           {MACH[ev.mach].name}: {LV[r.lvl].group.toLowerCase()} техника на этом этапе{r.edited ? <span className="dim"> (изменено, до изменения: {LV[r.base].label.toLowerCase()})</span> : ''}.
-          {ev.kind === 'missing' && ` Предупреждение через ${durShort(r.warnAfter * 1000)} без наблюдения, отклонение через ${durShort(r.errAfter * 1000)}.`}
+          {ev.kind === 'missing' && (rec ? ` Предупреждение через ${durShort(r.warnAfter * 1000)} без наблюдения; отсутствие рекомендуемой техники отклонением не становится.` : ` Предупреждение через ${durShort(r.warnAfter * 1000)} без наблюдения, отклонение через ${durShort(r.errAfter * 1000)}.`)}
         </>
       ) : (
         desc['Правило'] || 'Профиль этапа не загружен.'
@@ -171,7 +173,7 @@ export function CaseFile({
       ),
     })
   steps.push({
-    tone: sev,
+    tone,
     h: 'Наблюдение',
     p: (
       <>
@@ -186,10 +188,12 @@ export function CaseFile({
     p: desc['Качество данных'] || (ep ? `Сейчас кадры дают ${live} из ${obs.sources.length} источников, распознавание ${obs.model === 'ready' ? 'работает' : 'недоступно'}.` : 'Сведения о качестве данных для этого события не сохранены.'),
   })
   steps.push({
-    tone: sev,
+    tone,
     h: 'Вывод',
     p:
-      ev.kind === 'missing' && r && ep && !ep.to && sev !== 'err'
+      ev.kind === 'stream'
+        ? 'Событие видеопотока. Это сведения о камере, а не вывод о площадке, решение по нему не требуется.'
+        : ev.kind === 'missing' && !rec && r && ep && !ep.to && sev !== 'err'
         ? `${SEV_WORD[sev]}. Станет отклонением через ${durShort(Math.max(0, r.errAfter * 1000 - (obs.t - ep.from)))}, если ${MACH[ev.mach!].lower} не появится.`
         : `${SEV_WORD[sev]}.${ev.status !== 'pending' ? ` Решение: ${STATUS_WORD[ev.status].toLowerCase()}.` : ''}`,
   })
@@ -241,9 +245,9 @@ export function CaseFile({
         </div>
         <div className="case-body">
           <div className="case-top">
-            <span className="sev-tag" data-sev={sev}>
-              <SevIcon sev={sev} />
-              {SEV_WORD[sev]} · {ev.code} · {ev.zone ? `${ev.zone} · ` : ''}
+            <span className="sev-tag" data-sev={tone}>
+              <SevIcon sev={tone} />
+              {ev.kind === 'stream' ? 'Видеопоток' : SEV_WORD[sev]} · {ev.code} · {ev.zone ? `${ev.zone} · ` : ''}
               {hhmm(ev.at)}
             </span>
             <button type="button" className="close-x" onClick={close} aria-label="Закрыть">
@@ -254,7 +258,17 @@ export function CaseFile({
             <h2 id="caseTitle" tabIndex={-1}>
               {liveTitle(ev, ep, obs.t, true)}
             </h2>
-            <p className="lead">{ev.kind === 'missing' ? consequence(ev.mach) : ev.kind === 'oop' ? 'Техника на площадке не соответствует текущему этапу плана.' : ev.description}</p>
+            <p className="lead">
+              {ev.kind === 'missing'
+                ? consequence(ev.mach)
+                : ev.kind === 'oop'
+                  ? 'Техника на площадке не соответствует текущему этапу плана.'
+                  : ev.kind === 'stream'
+                    ? ev.type === 'STREAM_ONLINE'
+                      ? 'Камера снова присылает кадры, наблюдение по её зоне возобновилось.'
+                      : 'Пока кадров нет, по зоне этой камеры вывод об отсутствии техники не делается.'
+                    : ev.description}
+            </p>
           </div>
           <div>
             <span className="kicker">Как система пришла к выводу</span>
@@ -276,6 +290,12 @@ export function CaseFile({
               <div className="decided">
                 <span>
                   <b>Пример с сервера.</b> Сервер показывает его, пока журнал объекта пуст. Записи в базе нет, поэтому решение по нему не сохраняется.
+                </span>
+              </div>
+            ) : ev.kind === 'stream' ? (
+              <div className="decided">
+                <span>
+                  <b>Видеопоток.</b> Запись о сигнале камеры попадает в журнал и акт, решение по ней не принимается.
                 </span>
               </div>
             ) : ev.status !== 'pending' && !redo ? (
