@@ -15,7 +15,7 @@ from app.services.work_catalog import (
     parse_work_catalog,
 )
 
-CATALOG_PATH = Path("data/work_catalog.xlsx")
+CATALOG_PATH = Path(__file__).resolve().parents[2] / "data" / "work_catalog.xlsx"
 
 pytestmark = pytest.mark.skipif(
     not CATALOG_PATH.exists(),

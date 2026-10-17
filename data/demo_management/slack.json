@@ -1,0 +1,290 @@
+{
+  "schema_version": "1.0",
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "incident_id": null,
+  "as_of": "2026-10-16T05:00:00Z",
+  "data_mode": "demo",
+  "zone_id": "f4d0e5cf-a470-57f6-b5a7-eb3c4bd0f704",
+  "schedule_version": "demo-schedule-v1:slack",
+  "profile_version": "demo-profile-v1:slack",
+  "calendar": {
+    "timezone": "Europe/Moscow",
+    "shift_start": "08:00:00",
+    "shift_end": "16:00:00",
+    "working_weekdays": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "holidays": [],
+    "extra_working_dates": []
+  },
+  "tasks": [
+    {
+      "id": "A",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "schedule_task_id": null,
+      "name": "Земляные работы",
+      "remaining_work_hours": "8",
+      "earliest_start_work_hours": "0",
+      "planned_start": "2026-10-16T05:00:00Z",
+      "planned_end": "2026-10-16T13:00:00Z",
+      "completed": false,
+      "actual_finish_at": null
+    },
+    {
+      "id": "B",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "schedule_task_id": null,
+      "name": "Подготовка следующего этапа",
+      "remaining_work_hours": "8",
+      "earliest_start_work_hours": "16",
+      "planned_start": "2026-10-19T13:00:00Z",
+      "planned_end": "2026-10-20T13:00:00Z",
+      "completed": false,
+      "actual_finish_at": null
+    },
+    {
+      "id": "C",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "schedule_task_id": null,
+      "name": "Следующий этап",
+      "remaining_work_hours": "8",
+      "earliest_start_work_hours": "0",
+      "planned_start": "2026-10-20T13:00:00Z",
+      "planned_end": "2026-10-21T13:00:00Z",
+      "completed": false,
+      "actual_finish_at": null
+    },
+    {
+      "id": "D",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "schedule_task_id": null,
+      "name": "Параллельные работы",
+      "remaining_work_hours": "24",
+      "earliest_start_work_hours": "0",
+      "planned_start": "2026-10-16T05:00:00Z",
+      "planned_end": "2026-10-20T13:00:00Z",
+      "completed": false,
+      "actual_finish_at": null
+    },
+    {
+      "id": "M",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "schedule_task_id": null,
+      "name": "Контрольная точка",
+      "remaining_work_hours": "0",
+      "earliest_start_work_hours": "0",
+      "planned_start": "2026-10-21T13:00:00Z",
+      "planned_end": "2026-10-21T13:00:00Z",
+      "completed": false,
+      "actual_finish_at": null
+    }
+  ],
+  "dependencies": [
+    {
+      "predecessor_id": "A",
+      "successor_id": "B",
+      "kind": "FS",
+      "lag_work_hours": "0"
+    },
+    {
+      "predecessor_id": "B",
+      "successor_id": "C",
+      "kind": "FS",
+      "lag_work_hours": "0"
+    },
+    {
+      "predecessor_id": "C",
+      "successor_id": "M",
+      "kind": "FS",
+      "lag_work_hours": "0"
+    },
+    {
+      "predecessor_id": "D",
+      "successor_id": "M",
+      "kind": "FS",
+      "lag_work_hours": "0"
+    }
+  ],
+  "blocked_task_id": "A",
+  "milestone_task_id": "M",
+  "agreed_deadline_at": "2026-10-21T13:00:00Z",
+  "blockage_confirmation": "human_confirmed",
+  "confirmation_source": "demo:human-confirmation — условное подтверждение в демо эпизоде",
+  "rule": {
+    "version": "demo-rule-v1",
+    "source_ref": "demo:rule:v1",
+    "required_class": "dump_truck",
+    "applicable_task_ids": [
+      "A"
+    ],
+    "max_frame_age_minutes": 30,
+    "max_camera_skew_seconds": 120
+  },
+  "evidence": [
+    {
+      "source_ref": "demo:camera:1",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "zone_id": "f4d0e5cf-a470-57f6-b5a7-eb3c4bd0f704",
+      "camera_id": "d0ab407a-2f70-5633-951e-7e7dd9aa3638",
+      "captured_at": "2026-10-16T04:58:00Z",
+      "model_status": "valid",
+      "camera_status": "online",
+      "detected_classes": [
+        "excavator",
+        "person"
+      ],
+      "image_url": "/demo_management/camera-1.svg",
+      "origin": "demo_replay"
+    },
+    {
+      "source_ref": "demo:camera:2",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "zone_id": "f4d0e5cf-a470-57f6-b5a7-eb3c4bd0f704",
+      "camera_id": "1ae663a6-2b57-5736-af41-8b7677c0b373",
+      "captured_at": "2026-10-16T04:59:00Z",
+      "model_status": "valid",
+      "camera_status": "online",
+      "detected_classes": [
+        "excavator",
+        "person"
+      ],
+      "image_url": "/demo_management/camera-2.svg",
+      "origin": "demo_replay"
+    }
+  ],
+  "resources": [
+    {
+      "resource_id": "excavator",
+      "name": "Экскаватор (условный оплачиваемый ресурс)",
+      "quantity": "1",
+      "idle_fraction": "1",
+      "paid_and_affected": true,
+      "rates": [
+        {
+          "id": "excavator-hour",
+          "amount": "8000",
+          "currency": "RUB",
+          "unit": "work_hour",
+          "valid_from": null,
+          "valid_to": null,
+          "source": "demo:rates — условные входы контрольного примера",
+          "confirmation": "demo"
+        }
+      ],
+      "cost_group": "excavator_idle",
+      "source": "demo:rates"
+    },
+    {
+      "resource_id": "crew",
+      "name": "Бригада (условный оплачиваемый ресурс)",
+      "quantity": "1",
+      "idle_fraction": "1",
+      "paid_and_affected": true,
+      "rates": [
+        {
+          "id": "crew-hour",
+          "amount": "4000",
+          "currency": "RUB",
+          "unit": "work_hour",
+          "valid_from": null,
+          "valid_to": null,
+          "source": "demo:rates — условные входы контрольного примера",
+          "confirmation": "demo"
+        }
+      ],
+      "cost_group": "crew_idle",
+      "source": "demo:rates"
+    }
+  ],
+  "extension_rates": [
+    {
+      "id": "extension-hour",
+      "amount": "4000",
+      "currency": "RUB",
+      "unit": "work_hour",
+      "valid_from": null,
+      "valid_to": null,
+      "source": "demo:rates — условные входы контрольного примера",
+      "confirmation": "demo"
+    }
+  ],
+  "extension_cost_group": "site_overhead",
+  "extension_excludes_resource_costs": true,
+  "scenarios": [
+    {
+      "id": "fast",
+      "title": "Быстрое вмешательство",
+      "recovery_work_hours": "2",
+      "intervention_costs": [
+        {
+          "id": "mobilization",
+          "title": "Условная ускоренная мобилизация",
+          "amount": "20000",
+          "currency": "RUB",
+          "cost_group": "mobilization",
+          "source": "demo:action — условная разовая стоимость"
+        }
+      ],
+      "other_costs": [],
+      "action_allowed": true,
+      "assumptions": [
+        "demo:scenario:fast: восстановление через 2 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+      ]
+    },
+    {
+      "id": "late",
+      "title": "Более позднее вмешательство",
+      "recovery_work_hours": "4",
+      "intervention_costs": [
+        {
+          "id": "mobilization",
+          "title": "Условная ускоренная мобилизация",
+          "amount": "20000",
+          "currency": "RUB",
+          "cost_group": "mobilization",
+          "source": "demo:action — условная разовая стоимость"
+        }
+      ],
+      "other_costs": [],
+      "action_allowed": true,
+      "assumptions": [
+        "demo:scenario:late: восстановление через 4 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+      ]
+    },
+    {
+      "id": "no_action",
+      "title": "Без дополнительного действия",
+      "recovery_work_hours": "8",
+      "intervention_costs": [],
+      "other_costs": [],
+      "action_allowed": true,
+      "assumptions": [
+        "demo:scenario:no_action: восстановление через 8 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+      ]
+    }
+  ],
+  "no_action_scenario_id": "no_action",
+  "assumptions": [
+    "ДЕМОНСТРАЦИЯ: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+    "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+    "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+    "Источник demo:rates: 8000 и 4000 RUB/рабочий час простоя; 4000 RUB/рабочий час продления, исключая экскаватор и бригаду.",
+    "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+  ],
+  "source_refs": [
+    "demo:schedule",
+    "demo:rates",
+    "demo:action",
+    "demo:human-confirmation",
+    "demo:rule:v1",
+    "demo:camera:1",
+    "demo:camera:2",
+    "demo:scenario:fast",
+    "demo:scenario:late",
+    "demo:scenario:no_action"
+  ]
+}

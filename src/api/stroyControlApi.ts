@@ -69,6 +69,9 @@ export interface StageProbabilityResponse {
 export interface IncidentAlertItem {
   id: string
   code: string
+  zone_id?: string | null
+  first_seen_at?: string
+  confidence?: number
   project_id?: string
   stage_id?: string | null
   stage_name?: string | null
@@ -79,6 +82,13 @@ export interface IncidentAlertItem {
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
   discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'NEUTRAL_INFO' | string
   status?: string | null
+  assigned_user_id?: string | null
+  assignee_name?: string | null
+  sla_deadline?: string | null
+  verification_status?: string
+  last_checked_at?: string | null
+  escalated_at?: string | null
+  verification_details?: Record<string, unknown>
   machinery_type?: string
   stage_probability?: number
   observed_count?: number
@@ -90,7 +100,13 @@ export interface IncidentAlertItem {
 }
 
 export interface IncidentCreatePayload {
-  project_id?: string
+  project_id: string
+  zone_id?: string | null
+  camera_id?: string | null
+  captured_at?: string
+  model_status?: 'valid' | 'unavailable' | 'failed'
+  rule_version?: string
+  observation_key?: string
   stage_id?: string | null
   stage_name?: string | null
   zone_name?: string | null
@@ -146,6 +162,49 @@ export interface ProjectItem {
   cameras: CameraItem[]
   stages_count: number
   owner_username?: string | null
+  alert_error_deadline_minutes?: number
+  alert_warning_deadline_minutes?: number
+  escalation_user_id?: string | null
+}
+
+export interface ProjectAlertSettings {
+  project_id: string
+  owner_username: string | null
+  alert_error_deadline_minutes: number
+  alert_warning_deadline_minutes: number
+  escalation_user_id: string | null
+}
+
+export interface AlertNotificationItem {
+  id: string
+  incident_id: string
+  project_id: string
+  incident_code: string
+  incident_status: string
+  assignee_name: string | null
+  sla_deadline: string | null
+  verification_status: string
+  escalated_at: string | null
+  kind: 'assigned' | 'verified' | 'escalated'
+  title: string
+  body: string
+  created_at: string
+  read_at: string | null
+  email_status: string
+}
+
+export interface IncidentEventItem {
+  id: string
+  event_type: string
+  comment: string | null
+  created_at: string
+  user_id: string | null
+}
+
+export interface AdminRecipient {
+  id: string
+  username: string
+  name: string
 }
 
 function getApiBaseUrl(): string {
@@ -198,6 +257,7 @@ export interface UserProfile {
   username: string
   name: string
   role: string
+  email?: string | null
   created_at: string
 }
 
@@ -244,7 +304,7 @@ export async function registerUser(data: {
 }): Promise<AuthTokenResponse> {
   const res = await fetch(`${API_PREFIX}/auth/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -262,7 +322,7 @@ export async function loginUser(data: {
 }): Promise<AuthTokenResponse> {
   const res = await fetch(`${API_PREFIX}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -297,20 +357,53 @@ export function logoutUser(): void {
   setStoredToken(null)
 }
 
+export async function updateMyEmail(email: string | null): Promise<UserProfile> {
+  const res = await fetch(`${API_PREFIX}/auth/me/email`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ email }),
+  })
+  if (!res.ok) throw new Error('Не удалось сохранить email')
+  return await res.json()
+}
+
+export async function fetchAdminRecipients(): Promise<AdminRecipient[]> {
+  const res = await fetch(`${API_PREFIX}/auth/admins`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить администраторов')
+  return await res.json()
+}
+
+export async function updateProjectAlertSettings(
+  projectId: string,
+  settings: Omit<ProjectAlertSettings, 'project_id'>
+): Promise<ProjectAlertSettings> {
+  const res = await fetch(`${API_PREFIX}/projects/${projectId}/alert-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(settings),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}))
+    throw new Error(error.detail || 'Не удалось сохранить настройки алертов')
+  }
+  return await res.json()
+}
+
 // ----------------------------------------------------------------------------
 // Projects, Construction Sites (Zones), and Cameras API
 // ----------------------------------------------------------------------------
 
-export async function fetchProjects(): Promise<ProjectItem[]> {
-  try {
-    const res = await fetch(`${API_PREFIX}/projects`, {
-      headers: { ...getAuthHeaders() },
-    })
-    if (res.ok) return await res.json()
-  } catch {
-    // offline fallback
+async function checkedJson<T>(url: string, init: RequestInit, message: string): Promise<T> {
+  const response = await fetch(url, { ...init, headers: { ...getAuthHeaders(), ...init.headers } })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(typeof detail?.detail === 'string' ? detail.detail : message)
   }
-  return []
+  return response.json() as Promise<T>
+}
+
+export async function fetchProjects(): Promise<ProjectItem[]> {
+  return checkedJson(`${API_PREFIX}/projects`, {}, 'Не удалось загрузить объекты')
 }
 
 export async function createProject(data: {
@@ -344,7 +437,7 @@ export async function updateProject(
 ): Promise<ProjectItem> {
   const res = await fetch(`${API_PREFIX}/projects/${projectId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -362,13 +455,7 @@ export async function deleteProject(projectId: string): Promise<void> {
 }
 
 export async function fetchProjectZones(projectId: string): Promise<ZoneItem[]> {
-  try {
-    const res = await fetch(`${API_PREFIX}/projects/${projectId}/zones`)
-    if (res.ok) return await res.json()
-  } catch {
-    // offline
-  }
-  return []
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/zones`, {}, 'Не удалось загрузить площадки')
 }
 
 export async function createProjectZone(
@@ -377,7 +464,7 @@ export async function createProjectZone(
 ): Promise<ZoneItem> {
   const res = await fetch(`${API_PREFIX}/projects/${projectId}/zones`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -399,7 +486,7 @@ export async function updateZone(
 ): Promise<ZoneItem> {
   const res = await fetch(`${API_PREFIX}/projects/${projectId}/zones/${zoneId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -419,50 +506,18 @@ export async function deleteZone(projectId: string, zoneId: string): Promise<voi
 }
 
 export async function fetchCameras(projectId?: string): Promise<CameraItem[]> {
-  try {
-    const url = projectId
-      ? `${API_PREFIX}/videos/cameras?project_id=${projectId}`
-      : `${API_PREFIX}/videos/cameras`
-    const res = await fetch(url)
-    if (res.ok) return await res.json()
-  } catch {
-    // offline
-  }
-  return []
+  if (!isValidUuid(projectId)) throw new Error('Выберите объект')
+  return checkedJson(`${API_PREFIX}/videos/cameras?project_id=${projectId}`, {}, 'Не удалось загрузить камеры')
 }
 
 export async function createCamera(
   projectId: string,
   data: { name: string; code?: string; stream_url?: string; zone_id?: string }
 ): Promise<CameraItem> {
-  const cleanZoneId = isValidUuid(data.zone_id) ? data.zone_id : undefined
-  const payload = {
-    ...data,
-    zone_id: cleanZoneId,
-  }
-  try {
-    const res = await fetch(`${API_PREFIX}/projects/${projectId}/cameras`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (e) {
-    console.warn('Backend createCamera request failed:', e)
-  }
-
-  // Graceful local fallback so user camera addition always succeeds
-  return {
-    id: `cam-${Date.now()}`,
-    project_id: projectId,
-    zone_id: cleanZoneId || null,
-    code: data.code || `CAM-${Math.floor(10 + Math.random() * 90)}`,
-    name: data.name,
-    stream_url: data.stream_url || 'rtsp://127.0.0.1:8554/live/stroy_cam',
-    status: 'online',
-  }
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/cameras`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ...data, zone_id: isValidUuid(data.zone_id) ? data.zone_id : undefined }),
+  }, 'Не удалось сохранить камеру')
 }
 
 export async function updateCamera(
@@ -470,33 +525,10 @@ export async function updateCamera(
   cameraId: string,
   data: { name?: string; code?: string; stream_url?: string; zone_id?: string | null }
 ): Promise<CameraItem> {
-  const cleanZoneId = isValidUuid(data.zone_id) ? data.zone_id : null
-  const payload = {
-    ...data,
-    zone_id: cleanZoneId,
-  }
-  try {
-    const res = await fetch(`${API_PREFIX}/projects/${projectId}/cameras/${cameraId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (res.ok) {
-      return await res.json()
-    }
-  } catch (e) {
-    console.warn('Backend updateCamera request failed:', e)
-  }
-
-  return {
-    id: cameraId,
-    project_id: projectId,
-    zone_id: cleanZoneId,
-    code: data.code || 'CAM-01',
-    name: data.name || 'Камера',
-    stream_url: data.stream_url || 'rtsp://127.0.0.1:8554/live/stroy_cam',
-    status: 'online',
-  }
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/cameras/${cameraId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ...data, zone_id: isValidUuid(data.zone_id) ? data.zone_id : null }),
+  }, 'Не удалось сохранить изменения камеры')
 }
 
 export async function deleteCamera(projectId: string, cameraId: string): Promise<void> {
@@ -620,49 +652,29 @@ export const DEMO_REFERENCE_STAGES: StageItem[] = [
 ]
 
 export async function fetchStages(projectId?: string): Promise<StageItem[]> {
-  try {
-    const validId = isValidUuid(projectId) ? projectId : undefined
-    const url = validId
-      ? `${API_PREFIX}/schedule/stages?project_id=${validId}`
-      : `${API_PREFIX}/schedule/stages`
-    const res = await fetch(url)
-    if (res.ok) {
-      const data = await res.json()
-      if (Array.isArray(data) && data.length > 0) return data
-    }
-  } catch {
-    // Return empty fallback
-  }
-  return []
+  if (!isValidUuid(projectId)) throw new Error('Выберите объект')
+  return checkedJson(`${API_PREFIX}/schedule/stages?project_id=${projectId}`, {}, 'Не удалось загрузить график')
 }
 
 export async function loadDemoSchedule(projectId?: string): Promise<StageItem[]> {
-  try {
-    const validId = isValidUuid(projectId) ? projectId : undefined
-    const url = validId
-      ? `${API_PREFIX}/schedule/load-demo?project_id=${validId}`
-      : `${API_PREFIX}/schedule/load-demo`
-    const res = await fetch(url, { method: 'POST' })
-    if (res.ok) {
-      const data = await res.json()
-      const stages = data.stages || data
-      if (Array.isArray(stages) && stages.length > 0) return stages
-    }
-  } catch {
-    // fallback below
-  }
-  return DEMO_REFERENCE_STAGES
+  if (!isValidUuid(projectId)) throw new Error('Выберите объект')
+  const data = await checkedJson<{ stages: StageItem[] } | StageItem[]>(
+    `${API_PREFIX}/schedule/load-demo?project_id=${projectId}`, { method: 'POST' }, 'Не удалось загрузить демо-план'
+  )
+  return Array.isArray(data) ? data : data.stages
 }
 
 export async function uploadScheduleFile(file: File, projectId?: string): Promise<StageItem[]> {
   const formData = new FormData()
   formData.append('file', file)
-  const validId = isValidUuid(projectId) ? projectId : undefined
+  if (!isValidUuid(projectId)) throw new Error('Выберите объект')
+  const validId = projectId
   const url = validId
     ? `${API_PREFIX}/schedule/upload?project_id=${validId}`
     : `${API_PREFIX}/schedule/upload`
   const res = await fetch(url, {
     method: 'POST',
+    headers: getAuthHeaders(),
     body: formData,
   })
   if (!res.ok) {
@@ -675,61 +687,31 @@ export async function uploadScheduleFile(file: File, projectId?: string): Promis
 }
 
 export async function clearSchedule(projectId?: string): Promise<void> {
-  const validId = isValidUuid(projectId) ? projectId : undefined
-  const url = validId
-    ? `${API_PREFIX}/schedule/clear?project_id=${validId}`
-    : `${API_PREFIX}/schedule/clear`
-  await fetch(url, { method: 'POST' })
+  if (!isValidUuid(projectId)) throw new Error('Выберите объект')
+  const response = await fetch(`${API_PREFIX}/schedule/clear?project_id=${projectId}`, { method: 'POST', headers: getAuthHeaders() })
+  if (!response.ok) throw new Error('Не удалось очистить график')
 }
 
 export async function updateStageDates(
   stageId: string,
   data: { name?: string; planned_start?: string; planned_end?: string; duration_days?: number }
 ): Promise<StageItem> {
+  if (!isValidUuid(stageId)) throw new Error('Этап не найден')
   const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Ошибка обновления этапа')
   return await res.json()
 }
 
-export async function cascadeShiftStages(
-  delayedStageId: string,
-  delayDays: number
-): Promise<CascadeShiftResponse> {
-  try {
-    const res = await fetch(`${API_PREFIX}/schedule/cascade-shift`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ delayed_stage_id: delayedStageId, delay_days: delayDays }),
-    })
-    if (res.ok) return await res.json()
-  } catch {
-    // Local calculation fallback if server is offline
-  }
-
-  const stages = getFallbackStages()
-  const targetIndex = stages.findIndex((s) => s.id === delayedStageId)
-  if (targetIndex >= 0) {
-    for (let i = targetIndex + 1; i < stages.length; i++) {
-      const start = new Date(stages[i].planned_start)
-      const end = new Date(stages[i].planned_end)
-      start.setDate(start.getDate() + delayDays)
-      end.setDate(end.getDate() + delayDays)
-      stages[i].planned_start = start.toISOString().split('T')[0]
-      stages[i].planned_end = end.toISOString().split('T')[0]
-    }
-  }
-
-  return {
-    delayed_stage_id: delayedStageId,
-    delay_days: delayDays,
-    shifted_stage_count: stages.length - (targetIndex + 1),
-    updated_stages: stages,
-    message: `Успешно сдвинуты последующие этапы на ${delayDays} дн.`,
-  }
+export async function cascadeShiftStages(delayedStageId: string, delayDays: number): Promise<CascadeShiftResponse> {
+  if (!isValidUuid(delayedStageId)) throw new Error('Этап не найден')
+  return checkedJson(`${API_PREFIX}/schedule/cascade-shift`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ delayed_stage_id: delayedStageId, delay_days: delayDays }),
+  }, 'Не удалось сохранить перенос сроков')
 }
 
 // ----------------------------------------------------------------------------
@@ -740,26 +722,7 @@ export async function uploadVideoAsset(file: File, startTimestamp: string): Prom
   const formData = new FormData()
   formData.append('file', file)
   formData.append('start_timestamp', startTimestamp)
-
-  try {
-    const res = await fetch(`${API_PREFIX}/videos/upload`, {
-      method: 'POST',
-      body: formData,
-    })
-    if (res.ok) return await res.json()
-  } catch {
-    // Fallback mock
-  }
-
-  return {
-    video_id: 'vid-demo-01',
-    filename: file.name,
-    start_timestamp: startTimestamp,
-    duration_seconds: 120.0,
-    fps: 25.0,
-    status: 'READY',
-    message: 'Видео зарегистрировано в локальном режиме',
-  }
+  return checkedJson(`${API_PREFIX}/videos/upload`, { method: 'POST', body: formData }, 'Не удалось сохранить видеозапись')
 }
 
 export async function syncVideoPlayback(
@@ -816,134 +779,41 @@ function saveLocalOverrides(): void {
   }
 }
 
-function applyLocalOverridesToResponse(resp: StageProbabilityResponse, stageId: string): void {
-  const overrides = LOCAL_PROBABILITY_OVERRIDES[stageId]
-  if (!overrides) return
-  const statusMeta: Record<string, { prob: number; level: string }> = {
-    MANDATORY: { prob: 0.95, level: 'Обязательная' },
-    RECOMMENDED: { prob: 0.75, level: 'Рекомендованная' },
-    NEUTRAL: { prob: 0.40, level: 'Допустимая' },
-    UNCHARACTERISTIC: { prob: 0.05, level: 'Не допускается' },
-  }
-  resp.probabilities = resp.probabilities.map((item) => {
-    const ov = overrides[item.machinery_code]
-    if (ov && statusMeta[ov]) {
-      return {
-        ...item,
-        probability: statusMeta[ov].prob,
-        requirement_level: statusMeta[ov].level,
-        classification: ov as any,
-      }
-    }
-    return item
-  })
-}
 
-export function getStageCustomOverrides(stageId?: string, stageName?: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  if (stageName && LOCAL_PROBABILITY_OVERRIDES[stageName]) {
-    Object.assign(result, LOCAL_PROBABILITY_OVERRIDES[stageName])
-  }
-  if (stageId && LOCAL_PROBABILITY_OVERRIDES[stageId]) {
-    Object.assign(result, LOCAL_PROBABILITY_OVERRIDES[stageId])
-  }
-  return result
+export function getStageCustomOverrides(stageId?: string, _stageName?: string): Record<string, string> {
+  return stageId ? { ...LOCAL_PROBABILITY_OVERRIDES[stageId] } : {}
 }
 
 export async function fetchStageProbabilities(stageId: string): Promise<StageProbabilityResponse> {
-  const hasLocal = Boolean(LOCAL_PROBABILITY_OVERRIDES[stageId] && Object.keys(LOCAL_PROBABILITY_OVERRIDES[stageId]).length > 0)
-  try {
-    const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`)
-    if (res.ok) {
-      const data: StageProbabilityResponse = await res.json()
-      if (data.has_custom_override) {
-        return data
-      }
-      // If server explicitly confirmed NO overrides in DB, clean any stale local override
-      if (hasLocal && data.has_custom_override === false) {
-        delete LOCAL_PROBABILITY_OVERRIDES[stageId]
-        saveLocalOverrides()
-      }
-      return {
-        ...data,
-        has_custom_override: false,
-      }
-    }
-  } catch {
-    // Fallback probability calculation
-  }
-  const fallback = getFallbackProbabilities(stageId)
-  if (hasLocal) {
-    applyLocalOverridesToResponse(fallback, stageId)
-  }
-  return {
-    ...fallback,
-    has_custom_override: hasLocal,
-  }
+  if (!isValidUuid(stageId)) throw new Error('Этап не найден')
+  const data = await checkedJson<StageProbabilityResponse>(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {}, 'Не удалось загрузить правила контроля')
+  if (data.stage_id !== stageId) throw new Error('Сервер вернул правила другого этапа')
+  const cache = Object.fromEntries(data.probabilities.map(item => [item.machinery_code, item.classification]))
+  LOCAL_PROBABILITY_OVERRIDES[stageId] = cache
+  saveLocalOverrides()
+  return data
 }
 
 export async function updateStageProbabilities(
-  stageId: string,
-  overrides: Record<string, string | number>,
-  stageName?: string
+  stageId: string, overrides: Record<string, string | number>, _stageName?: string
 ): Promise<StageProbabilityResponse> {
-  const stringOverrides: Record<string, string> = {}
-  for (const [k, v] of Object.entries(overrides)) {
-    stringOverrides[k] = String(v)
-  }
-  LOCAL_PROBABILITY_OVERRIDES[stageId] = {
-    ...(LOCAL_PROBABILITY_OVERRIDES[stageId] || {}),
-    ...stringOverrides,
-  }
-  if (stageName && stageName !== stageId) {
-    LOCAL_PROBABILITY_OVERRIDES[stageName] = {
-      ...(LOCAL_PROBABILITY_OVERRIDES[stageName] || {}),
-      ...stringOverrides,
-    }
-  }
+  if (!isValidUuid(stageId)) throw new Error('Этап не найден')
+  const data = await checkedJson<StageProbabilityResponse>(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ overrides }),
+  }, 'Не удалось сохранить правила контроля')
+  if (data.stage_id !== stageId) throw new Error('Сервер вернул правила другого этапа')
+  LOCAL_PROBABILITY_OVERRIDES[stageId] = Object.fromEntries(data.probabilities.map(item => [item.machinery_code, item.classification]))
   saveLocalOverrides()
-
-  try {
-    const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ overrides }),
-    })
-    if (res.ok) {
-      const data = await res.json()
-      return { ...data, has_custom_override: true }
-    }
-  } catch {
-    // offline fallback
-  }
-  const fallback = getFallbackProbabilities(stageId)
-  applyLocalOverridesToResponse(fallback, stageId)
-  return { ...fallback, has_custom_override: true }
+  return data
 }
 
-export async function resetStageProbabilities(
-  stageId: string,
-  stageName?: string
-): Promise<StageProbabilityResponse> {
-  delete LOCAL_PROBABILITY_OVERRIDES[stageId]
-  if (stageName) {
-    delete LOCAL_PROBABILITY_OVERRIDES[stageName]
-  }
+export async function resetStageProbabilities(stageId: string, _stageName?: string): Promise<StageProbabilityResponse> {
+  if (!isValidUuid(stageId)) throw new Error('Этап не найден')
+  const data = await checkedJson<StageProbabilityResponse>(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, { method: 'DELETE' }, 'Не удалось восстановить правила контроля')
+  if (data.stage_id !== stageId) throw new Error('Сервер вернул правила другого этапа')
+  LOCAL_PROBABILITY_OVERRIDES[stageId] = Object.fromEntries(data.probabilities.map(item => [item.machinery_code, item.classification]))
   saveLocalOverrides()
-
-  try {
-    const res = await fetch(`${API_PREFIX}/schedule/stages/${stageId}/probabilities`, {
-      method: 'DELETE',
-    })
-    if (res.ok) {
-      const data = await res.json()
-      return { ...data, has_custom_override: false }
-    }
-  } catch {
-    // offline fallback
-  }
-  const fallback = getFallbackProbabilities(stageId)
-  return { ...fallback, has_custom_override: false }
+  return data
 }
 
 // ----------------------------------------------------------------------------
@@ -965,7 +835,7 @@ export async function updateIncidentConfig(
 ): Promise<{ violation_evaluation_window_seconds: number }> {
   const res = await fetch(`${API_PREFIX}/incidents/config`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ violation_evaluation_window_seconds: seconds }),
   })
   if (!res.ok) throw new Error('Ошибка обновления периода фиксации нарушений')
@@ -975,7 +845,7 @@ export async function updateIncidentConfig(
 export async function createIncident(data: IncidentCreatePayload): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Ошибка регистрации инцидента')
@@ -1062,21 +932,15 @@ function normalizeIncidentItem(item: IncidentAlertItem): IncidentAlertItem {
 }
 
 export async function fetchIncidents(projectId?: string): Promise<IncidentAlertItem[]> {
-  try {
-    const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
-    const res = await fetch(url)
-    if (res.ok) {
-      const data: IncidentAlertItem[] = await res.json()
-      return data.map(normalizeIncidentItem)
-    }
-  } catch {
-    // Return mock incidents
-  }
-  return getFallbackIncidents().map(normalizeIncidentItem)
+  const url = projectId ? `${API_PREFIX}/incidents?project_id=${projectId}` : `${API_PREFIX}/incidents`
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить инциденты')
+  const data: IncidentAlertItem[] = await res.json()
+  return data.map(normalizeIncidentItem)
 }
 
 export async function fetchIncidentAlbum(incidentId: string): Promise<IncidentAlbumData> {
-  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`)
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/album`, { headers: getAuthHeaders() })
   if (!res.ok) throw new Error('Ошибка получения альбома инцидента')
   return await res.json()
 }
@@ -1087,10 +951,30 @@ export async function updateIncidentStatus(
 ): Promise<IncidentAlertItem> {
   const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/status`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ status }),
   })
   if (!res.ok) throw new Error('Ошибка обновления статуса инцидента')
+  return await res.json()
+}
+
+export async function fetchAlerts(): Promise<AlertNotificationItem[]> {
+  const res = await fetch(`${API_PREFIX}/alerts`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить алерты')
+  return await res.json()
+}
+
+export async function markAlertRead(alertId: string): Promise<void> {
+  const res = await fetch(`${API_PREFIX}/alerts/${alertId}/read`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error('Не удалось отметить алерт прочитанным')
+}
+
+export async function fetchIncidentEvents(incidentId: string): Promise<IncidentEventItem[]> {
+  const res = await fetch(`${API_PREFIX}/incidents/${incidentId}/events`, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error('Не удалось загрузить историю инцидента')
   return await res.json()
 }
 
@@ -1100,131 +984,6 @@ export async function updateIncidentStatus(
 
 function getFallbackStages(): StageItem[] {
   return []
-}
-
-function getFallbackProbabilities(stageId: string): StageProbabilityResponse {
-  const isExcavation = stageId.includes('02')
-  return {
-    stage_id: stageId,
-    stage_name: isExcavation ? 'Выемка грунта котлована под фундамент' : 'Строительный этап СМР',
-    matched_catalog_stage: isExcavation ? 'Выемка грунта котлована' : 'Общестроительные работы',
-    similarity_confidence: 0.98,
-    top_machinery: isExcavation ? ['Экскаватор', 'Самосвал', 'Бульдозер'] : ['Башенный кран', 'Бетононасос', 'Автобетоносмеситель'],
-    probabilities: [
-      {
-        machinery_code: 'MACHINERY_EXCAVATOR',
-        machinery_name_ru: 'Экскаватор',
-        probability: isExcavation ? 0.96 : 0.08,
-        classification: isExcavation ? 'MANDATORY' : 'UNCHARACTERISTIC',
-        requirement_level: isExcavation ? 'Обязательная' : 'Не допускается',
-      },
-      {
-        machinery_code: 'MACHINERY_DUMP_TRUCK',
-        machinery_name_ru: 'Самосвал',
-        probability: isExcavation ? 0.92 : 0.35,
-        classification: isExcavation ? 'MANDATORY' : 'NEUTRAL',
-        requirement_level: isExcavation ? 'Обязательная' : 'Допустимая',
-      },
-      {
-        machinery_code: 'MACHINERY_BULLDOZER',
-        machinery_name_ru: 'Бульдозер',
-        probability: isExcavation ? 0.84 : 0.12,
-        classification: isExcavation ? 'MANDATORY' : 'UNCHARACTERISTIC',
-        requirement_level: isExcavation ? 'Обязательная' : 'Не допускается',
-      },
-      {
-        machinery_code: 'MACHINERY_LOADER',
-        machinery_name_ru: 'Погрузчик',
-        probability: 0.72,
-        classification: 'RECOMMENDED',
-        requirement_level: 'Рекомендованная',
-      },
-      {
-        machinery_code: 'MACHINERY_ROLLER',
-        machinery_name_ru: 'Каток',
-        probability: isExcavation ? 0.45 : 0.10,
-        classification: isExcavation ? 'NEUTRAL' : 'UNCHARACTERISTIC',
-        requirement_level: isExcavation ? 'Допустимая' : 'Не допускается',
-      },
-      {
-        machinery_code: 'MACHINERY_BACKHOE_LOADER',
-        machinery_name_ru: 'Экскаватор-погрузчик',
-        probability: 0.65,
-        classification: 'RECOMMENDED',
-        requirement_level: 'Рекомендованная',
-      },
-      {
-        machinery_code: 'MACHINERY_TRUCK_CRANE',
-        machinery_name_ru: 'Автокран',
-        probability: isExcavation ? 0.30 : 0.85,
-        classification: isExcavation ? 'NEUTRAL' : 'MANDATORY',
-        requirement_level: isExcavation ? 'Допустимая' : 'Обязательная',
-      },
-      {
-        machinery_code: 'MACHINERY_CONCRETE_MIXER',
-        machinery_name_ru: 'Автобетоносмеситель',
-        probability: isExcavation ? 0.10 : 0.90,
-        classification: isExcavation ? 'UNCHARACTERISTIC' : 'MANDATORY',
-        requirement_level: isExcavation ? 'Не допускается' : 'Обязательная',
-      },
-      {
-        machinery_code: 'MACHINERY_TOWER_CRANE',
-        machinery_name_ru: 'Башенный кран',
-        probability: isExcavation ? 0.05 : 0.95,
-        classification: isExcavation ? 'UNCHARACTERISTIC' : 'MANDATORY',
-        requirement_level: isExcavation ? 'Не допускается' : 'Обязательная',
-      },
-      {
-        machinery_code: 'MACHINERY_CONCRETE_PUMP',
-        machinery_name_ru: 'Бетононасос',
-        probability: isExcavation ? 0.05 : 0.92,
-        classification: isExcavation ? 'UNCHARACTERISTIC' : 'MANDATORY',
-        requirement_level: isExcavation ? 'Не допускается' : 'Обязательная',
-      },
-      {
-        machinery_code: 'MACHINERY_GRADER',
-        machinery_name_ru: 'Автогрейдер',
-        probability: 0.06,
-        classification: 'UNCHARACTERISTIC',
-        requirement_level: 'Не допускается',
-      },
-    ],
-  }
-}
-
-function getFallbackIncidents(): IncidentAlertItem[] {
-  return [
-    {
-      id: 'inc-001',
-      code: 'INC-042',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'ERROR',
-      discrepancy_type: 'MISSING_MANDATORY',
-      machinery_type: 'Экскаватор',
-      stage_probability: 0.96,
-      observed_count: 0,
-      snapshot_url: '/media/snapshots/inc_042.jpg',
-      album_photos: [
-        { url: '/media/snapshots/inc_042.jpg', camera_name: 'CAM-03 · Котлован (основной ракурс)', is_primary: true },
-        { url: '/media/snapshots/inc_042_cam2.jpg', camera_name: 'CAM-01 · Въезд на стройплощадку', is_primary: false },
-      ],
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'inc-002',
-      code: 'INC-043',
-      stage_id: 'stg-02',
-      stage_name: 'Выемка грунта котлована под фундамент',
-      severity: 'WARNING',
-      discrepancy_type: 'MISSING_RECOMMENDED',
-      machinery_type: 'Погрузчик',
-      stage_probability: 0.72,
-      observed_count: 0,
-      album_photos: [],
-      created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    },
-  ]
 }
 
 export interface DetectionBoxItem {
@@ -1265,6 +1024,7 @@ export async function detectFrameImage(
 
   const response = await fetch(`${API_PREFIX}/videos/detect-frame`, {
     method: 'POST',
+    headers: getAuthHeaders(),
     body: formData,
   })
 
@@ -1276,7 +1036,7 @@ export async function detectFrameImage(
 }
 
 /**
- * Выбирает текущий этап строительства исходя из текущей календарной даты (по умолчанию 2026-09-24).
+ * Выбирает этап по реальной календарной дате или явно переданному времени записи.
  * Логика:
  * 1. Этап, в интервал которого попадает текущая дата (planned_start <= date <= planned_end).
  * 2. Этап со статусом 'active' или 'in_progress'.
@@ -1289,13 +1049,8 @@ export function getCurrentStageByDate(
 ): StageItem | undefined {
   if (!stages || stages.length === 0) return undefined
 
-  // Если системный год меньше 2026, используем 2026-09-24 как рабочую дату системы
-  const effectiveDate =
-    referenceDate.getFullYear() < 2026
-      ? new Date('2026-09-24T12:00:00Z')
-      : referenceDate
-
-  const refTime = effectiveDate.getTime()
+  const refTime = referenceDate.getTime()
+  if (!Number.isFinite(refTime)) return undefined
 
   // 1. Ищем этап, где дата попадает в плановые сроки
   const matched = stages.find((s) => {

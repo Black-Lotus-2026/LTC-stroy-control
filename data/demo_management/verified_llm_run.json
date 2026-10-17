@@ -1,0 +1,1103 @@
+{
+  "id": "0d64197f-bf4f-49a0-87f3-b3d9a7393f9d",
+  "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+  "incident_id": "7aaf3b4f-33d5-4197-b4e6-4aa8a15ef662",
+  "parent_run_id": null,
+  "as_of": "2026-10-16T08:00:00+03:00",
+  "mode": "llm",
+  "effective_mode": "llm",
+  "status": "partial",
+  "input_hash": "78d00962031286de7e3d7536fed48a79da908bb24d51354ce9764de9e27d83fe",
+  "assessment": {
+    "verdict": "supported_risk",
+    "hypotheses": [],
+    "observations": [
+      {
+        "claim": "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой.",
+        "source_refs": [
+          "demo:camera:1"
+        ]
+      },
+      {
+        "claim": "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой.",
+        "source_refs": [
+          "demo:camera:2"
+        ]
+      }
+    ],
+    "missing_inputs": [],
+    "unsupported_claims": []
+  },
+  "proposal": {
+    "source_refs": [
+      "demo:rule:v1",
+      "demo:schedule",
+      "demo:rates",
+      "demo:action",
+      "demo:human-confirmation",
+      "demo:camera:1",
+      "demo:camera:2",
+      "demo:scenario:fast",
+      "demo:scenario:late",
+      "demo:scenario:no_action"
+    ],
+    "alternatives": [
+      {
+        "rationale": "Сценарий с минимальными дополнительными затратами, но требует подтверждения доступности техники.",
+        "assumptions": [
+          "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+          "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+          "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+          "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+          "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+        ],
+        "metric_refs": [
+          "scenario.fast.total_cost",
+          "scenario.fast.intervention_cost",
+          "scenario.fast.idle_cost"
+        ],
+        "scenario_id": "fast"
+      },
+      {
+        "rationale": "Сценарий с более высокими затратами, но также требует подтверждения доступности техники.",
+        "assumptions": [
+          "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+          "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+          "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+          "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+          "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+        ],
+        "metric_refs": [
+          "scenario.late.total_cost",
+          "scenario.late.intervention_cost",
+          "scenario.late.idle_cost"
+        ],
+        "scenario_id": "late"
+      },
+      {
+        "rationale": "Сценарий без дополнительных действий, но с наибольшими затратами.",
+        "assumptions": [
+          "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+          "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+          "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+          "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+          "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+        ],
+        "metric_refs": [
+          "scenario.no_action.total_cost",
+          "scenario.no_action.intervention_cost",
+          "scenario.no_action.idle_cost"
+        ],
+        "scenario_id": "no_action"
+      }
+    ],
+    "proposed_action": {
+      "type": "request_data",
+      "title": "Запрос данных о доступности техники",
+      "suggested_due_at": null,
+      "verification_condition": "Необходима проверка фактической загрузки и наличие техники."
+    },
+    "required_human_inputs": [
+      "Требуется подтверждение доступности техники для сценария 'Быстрое вмешательство'.",
+      "Требуется подтверждение фактической загрузки для оценки сценариев."
+    ],
+    "recommended_scenario_id": "fast"
+  },
+  "review": {
+    "issues": [
+      {
+        "code": "missing_tech_availability_confirmation",
+        "source_refs": [
+          "demo:scenario:fast"
+        ],
+        "suggested_fix": "Запросить данные о доступности техники.",
+        "affected_claim": "Требуется подтверждение доступности техники для сценария 'Быстрое вмешательство'."
+      },
+      {
+        "code": "actual_load_verification_needed",
+        "source_refs": [
+          "demo:scenario:fast",
+          "demo:scenario:late",
+          "demo:scenario:no_action"
+        ],
+        "suggested_fix": "Провести проверку фактической загрузки техники.",
+        "affected_claim": "Требуется подтверждение фактической загрузки для оценки сценариев."
+      }
+    ],
+    "status": "needs_revision",
+    "unresolved_assumptions": [
+      "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой."
+    ],
+    "validated_scenario_ids": [
+      "fast",
+      "late",
+      "no_action"
+    ]
+  },
+  "comparison": {
+    "currency": "RUB",
+    "criterion": "Сравнение дополнительных затрат допустимых вариантов при заданных допущениях",
+    "is_actual_saving": false,
+    "net_avoidable_cost": "68000.00",
+    "recommended_scenario_id": "fast"
+  },
+  "error": null,
+  "created_at": "2026-10-16T13:47:50.128566+03:00",
+  "updated_at": "2026-10-16T13:48:03.772298+03:00",
+  "started_at": "2026-10-16T13:47:50.147677+03:00",
+  "finished_at": "2026-10-16T13:48:03.773050+03:00",
+  "llm_calls": 3,
+  "incident": {
+    "id": "7aaf3b4f-33d5-4197-b4e6-4aa8a15ef662",
+    "code": "DEMO-4D6E2EB35117",
+    "status": "in_progress",
+    "title": "Демо · проверка подачи самосвалов"
+  },
+  "snapshot": {
+    "rule": {
+      "version": "demo-rule-v1",
+      "source_ref": "demo:rule:v1",
+      "required_class": "dump_truck",
+      "applicable_task_ids": [
+        "A"
+      ],
+      "max_frame_age_minutes": 30,
+      "max_camera_skew_seconds": 120
+    },
+    "as_of": "2026-10-16T05:00:00Z",
+    "tasks": [
+      {
+        "id": "A",
+        "name": "Земляные работы",
+        "completed": false,
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "planned_end": "2026-10-16T13:00:00Z",
+        "planned_start": "2026-10-16T05:00:00Z",
+        "actual_finish_at": null,
+        "schedule_task_id": null,
+        "remaining_work_hours": "8",
+        "earliest_start_work_hours": "0"
+      },
+      {
+        "id": "B",
+        "name": "Подготовка следующего этапа",
+        "completed": false,
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "planned_end": "2026-10-20T09:00:00Z",
+        "planned_start": "2026-10-19T09:00:00Z",
+        "actual_finish_at": null,
+        "schedule_task_id": null,
+        "remaining_work_hours": "8",
+        "earliest_start_work_hours": "12"
+      },
+      {
+        "id": "C",
+        "name": "Следующий этап",
+        "completed": false,
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "planned_end": "2026-10-21T09:00:00Z",
+        "planned_start": "2026-10-20T09:00:00Z",
+        "actual_finish_at": null,
+        "schedule_task_id": null,
+        "remaining_work_hours": "8",
+        "earliest_start_work_hours": "0"
+      },
+      {
+        "id": "D",
+        "name": "Параллельные работы",
+        "completed": false,
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "planned_end": "2026-10-20T13:00:00Z",
+        "planned_start": "2026-10-16T05:00:00Z",
+        "actual_finish_at": null,
+        "schedule_task_id": null,
+        "remaining_work_hours": "24",
+        "earliest_start_work_hours": "0"
+      },
+      {
+        "id": "M",
+        "name": "Контрольная точка",
+        "completed": false,
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "planned_end": "2026-10-21T09:00:00Z",
+        "planned_start": "2026-10-21T09:00:00Z",
+        "actual_finish_at": null,
+        "schedule_task_id": null,
+        "remaining_work_hours": "0",
+        "earliest_start_work_hours": "0"
+      }
+    ],
+    "zone_id": "a84c7523-72ab-5bb6-b3b3-f5c4ee306e9b",
+    "calendar": {
+      "holidays": [],
+      "timezone": "Europe/Moscow",
+      "shift_end": "16:00:00",
+      "shift_start": "08:00:00",
+      "working_weekdays": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "extra_working_dates": []
+    },
+    "evidence": [
+      {
+        "origin": "demo_replay",
+        "zone_id": "a84c7523-72ab-5bb6-b3b3-f5c4ee306e9b",
+        "camera_id": "c69346d4-0a51-536f-9fee-89a6c053c8a8",
+        "image_url": "/demo_management/camera-1.svg",
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "source_ref": "demo:camera:1",
+        "captured_at": "2026-10-16T04:58:00Z",
+        "model_status": "valid",
+        "camera_status": "online",
+        "detected_classes": [
+          "excavator",
+          "person"
+        ]
+      },
+      {
+        "origin": "demo_replay",
+        "zone_id": "a84c7523-72ab-5bb6-b3b3-f5c4ee306e9b",
+        "camera_id": "64d1f4a5-f17b-5c04-ae4a-d1bb3db3bfe2",
+        "image_url": "/demo_management/camera-2.svg",
+        "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+        "source_ref": "demo:camera:2",
+        "captured_at": "2026-10-16T04:59:00Z",
+        "model_status": "valid",
+        "camera_status": "online",
+        "detected_classes": [
+          "excavator",
+          "person"
+        ]
+      }
+    ],
+    "data_mode": "demo",
+    "resources": [
+      {
+        "name": "Экскаватор (условный оплачиваемый ресурс)",
+        "rates": [
+          {
+            "id": "excavator-hour",
+            "unit": "work_hour",
+            "amount": "8000",
+            "source": "demo:rates — условные входы контрольного примера",
+            "currency": "RUB",
+            "valid_to": null,
+            "valid_from": null,
+            "confirmation": "demo"
+          }
+        ],
+        "source": "demo:rates",
+        "quantity": "1",
+        "cost_group": "excavator_idle",
+        "resource_id": "excavator",
+        "idle_fraction": "1",
+        "paid_and_affected": true
+      },
+      {
+        "name": "Бригада (условный оплачиваемый ресурс)",
+        "rates": [
+          {
+            "id": "crew-hour",
+            "unit": "work_hour",
+            "amount": "4000",
+            "source": "demo:rates — условные входы контрольного примера",
+            "currency": "RUB",
+            "valid_to": null,
+            "valid_from": null,
+            "confirmation": "demo"
+          }
+        ],
+        "source": "demo:rates",
+        "quantity": "1",
+        "cost_group": "crew_idle",
+        "resource_id": "crew",
+        "idle_fraction": "1",
+        "paid_and_affected": true
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "fast",
+        "title": "Быстрое вмешательство",
+        "assumptions": [
+          "demo:scenario:fast: восстановление через 2 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+        ],
+        "other_costs": [],
+        "action_allowed": true,
+        "intervention_costs": [
+          {
+            "id": "mobilization",
+            "title": "Условная ускоренная мобилизация",
+            "amount": "20000",
+            "source": "demo:action — условная разовая стоимость",
+            "currency": "RUB",
+            "cost_group": "mobilization"
+          }
+        ],
+        "recovery_work_hours": "2"
+      },
+      {
+        "id": "late",
+        "title": "Более позднее вмешательство",
+        "assumptions": [
+          "demo:scenario:late: восстановление через 4 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+        ],
+        "other_costs": [],
+        "action_allowed": true,
+        "intervention_costs": [
+          {
+            "id": "mobilization",
+            "title": "Условная ускоренная мобилизация",
+            "amount": "20000",
+            "source": "demo:action — условная разовая стоимость",
+            "currency": "RUB",
+            "cost_group": "mobilization"
+          }
+        ],
+        "recovery_work_hours": "4"
+      },
+      {
+        "id": "no_action",
+        "title": "Без дополнительного действия",
+        "assumptions": [
+          "demo:scenario:no_action: восстановление через 8 рабочих часа задано для сравнения, не является прогнозом наличия техники."
+        ],
+        "other_costs": [],
+        "action_allowed": true,
+        "intervention_costs": [],
+        "recovery_work_hours": "8"
+      }
+    ],
+    "project_id": "13ef06c8-2ef2-4761-9e16-fa6ac51b95e8",
+    "assumptions": [
+      "ДЕМОНСТРАЦИЯ: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+      "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+      "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+      "Источник demo:rates: 8000 и 4000 RUB/рабочий час простоя; 4000 RUB/рабочий час продления, исключая экскаватор и бригаду.",
+      "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+    ],
+    "incident_id": "7aaf3b4f-33d5-4197-b4e6-4aa8a15ef662",
+    "source_refs": [
+      "demo:schedule",
+      "demo:rates",
+      "demo:action",
+      "demo:human-confirmation",
+      "demo:rule:v1",
+      "demo:camera:1",
+      "demo:camera:2",
+      "demo:scenario:fast",
+      "demo:scenario:late",
+      "demo:scenario:no_action"
+    ],
+    "dependencies": [
+      {
+        "kind": "FS",
+        "successor_id": "B",
+        "lag_work_hours": "0",
+        "predecessor_id": "A"
+      },
+      {
+        "kind": "FS",
+        "successor_id": "C",
+        "lag_work_hours": "0",
+        "predecessor_id": "B"
+      },
+      {
+        "kind": "FS",
+        "successor_id": "M",
+        "lag_work_hours": "0",
+        "predecessor_id": "C"
+      },
+      {
+        "kind": "FS",
+        "successor_id": "M",
+        "lag_work_hours": "0",
+        "predecessor_id": "D"
+      }
+    ],
+    "schema_version": "1.0",
+    "blocked_task_id": "A",
+    "extension_rates": [
+      {
+        "id": "extension-hour",
+        "unit": "work_hour",
+        "amount": "4000",
+        "source": "demo:rates — условные входы контрольного примера",
+        "currency": "RUB",
+        "valid_to": null,
+        "valid_from": null,
+        "confirmation": "demo"
+      }
+    ],
+    "profile_version": "demo-profile-v1:baseline",
+    "schedule_version": "demo-schedule-v1:baseline",
+    "milestone_task_id": "M",
+    "agreed_deadline_at": "2026-10-21T09:00:00Z",
+    "confirmation_source": "demo:human-confirmation — условное подтверждение в демо эпизоде",
+    "extension_cost_group": "site_overhead",
+    "blockage_confirmation": "human_confirmed",
+    "no_action_scenario_id": "no_action",
+    "extension_excludes_resource_costs": true
+  },
+  "results": [
+    {
+      "status": "complete",
+      "currency": "RUB",
+      "idle_cost": "24000.00",
+      "input_hash": "78d00962031286de7e3d7536fed48a79da908bb24d51354ce9764de9e27d83fe",
+      "other_cost": "0",
+      "total_cost": "44000.00",
+      "assumptions": [
+        "ДЕМОНСТРАЦИЯ: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+        "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+        "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+        "Источник demo:rates: 8000 и 4000 RUB/рабочий час простоя; 4000 RUB/рабочий час продления, исключая экскаватор и бригаду.",
+        "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно.",
+        "demo:scenario:fast: восстановление через 2 рабочих часа задано для сравнения, не является прогнозом наличия техники.",
+        "Использованы явно условные демонстрационные ставки; это не рыночные данные и не фактическая экономия."
+      ],
+      "scenario_id": "fast",
+      "affected_tasks": [
+        {
+          "task_id": "A",
+          "start_at": "2026-10-16T07:00:00Z",
+          "finish_at": "2026-10-19T07:00:00Z",
+          "start_work_hours": "2",
+          "finish_work_hours": "10",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "8"
+        },
+        {
+          "task_id": "D",
+          "start_at": "2026-10-16T05:00:00Z",
+          "finish_at": "2026-10-20T13:00:00Z",
+          "start_work_hours": "0",
+          "finish_work_hours": "24",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "24"
+        },
+        {
+          "task_id": "B",
+          "start_at": "2026-10-19T09:00:00Z",
+          "finish_at": "2026-10-20T09:00:00Z",
+          "start_work_hours": "12",
+          "finish_work_hours": "20",
+          "reference_start_work_hours": "12",
+          "reference_finish_work_hours": "20"
+        },
+        {
+          "task_id": "C",
+          "start_at": "2026-10-20T09:00:00Z",
+          "finish_at": "2026-10-21T09:00:00Z",
+          "start_work_hours": "20",
+          "finish_work_hours": "28",
+          "reference_start_work_hours": "20",
+          "reference_finish_work_hours": "28"
+        },
+        {
+          "task_id": "M",
+          "start_at": "2026-10-21T09:00:00Z",
+          "finish_at": "2026-10-21T09:00:00Z",
+          "start_work_hours": "28",
+          "finish_work_hours": "28",
+          "reference_start_work_hours": "28",
+          "reference_finish_work_hours": "28"
+        }
+      ],
+      "extension_cost": "0",
+      "missing_inputs": [],
+      "cost_components": [
+        {
+          "id": "idle:excavator:excavator-hour:0",
+          "title": "Экскаватор (условный оплачиваемый ресурс)",
+          "amount": "16000.00",
+          "inputs": {
+            "end": "2026-10-16T07:00:00+00:00",
+            "rate": "8000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "2",
+            "rate_id": "excavator-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "2"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "excavator_idle"
+        },
+        {
+          "id": "idle:crew:crew-hour:0",
+          "title": "Бригада (условный оплачиваемый ресурс)",
+          "amount": "8000.00",
+          "inputs": {
+            "end": "2026-10-16T07:00:00+00:00",
+            "rate": "4000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "2",
+            "rate_id": "crew-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "2"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "crew_idle"
+        },
+        {
+          "id": "intervention:mobilization",
+          "title": "Условная ускоренная мобилизация",
+          "amount": "20000.00",
+          "inputs": {
+            "amount": "20000"
+          },
+          "source": "demo:action — условная разовая стоимость",
+          "formula": "explicit one-time incremental amount",
+          "category": "intervention",
+          "currency": "RUB",
+          "cost_group": "mobilization"
+        }
+      ],
+      "calculation_trace": [
+        "FS DAG; reference and scenario use the same remaining durations and immutable planned dates.",
+        "Reference milestone = 28 work hours; scenario = 28; incremental delay = 0.",
+        "Future resource idle window = [0, 2) work hours from as_of; sunk costs excluded.",
+        "Tariff intervals are half-open; work_day uses configured shift duration; calendar_day = elapsed seconds / 86400.",
+        "Each tariff segment is rounded to currency cents with Decimal ROUND_HALF_UP, then summed.",
+        "Total = idle 24000.00 + extension 0 + intervention 20000.00 + other 0; total 44000.00 RUB."
+      ],
+      "intervention_cost": "20000.00",
+      "calculator_version": "management-decimal-fs-v1.0",
+      "scenario_milestone_at": "2026-10-21T09:00:00Z",
+      "reference_milestone_at": "2026-10-21T09:00:00Z",
+      "deadline_variance_work_hours": "0",
+      "incremental_delay_work_hours": "0"
+    },
+    {
+      "status": "complete",
+      "currency": "RUB",
+      "idle_cost": "48000.00",
+      "input_hash": "78d00962031286de7e3d7536fed48a79da908bb24d51354ce9764de9e27d83fe",
+      "other_cost": "0",
+      "total_cost": "68000.00",
+      "assumptions": [
+        "ДЕМОНСТРАЦИЯ: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+        "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+        "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+        "Источник demo:rates: 8000 и 4000 RUB/рабочий час простоя; 4000 RUB/рабочий час продления, исключая экскаватор и бригаду.",
+        "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно.",
+        "demo:scenario:late: восстановление через 4 рабочих часа задано для сравнения, не является прогнозом наличия техники.",
+        "Использованы явно условные демонстрационные ставки; это не рыночные данные и не фактическая экономия."
+      ],
+      "scenario_id": "late",
+      "affected_tasks": [
+        {
+          "task_id": "A",
+          "start_at": "2026-10-16T09:00:00Z",
+          "finish_at": "2026-10-19T09:00:00Z",
+          "start_work_hours": "4",
+          "finish_work_hours": "12",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "8"
+        },
+        {
+          "task_id": "D",
+          "start_at": "2026-10-16T05:00:00Z",
+          "finish_at": "2026-10-20T13:00:00Z",
+          "start_work_hours": "0",
+          "finish_work_hours": "24",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "24"
+        },
+        {
+          "task_id": "B",
+          "start_at": "2026-10-19T09:00:00Z",
+          "finish_at": "2026-10-20T09:00:00Z",
+          "start_work_hours": "12",
+          "finish_work_hours": "20",
+          "reference_start_work_hours": "12",
+          "reference_finish_work_hours": "20"
+        },
+        {
+          "task_id": "C",
+          "start_at": "2026-10-20T09:00:00Z",
+          "finish_at": "2026-10-21T09:00:00Z",
+          "start_work_hours": "20",
+          "finish_work_hours": "28",
+          "reference_start_work_hours": "20",
+          "reference_finish_work_hours": "28"
+        },
+        {
+          "task_id": "M",
+          "start_at": "2026-10-21T09:00:00Z",
+          "finish_at": "2026-10-21T09:00:00Z",
+          "start_work_hours": "28",
+          "finish_work_hours": "28",
+          "reference_start_work_hours": "28",
+          "reference_finish_work_hours": "28"
+        }
+      ],
+      "extension_cost": "0",
+      "missing_inputs": [],
+      "cost_components": [
+        {
+          "id": "idle:excavator:excavator-hour:0",
+          "title": "Экскаватор (условный оплачиваемый ресурс)",
+          "amount": "32000.00",
+          "inputs": {
+            "end": "2026-10-16T09:00:00+00:00",
+            "rate": "8000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "4",
+            "rate_id": "excavator-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "4"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "excavator_idle"
+        },
+        {
+          "id": "idle:crew:crew-hour:0",
+          "title": "Бригада (условный оплачиваемый ресурс)",
+          "amount": "16000.00",
+          "inputs": {
+            "end": "2026-10-16T09:00:00+00:00",
+            "rate": "4000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "4",
+            "rate_id": "crew-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "4"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "crew_idle"
+        },
+        {
+          "id": "intervention:mobilization",
+          "title": "Условная ускоренная мобилизация",
+          "amount": "20000.00",
+          "inputs": {
+            "amount": "20000"
+          },
+          "source": "demo:action — условная разовая стоимость",
+          "formula": "explicit one-time incremental amount",
+          "category": "intervention",
+          "currency": "RUB",
+          "cost_group": "mobilization"
+        }
+      ],
+      "calculation_trace": [
+        "FS DAG; reference and scenario use the same remaining durations and immutable planned dates.",
+        "Reference milestone = 28 work hours; scenario = 28; incremental delay = 0.",
+        "Future resource idle window = [0, 4) work hours from as_of; sunk costs excluded.",
+        "Tariff intervals are half-open; work_day uses configured shift duration; calendar_day = elapsed seconds / 86400.",
+        "Each tariff segment is rounded to currency cents with Decimal ROUND_HALF_UP, then summed.",
+        "Total = idle 48000.00 + extension 0 + intervention 20000.00 + other 0; total 68000.00 RUB."
+      ],
+      "intervention_cost": "20000.00",
+      "calculator_version": "management-decimal-fs-v1.0",
+      "scenario_milestone_at": "2026-10-21T09:00:00Z",
+      "reference_milestone_at": "2026-10-21T09:00:00Z",
+      "deadline_variance_work_hours": "0",
+      "incremental_delay_work_hours": "0"
+    },
+    {
+      "status": "complete",
+      "currency": "RUB",
+      "idle_cost": "96000.00",
+      "input_hash": "78d00962031286de7e3d7536fed48a79da908bb24d51354ce9764de9e27d83fe",
+      "other_cost": "0",
+      "total_cost": "112000.00",
+      "assumptions": [
+        "ДЕМОНСТРАЦИЯ: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+        "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+        "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+        "Источник demo:rates: 8000 и 4000 RUB/рабочий час простоя; 4000 RUB/рабочий час продления, исключая экскаватор и бригаду.",
+        "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно.",
+        "demo:scenario:no_action: восстановление через 8 рабочих часа задано для сравнения, не является прогнозом наличия техники.",
+        "Использованы явно условные демонстрационные ставки; это не рыночные данные и не фактическая экономия."
+      ],
+      "scenario_id": "no_action",
+      "affected_tasks": [
+        {
+          "task_id": "A",
+          "start_at": "2026-10-19T05:00:00Z",
+          "finish_at": "2026-10-19T13:00:00Z",
+          "start_work_hours": "8",
+          "finish_work_hours": "16",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "8"
+        },
+        {
+          "task_id": "D",
+          "start_at": "2026-10-16T05:00:00Z",
+          "finish_at": "2026-10-20T13:00:00Z",
+          "start_work_hours": "0",
+          "finish_work_hours": "24",
+          "reference_start_work_hours": "0",
+          "reference_finish_work_hours": "24"
+        },
+        {
+          "task_id": "B",
+          "start_at": "2026-10-20T05:00:00Z",
+          "finish_at": "2026-10-20T13:00:00Z",
+          "start_work_hours": "16",
+          "finish_work_hours": "24",
+          "reference_start_work_hours": "12",
+          "reference_finish_work_hours": "20"
+        },
+        {
+          "task_id": "C",
+          "start_at": "2026-10-21T05:00:00Z",
+          "finish_at": "2026-10-21T13:00:00Z",
+          "start_work_hours": "24",
+          "finish_work_hours": "32",
+          "reference_start_work_hours": "20",
+          "reference_finish_work_hours": "28"
+        },
+        {
+          "task_id": "M",
+          "start_at": "2026-10-21T13:00:00Z",
+          "finish_at": "2026-10-21T13:00:00Z",
+          "start_work_hours": "32",
+          "finish_work_hours": "32",
+          "reference_start_work_hours": "28",
+          "reference_finish_work_hours": "28"
+        }
+      ],
+      "extension_cost": "16000.00",
+      "missing_inputs": [],
+      "cost_components": [
+        {
+          "id": "idle:excavator:excavator-hour:0",
+          "title": "Экскаватор (условный оплачиваемый ресурс)",
+          "amount": "64000.00",
+          "inputs": {
+            "end": "2026-10-16T13:00:00+00:00",
+            "rate": "8000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "8",
+            "rate_id": "excavator-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "8"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "excavator_idle"
+        },
+        {
+          "id": "idle:crew:crew-hour:0",
+          "title": "Бригада (условный оплачиваемый ресурс)",
+          "amount": "32000.00",
+          "inputs": {
+            "end": "2026-10-16T13:00:00+00:00",
+            "rate": "4000",
+            "unit": "work_hour",
+            "start": "2026-10-16T05:00:00+00:00",
+            "units": "8",
+            "rate_id": "crew-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "8"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "idle",
+          "currency": "RUB",
+          "cost_group": "crew_idle"
+        },
+        {
+          "id": "extension:extension-hour:0",
+          "title": "Продление объекта",
+          "amount": "16000.00",
+          "inputs": {
+            "end": "2026-10-21T13:00:00+00:00",
+            "rate": "4000",
+            "unit": "work_hour",
+            "start": "2026-10-21T09:00:00+00:00",
+            "units": "4",
+            "rate_id": "extension-hour",
+            "multiplier": "1",
+            "shift_hours": "8",
+            "confirmation": "demo",
+            "working_hours": "4"
+          },
+          "source": "demo:rates — условные входы контрольного примера",
+          "formula": "quantity × idle_fraction × tariff × duration_in_tariff_units",
+          "category": "extension",
+          "currency": "RUB",
+          "cost_group": "site_overhead"
+        }
+      ],
+      "calculation_trace": [
+        "FS DAG; reference and scenario use the same remaining durations and immutable planned dates.",
+        "Reference milestone = 28 work hours; scenario = 32; incremental delay = 4.",
+        "Future resource idle window = [0, 8) work hours from as_of; sunk costs excluded.",
+        "Tariff intervals are half-open; work_day uses configured shift duration; calendar_day = elapsed seconds / 86400.",
+        "Each tariff segment is rounded to currency cents with Decimal ROUND_HALF_UP, then summed.",
+        "Total = idle 96000.00 + extension 16000.00 + intervention 0 + other 0; total 112000.00 RUB."
+      ],
+      "intervention_cost": "0",
+      "calculator_version": "management-decimal-fs-v1.0",
+      "scenario_milestone_at": "2026-10-21T13:00:00Z",
+      "reference_milestone_at": "2026-10-21T09:00:00Z",
+      "deadline_variance_work_hours": "4",
+      "incremental_delay_work_hours": "4"
+    }
+  ],
+  "steps": [
+    {
+      "role": "evidence",
+      "status": "completed",
+      "generation": "llm",
+      "started_at": "2026-10-16T13:47:50.382570+03:00",
+      "finished_at": "2026-10-16T13:47:52.692355+03:00",
+      "result": {
+        "verdict": "supported_risk",
+        "hypotheses": [],
+        "observations": [
+          {
+            "claim": "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой.",
+            "source_refs": [
+              "demo:camera:1"
+            ]
+          },
+          {
+            "claim": "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой.",
+            "source_refs": [
+              "demo:camera:2"
+            ]
+          }
+        ],
+        "missing_inputs": [],
+        "_validation_errors": [],
+        "unsupported_claims": []
+      },
+      "error": null,
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "prompt_version": "management.evidence.v2",
+      "attempts": 1,
+      "llm_calls": 1,
+      "usage": {
+        "total_tokens": 1603,
+        "prompt_tokens": 1514,
+        "completion_tokens": 89
+      },
+      "tool_refs": [
+        "snapshot:evidence",
+        "snapshot:camera_health",
+        "snapshot:rule"
+      ]
+    },
+    {
+      "role": "calculation",
+      "status": "completed",
+      "generation": "deterministic",
+      "started_at": "2026-10-16T13:47:52.703559+03:00",
+      "finished_at": "2026-10-16T13:47:52.709984+03:00",
+      "result": {
+        "scenario_ids": [
+          "fast",
+          "late",
+          "no_action"
+        ],
+        "calculator_version": "management-decimal-fs-v1.0"
+      },
+      "error": null,
+      "provider": null,
+      "model": null,
+      "prompt_version": null,
+      "attempts": 0,
+      "llm_calls": 0,
+      "usage": {},
+      "tool_refs": [
+        "simulate_scenario:fast",
+        "simulate_scenario:late",
+        "simulate_scenario:no_action"
+      ]
+    },
+    {
+      "role": "actions",
+      "status": "completed",
+      "generation": "llm",
+      "started_at": "2026-10-16T13:47:52.718304+03:00",
+      "finished_at": "2026-10-16T13:48:00.023616+03:00",
+      "result": {
+        "source_refs": [
+          "demo:rule:v1",
+          "demo:schedule",
+          "demo:rates",
+          "demo:action",
+          "demo:human-confirmation",
+          "demo:camera:1",
+          "demo:camera:2",
+          "demo:scenario:fast",
+          "demo:scenario:late",
+          "demo:scenario:no_action"
+        ],
+        "alternatives": [
+          {
+            "rationale": "Сценарий с минимальными дополнительными затратами, но требует подтверждения доступности техники.",
+            "assumptions": [
+              "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+              "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+              "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+              "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+              "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+            ],
+            "metric_refs": [
+              "scenario.fast.total_cost",
+              "scenario.fast.intervention_cost",
+              "scenario.fast.idle_cost"
+            ],
+            "scenario_id": "fast"
+          },
+          {
+            "rationale": "Сценарий с более высокими затратами, но также требует подтверждения доступности техники.",
+            "assumptions": [
+              "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+              "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+              "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+              "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+              "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+            ],
+            "metric_refs": [
+              "scenario.late.total_cost",
+              "scenario.late.intervention_cost",
+              "scenario.late.idle_cost"
+            ],
+            "scenario_id": "late"
+          },
+          {
+            "rationale": "Сценарий без дополнительных действий, но с наибольшими затратами.",
+            "assumptions": [
+              "Время восстановления задано сценарием и требует подтверждения доступности техники.",
+              "Демонстрация: наблюдения двух камер заданы синтетически; реальные снимки и CV-модель в эпизоде не использованы.",
+              "Изображения — иллюстративные схемы. Присутствие техники тестовое, а не результат фактического детектора.",
+              "Все денежные входы условные. Результат — сценарные дополнительные затраты, не фактическая экономия.",
+              "Задача A полностью заблокирована до заданного восстановления; оставшиеся длительности введены явно."
+            ],
+            "metric_refs": [
+              "scenario.no_action.total_cost",
+              "scenario.no_action.intervention_cost",
+              "scenario.no_action.idle_cost"
+            ],
+            "scenario_id": "no_action"
+          }
+        ],
+        "proposed_action": {
+          "type": "request_data",
+          "title": "Запрос данных о доступности техники",
+          "suggested_due_at": null,
+          "verification_condition": "Необходима проверка фактической загрузки и наличие техники."
+        },
+        "_validation_errors": [],
+        "required_human_inputs": [
+          "Требуется подтверждение доступности техники для сценария 'Быстрое вмешательство'.",
+          "Требуется подтверждение фактической загрузки для оценки сценариев."
+        ],
+        "recommended_scenario_id": "fast"
+      },
+      "error": null,
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "prompt_version": "management.actions.v4",
+      "attempts": 1,
+      "llm_calls": 1,
+      "usage": {
+        "total_tokens": 4024,
+        "prompt_tokens": 3333,
+        "completion_tokens": 691
+      },
+      "tool_refs": [
+        "snapshot:approved_scenarios",
+        "calculator:scenario_results"
+      ]
+    },
+    {
+      "role": "reviewer",
+      "status": "completed",
+      "generation": "llm",
+      "started_at": "2026-10-16T13:48:00.038672+03:00",
+      "finished_at": "2026-10-16T13:48:03.768836+03:00",
+      "result": {
+        "issues": [
+          {
+            "code": "missing_tech_availability_confirmation",
+            "source_refs": [
+              "demo:scenario:fast"
+            ],
+            "suggested_fix": "Запросить данные о доступности техники.",
+            "affected_claim": "Требуется подтверждение доступности техники для сценария 'Быстрое вмешательство'."
+          },
+          {
+            "code": "actual_load_verification_needed",
+            "source_refs": [
+              "demo:scenario:fast",
+              "demo:scenario:late",
+              "demo:scenario:no_action"
+            ],
+            "suggested_fix": "Провести проверку фактической загрузки техники.",
+            "affected_claim": "Требуется подтверждение фактической загрузки для оценки сценариев."
+          }
+        ],
+        "status": "needs_revision",
+        "_validation_errors": [],
+        "unresolved_assumptions": [
+          "Требуемый класс техники не обнаружен в кадре; это не подтверждает простой."
+        ],
+        "validated_scenario_ids": [
+          "fast",
+          "late",
+          "no_action"
+        ]
+      },
+      "error": null,
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "prompt_version": "management.reviewer.v2",
+      "attempts": 1,
+      "llm_calls": 1,
+      "usage": {
+        "total_tokens": 3821,
+        "prompt_tokens": 3650,
+        "completion_tokens": 171
+      },
+      "tool_refs": [
+        "snapshot:evidence",
+        "calculator:scenario_results",
+        "validator:proposal"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "baseline": {
+    "input_hash": "509e71ac457e17143c4efa8069d331be64b55fcc0c02cf0162f8c2df281abf13",
+    "results": [
+      {
+        "scenario_id": "fast",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "24000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "44000.00"
+      },
+      {
+        "scenario_id": "late",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "48000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "68000.00"
+      },
+      {
+        "scenario_id": "no_action",
+        "status": "complete",
+        "incremental_delay_work_hours": "4",
+        "idle_cost": "96000.00",
+        "extension_cost": "16000.00",
+        "intervention_cost": "0",
+        "total_cost": "112000.00"
+      }
+    ],
+    "conditional_avoidable_fast_vs_no_action": "68000.00"
+  },
+  "camera_unavailable": {
+    "input_hash": "ad8c40089e8bae7629e1de13e82f14c6f67c2d6bf4c20002274fc897a7fa0faa",
+    "results": [
+      {
+        "scenario_id": "fast",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "24000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "44000.00"
+      },
+      {
+        "scenario_id": "late",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "48000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "68000.00"
+      },
+      {
+        "scenario_id": "no_action",
+        "status": "complete",
+        "incremental_delay_work_hours": "4",
+        "idle_cost": "96000.00",
+        "extension_cost": "16000.00",
+        "intervention_cost": "0",
+        "total_cost": "112000.00"
+      }
+    ],
+    "conditional_avoidable_fast_vs_no_action": "68000.00"
+  },
+  "slack": {
+    "input_hash": "72abc96e3db93fd6942c02d2d3b868c3ba291188ed667ff1966edee7750af838",
+    "results": [
+      {
+        "scenario_id": "fast",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "24000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "44000.00"
+      },
+      {
+        "scenario_id": "late",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "48000.00",
+        "extension_cost": "0",
+        "intervention_cost": "20000.00",
+        "total_cost": "68000.00"
+      },
+      {
+        "scenario_id": "no_action",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "96000.00",
+        "extension_cost": "0",
+        "intervention_cost": "0",
+        "total_cost": "96000.00"
+      }
+    ],
+    "conditional_avoidable_fast_vs_no_action": "52000.00"
+  },
+  "expensive_action": {
+    "input_hash": "70532f615c948698b73a941603f5a97a26bbcd48b3e8f903c1678ed79cb850ad",
+    "results": [
+      {
+        "scenario_id": "fast",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "24000.00",
+        "extension_cost": "0",
+        "intervention_cost": "150000.00",
+        "total_cost": "174000.00"
+      },
+      {
+        "scenario_id": "late",
+        "status": "complete",
+        "incremental_delay_work_hours": "0",
+        "idle_cost": "48000.00",
+        "extension_cost": "0",
+        "intervention_cost": "150000.00",
+        "total_cost": "198000.00"
+      },
+      {
+        "scenario_id": "no_action",
+        "status": "complete",
+        "incremental_delay_work_hours": "4",
+        "idle_cost": "96000.00",
+        "extension_cost": "16000.00",
+        "intervention_cost": "0",
+        "total_cost": "112000.00"
+      }
+    ],
+    "conditional_avoidable_fast_vs_no_action": "-62000.00"
+  }
+}

@@ -18,8 +18,9 @@ function injectCss(css: string) {
 const root = ReactDOM.createRoot(document.getElementById('root')!)
 
 if (legacy) {
-  Promise.all([import('./styles.css?inline'), import('./App'), import('@fontsource-variable/inter')]).then(([css, mod]) => {
+  Promise.all([import('./styles.css?inline'), import('./product-ui.css?inline'), import('./App'), import('@fontsource-variable/inter')]).then(([css, productCss, mod]) => {
     injectCss(css.default)
+    injectCss(productCss.default)
     const App = mod.default
     root.render(
       <React.StrictMode>

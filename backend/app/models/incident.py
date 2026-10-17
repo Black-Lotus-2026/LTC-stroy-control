@@ -117,6 +117,21 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     sla_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    verification_status: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending"
+    )
+    verification_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    escalated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    verification_details: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )

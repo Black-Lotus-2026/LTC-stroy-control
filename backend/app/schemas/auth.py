@@ -59,7 +59,28 @@ class UserResponse(BaseModel):
     username: str
     name: str
     role: str
+    email: str | None = None
     created_at: datetime
+
+
+class UserEmailUpdate(BaseModel):
+    email: str | None = Field(None, max_length=256)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        clean = value.strip().lower()
+        if "@" not in clean or " " in clean or clean.startswith("@") or clean.endswith("@"):
+            raise ValueError("Введите корректный email")
+        return clean
+
+
+class AdminRecipient(BaseModel):
+    id: uuid.UUID
+    username: str
+    name: str
 
 
 class TokenResponse(BaseModel):

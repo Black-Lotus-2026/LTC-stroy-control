@@ -8,15 +8,18 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbSession, OptionalUser
+from app.api.deps import CurrentUser, DbSession, OptionalUser
 from app.models.enums import CameraStatus, UserRole, ZoneRiskLevel
 from app.models.project import Camera, Project, Zone
 from app.models.schedule import ScheduleTask
+from app.models.user import User
 from app.schemas.stroy_control import (
     CameraCreate,
     CameraItem,
     CameraUpdate,
     ProjectCreate,
+    ProjectAlertSettings,
+    ProjectAlertSettingsUpdate,
     ProjectItem,
     ProjectUpdate,
     ZoneCreate,
@@ -63,6 +66,9 @@ def list_projects(db: DbSession, current_user: OptionalUser = None) -> list[Proj
                 object_kind=p.object_kind,
                 status=p.status,
                 owner_username=getattr(p, "owner_username", None),
+                alert_error_deadline_minutes=p.alert_error_deadline_minutes,
+                alert_warning_deadline_minutes=p.alert_warning_deadline_minutes,
+                escalation_user_id=p.escalation_user_id,
                 zones=[
                     ZoneItem(
                         id=z.id,
@@ -122,6 +128,9 @@ def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUse
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
+        alert_error_deadline_minutes=project.alert_error_deadline_minutes,
+        alert_warning_deadline_minutes=project.alert_warning_deadline_minutes,
+        escalation_user_id=project.escalation_user_id,
         zones=[],
         cameras=[],
         stages_count=0,
@@ -159,6 +168,9 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
+        alert_error_deadline_minutes=project.alert_error_deadline_minutes,
+        alert_warning_deadline_minutes=project.alert_warning_deadline_minutes,
+        escalation_user_id=project.escalation_user_id,
         zones=[
             ZoneItem(
                 id=z.id,
@@ -186,7 +198,64 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
     )
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.get("/{project_id}/alert-settings", response_model=ProjectAlertSettings)
+def get_alert_settings(
+    project_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> ProjectAlertSettings:
+    project = db.get(Project, project_id)
+    if not project or (
+        current_user.role != UserRole.ADMIN
+        and project.owner_username != current_user.username
+    ):
+        raise HTTPException(status_code=404, detail="Объект не найден")
+    return ProjectAlertSettings(
+        project_id=project.id,
+        owner_username=project.owner_username,
+        alert_error_deadline_minutes=project.alert_error_deadline_minutes,
+        alert_warning_deadline_minutes=project.alert_warning_deadline_minutes,
+        escalation_user_id=project.escalation_user_id,
+    )
+
+
+@router.put("/{project_id}/alert-settings", response_model=ProjectAlertSettings)
+def update_alert_settings(
+    project_id: uuid.UUID,
+    data: ProjectAlertSettingsUpdate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ProjectAlertSettings:
+    project = db.get(Project, project_id)
+    if not project or (
+        current_user.role != UserRole.ADMIN
+        and project.owner_username != current_user.username
+    ):
+        raise HTTPException(status_code=404, detail="Объект не найден")
+    if current_user.role != UserRole.ADMIN and (
+        data.owner_username != project.owner_username
+        or data.escalation_user_id != project.escalation_user_id
+    ):
+        raise HTTPException(status_code=403, detail="Назначать адресатов может администратор")
+    if data.owner_username:
+        owner = db.scalar(
+            select(User).where(
+                User.username == data.owner_username, User.is_active.is_(True)
+            )
+        )
+        if not owner:
+            raise HTTPException(status_code=422, detail="Ответственный пользователь не найден")
+    if data.escalation_user_id:
+        chief = db.get(User, data.escalation_user_id)
+        if not chief or not chief.is_active or chief.role != UserRole.ADMIN:
+            raise HTTPException(status_code=422, detail="Администратор для эскалации не найден")
+    project.owner_username = data.owner_username
+    project.escalation_user_id = data.escalation_user_id
+    project.alert_error_deadline_minutes = data.alert_error_deadline_minutes
+    project.alert_warning_deadline_minutes = data.alert_warning_deadline_minutes
+    db.commit()
+    return get_alert_settings(project_id, db, current_user)
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_project(project_id: uuid.UUID, db: DbSession) -> None:
     """Удалить объект строительства."""
     project = db.scalars(select(Project).where(Project.id == project_id)).first()
@@ -244,6 +313,10 @@ def update_project(
         address=project.address,
         object_kind=project.object_kind,
         status=project.status,
+        owner_username=project.owner_username,
+        alert_error_deadline_minutes=project.alert_error_deadline_minutes,
+        alert_warning_deadline_minutes=project.alert_warning_deadline_minutes,
+        escalation_user_id=project.escalation_user_id,
         zones=[
             ZoneItem(
                 id=z.id,
@@ -357,7 +430,7 @@ def update_zone(
     )
 
 
-@router.delete("/{project_id}/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_zone(
     project_id: uuid.UUID,
     zone_id: uuid.UUID,
@@ -501,7 +574,7 @@ def update_camera(
     )
 
 
-@router.delete("/{project_id}/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_camera(
     project_id: str,
     camera_id: str,

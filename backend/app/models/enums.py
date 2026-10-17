@@ -149,6 +149,9 @@ class IncidentEventType(StrEnum):
     COMMENTED = "commented"
     REJECTED = "rejected"
     AUTO_RESOLVED = "auto_resolved"  # закрыто самой системой
+    VERIFICATION_FAILED = "verification_failed"
+    VERIFICATION_UNAVAILABLE = "verification_unavailable"
+    ESCALATED = "escalated"
 
 
 class EvidenceKind(StrEnum):
@@ -163,3 +166,49 @@ class UserRole(StrEnum):
     MANAGER = "manager"
     INSPECTOR = "inspector"
     VIEWER = "viewer"
+
+
+class ObservationSource(StrEnum):
+    """Источник нормализованной записи в журнале площадки."""
+
+    CCTV = "cctv"
+    CV = "cv"
+    VLC = "vlc"
+    MANUAL = "manual"
+    SYSTEM = "system"
+
+
+class ObservationCategory(StrEnum):
+    SAFETY = "safety"
+    PPE = "ppe"
+    EQUIPMENT = "equipment"
+    CAMERA = "camera"
+    PROGRESS = "progress"
+    DATA = "data"
+    SYSTEM = "system"
+
+
+class ObservationSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class ReportPeriod(StrEnum):
+    HOUR = "hour"
+    DAY = "day"
+    WEEK = "week"
+    CUSTOM = "custom"
+
+
+class ReportStatus(StrEnum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ReportScheduleFrequency(StrEnum):
+    HOURLY = "hourly"
+    DAILY = "daily"
+    WEEKLY = "weekly"
