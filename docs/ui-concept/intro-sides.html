@@ -1,0 +1,1324 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заставка: чем заполнить края</title>
+<!--
+  Тестовый макет: заставка «Строй-контроль» как в приложении (настоящая модель из src/sverka/lib/wire.ts,
+  собрана в intro-sides.wire.js) и пять вариантов заполнения краёв. Переключатели вверху, клавиши 1–5, A.
+  Данные на панелях примерные, взяты со стенда.
+-->
+<style>
+@font-face { font-family: "Stolzl"; src: url("assets/Stolzl-Bold.woff2") format("woff2"); font-weight: 700; }
+@font-face { font-family: "Stolzl"; src: url("assets/Stolzl-Regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Vela Sans"; src: url("assets/VelaSans-Regular.woff2") format("woff2"); font-weight: 400; }
+@font-face { font-family: "Vela Sans"; src: url("assets/VelaSans-Medium.woff2") format("woff2"); font-weight: 500; }
+@font-face { font-family: "Vela Sans"; src: url("assets/VelaSans-SemiBold.woff2") format("woff2"); font-weight: 600; }
+
+:root {
+  color-scheme: dark;
+  --bg: #0c0e11; --surface: #161a1f; --surface-2: #1c2127; --surface-3: #252b33;
+  --line: rgba(236,232,224,.075); --line-2: rgba(236,232,224,.13); --line-3: rgba(236,232,224,.22);
+  --fg: #f2efe9; --fg-2: #b9b6b0; --fg-3: #85837e; --fg-4: #5d5c59;
+  --plan: #cf9d3d; --plan-2: #e8bd66; --ok: #45d08b; --warn: #ff8f3f;
+  --f-display: "Stolzl", "Vela Sans", system-ui, sans-serif;
+  --f-ui: "Vela Sans", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --gut: 24px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 400 14px/1.45 var(--f-ui); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.kicker { font: 500 11px/1.2 var(--f-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+
+/* ── the intro as in the app ───────────────────────────── */
+.intro {
+  position: fixed; inset: 0; overflow: hidden;
+  background:
+    radial-gradient(90% 75% at 30% 18%, rgba(236,232,224,.075), transparent 70%),
+    radial-gradient(60% 50% at 18% 60%, rgba(236,232,224,.03), transparent 70%),
+    var(--bg);
+}
+.intro::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(236,232,224,.1) 1px, transparent 1.4px); background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%); mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%);
+}
+.glow { position: absolute; left: 50%; top: 47%; width: 2000px; height: 1300px; pointer-events: none; transform: translate(calc(-50% + 12vw), -50%); background: radial-gradient(closest-side, rgba(207,157,61,.085), rgba(207,157,61,.03) 55%, transparent); }
+.site { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+.axes { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+.intro-type { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; pointer-events: none; will-change: transform; }
+.rays { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; }
+.intro-canvas { position: absolute; inset: 0; z-index: 5; width: 100%; height: 100%; display: block; }
+.side { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+.intro-top, .intro-foot { z-index: 7; }
+
+/* ── 3D ring: the name as solid letters standing on a ring around the drawing ── */
+.ring { position: absolute; inset: 0; z-index: 4; pointer-events: none; display: none; }
+.intro[data-ring] .ring { display: block; }
+.intro[data-ring] .it-line { visibility: hidden; }
+.ring canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.intro[data-ring] .it-tag { visibility: hidden; }
+.tune { position: fixed; z-index: 21; right: 14px; top: 64px; width: 250px; padding: 12px 14px 14px; border-radius: 12px; background: rgba(16,19,23,.86); border: 1px solid var(--line-2); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); font-size: 12px; color: var(--fg-2); }
+.tune[hidden] { display: none; }
+.tune header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; } .tune header b { color: var(--fg); font-weight: 500; flex: 1; }
+.tune header button { height: 24px; padding: 0 8px; border-radius: 6px; background: var(--surface-3); color: var(--fg-2); font-size: 11.5px; }
+.tune label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin-top: 7px; }
+.tune label input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--plan); }
+.tune select { grid-column: 1 / -1; height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--surface-3); color: var(--fg); font: inherit; }
+.tune output { font: 400 11px var(--f-mono); color: var(--fg); }
+.tune .chk { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.tune .kitset { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 4px 0 0 22px; }
+.tune .kitset label { display: flex; align-items: center; gap: 5px; margin: 0; color: var(--fg-3); }
+
+.it-block { width: min(94vw, 1500px); margin-top: -2vh; }
+.it-line { display: flex; justify-content: space-between; font: 700 min(14.6vw, 236px)/.84 var(--f-display); clip-path: inset(-40% -4% 0 -4%); }
+.it-line.l0 { justify-content: flex-start; }
+.it-line + .it-line { margin-top: .05em; }
+.it-line span {
+  display: block; color: transparent;
+  background: linear-gradient(105deg, transparent 38%, rgba(255,250,240,.26) 50%, transparent 62%) no-repeat, linear-gradient(180deg, rgba(242,239,233,.22), rgba(242,239,233,.075) 85%);
+  background-size: 300% 100%, 100% 100%; background-position: 0% 0, 0 0;
+  -webkit-background-clip: text; background-clip: text; -webkit-text-stroke: 1px rgba(242,239,233,.12);
+  animation: itSweep 9s linear infinite; animation-delay: calc(1.8s + var(--l) * 80ms + var(--i) * 270ms);
+}
+@keyframes itSweep { 0% { background-position: 100% 0, 0 0; } 5.5%, 100% { background-position: 0% 0, 0 0; } }
+.it-tag { display: flex; align-items: center; gap: 22px; margin: clamp(16px, 2.4vw, 36px) 0 0; font: 500 clamp(10.5px, 1vw, 14px)/1.3 var(--f-ui); letter-spacing: .32em; text-transform: uppercase; color: var(--fg-2); }
+.it-tag span { white-space: nowrap; } .it-tag span:last-child { margin-right: -.32em; }
+.it-tag i { flex: 1; height: 1px; background: repeating-linear-gradient(90deg, var(--line-3) 0 6px, transparent 6px 12px); }
+
+.intro-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px; padding: 18px var(--gut); }
+.brand { width: 32px; height: 32px; display: grid; place-items: center; background: var(--plan); color: #15120b; font: 700 12px/1 var(--f-display); border-radius: 3px; }
+.it-name { font: 500 14px/1.2 var(--f-ui); } .grow { flex: 1; } .it-date { color: var(--fg-3); font-size: 13px; }
+.intro-foot { position: absolute; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: end; gap: 24px; padding: 0 var(--gut) 24px; }
+.it-role { display: grid; gap: 5px; justify-items: start; } .it-role b { font: 400 30px/1.05 var(--f-display); letter-spacing: -.02em; } .it-role small { color: var(--fg-3); font-size: 13px; }
+.it-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+.it-steps button { display: grid; gap: 9px; width: 136px; padding: 10px 0 4px; text-align: left; color: var(--fg-3); }
+.it-steps button[aria-current] { color: var(--fg); }
+.it-bar { position: relative; height: 2px; background: var(--line-2); overflow: hidden; } .it-bar i { position: absolute; inset: 0; background: var(--fg); transform: scaleX(0); transform-origin: left; }
+.it-steps button[data-gold] .it-bar i { background: var(--plan-2); }
+.it-lab { font-size: 12px; white-space: nowrap; } .it-lab .mono { color: var(--fg-4); margin-right: 6px; }
+.it-go { justify-self: end; display: inline-flex; align-items: center; gap: 10px; height: 46px; padding: 0 18px 0 22px; border-radius: 10px; background: var(--plan); color: #16120a; font-weight: 500; font-size: 14.5px; }
+
+/* ── picker (only on this test page) ───────────────────── */
+.picker { position: fixed; z-index: 20; top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; padding: 5px; border-radius: 12px; background: rgba(16,19,23,.78); border: 1px solid var(--line-2); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.picker button { height: 30px; padding: 0 11px; border-radius: 8px; font-size: 12.5px; color: var(--fg-2); white-space: nowrap; }
+.picker button kbd { display: none; }
+.picker button[aria-pressed="true"] { background: var(--surface-3); color: var(--fg); }
+.picker button.tog[aria-pressed="true"] { background: rgba(207,157,61,.18); color: var(--plan-2); }
+.picker .sep { width: 1px; height: 20px; background: var(--line-2); margin: 0 2px; }
+.idea { position: fixed; z-index: 20; top: 58px; left: 50%; transform: translateX(-50%); width: min(720px, 92vw); margin: 0; text-align: center; color: var(--fg-2); font-size: 12.5px; text-wrap: balance; }
+
+/* variant visibility */
+.v-cams, .v-mach, .v-data, .rays { display: none; }
+.intro[data-v="cams"] .v-cams, .intro[data-v="cams"] .rays { display: block; }
+.intro[data-v="mach"] .v-mach { display: block; }
+.intro[data-v="data"] .v-data { display: block; }
+.intro:not([data-v="site"]) .site { display: none; }
+.intro:not([data-axes]) .v-draw, .intro:not([data-axes]) .axes { display: none; }
+.side > * { animation: sideIn 700ms var(--ease-out) both; }
+@keyframes sideIn { from { opacity: 0; transform: translateY(8px); } }
+
+/* ── A: drawing sheet — grid axes, elevation scale, title block ── */
+.axes .ax { stroke: rgba(236,232,224,.07); stroke-width: 1; stroke-dasharray: 18 5 2 5; fill: none; }
+.axes circle { fill: var(--bg); stroke: var(--line-3); stroke-width: 1; }
+.axes text { fill: var(--fg-3); font: 500 11px var(--f-ui); text-anchor: middle; dominant-baseline: central; }
+.elev { position: absolute; right: 14px; top: 120px; bottom: 120px; width: 70px; }
+.elev i { position: absolute; right: 0; height: 1px; background: var(--line-3); }
+.elev b { position: absolute; right: 16px; transform: translateY(-50%); font: 400 10px/1 var(--f-mono); color: var(--fg-3); white-space: nowrap; }
+.elev b::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border: 1px solid var(--fg-3); border-top: 0; transform: translateY(-2px) rotate(-45deg) scaleY(.7); }
+.stamp { position: absolute; left: var(--gut); top: 92px; display: grid; grid-template-columns: auto auto; border: 1px solid var(--line-2); font: 400 10.5px/1 var(--f-mono); color: var(--fg-2); background: rgba(12,14,17,.6); }
+.stamp span { padding: 6px 9px; border-right: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.stamp span:nth-child(2n) { border-right: 0; color: var(--fg); }
+.stamp span:nth-last-child(-n+2) { border-bottom: 0; }
+.stamp .k { color: var(--fg-3); }
+.corner { position: absolute; width: 16px; height: 16px; border-color: var(--line-3); border-style: solid; border-width: 0; }
+.corner.tl { left: 10px; top: 10px; border-left-width: 1px; border-top-width: 1px; } .corner.tr { right: 10px; top: 10px; border-right-width: 1px; border-top-width: 1px; }
+.corner.bl { left: 10px; bottom: 10px; border-left-width: 1px; border-bottom-width: 1px; } .corner.br { right: 10px; bottom: 10px; border-right-width: 1px; border-bottom-width: 1px; }
+
+/* ── B: cameras around the edges, sight lines meeting at the drawing ── */
+.cam { position: absolute; width: clamp(176px, 15vw, 250px); aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: #000; box-shadow: 0 20px 50px -24px rgba(0,0,0,.9); }
+.cam img { width: 100%; height: 100%; object-fit: cover; display: block; filter: grayscale(.55) brightness(.62) contrast(1.08); }
+.cam::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px); }
+.cam::after { content: ""; position: absolute; inset: 7px; --c: rgba(242,239,233,.8); --s: 10px;
+  background: linear-gradient(var(--c),var(--c)) 0 0/var(--s) 1.5px no-repeat, linear-gradient(var(--c),var(--c)) 0 0/1.5px var(--s) no-repeat, linear-gradient(var(--c),var(--c)) 100% 0/var(--s) 1.5px no-repeat, linear-gradient(var(--c),var(--c)) 100% 0/1.5px var(--s) no-repeat, linear-gradient(var(--c),var(--c)) 0 100%/var(--s) 1.5px no-repeat, linear-gradient(var(--c),var(--c)) 0 100%/1.5px var(--s) no-repeat, linear-gradient(var(--c),var(--c)) 100% 100%/var(--s) 1.5px no-repeat, linear-gradient(var(--c),var(--c)) 100% 100%/1.5px var(--s) no-repeat; }
+.cam figcaption { position: absolute; inset: 0; z-index: 1; display: grid; grid-template-rows: auto 1fr auto; padding: 12px 13px 10px; font-size: 11.5px; background: linear-gradient(rgba(0,0,0,.45), transparent 35%, transparent 60%, rgba(0,0,0,.65)); }
+.cam .osd { display: flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--f-mono); color: var(--fg-2); }
+.cam .name { grid-row: 3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam figcaption .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(69,208,139,.5); animation: beat 2s ease-out infinite; }
+.cam figcaption .dot.off { background: var(--warn); animation: none; }
+.cam .osd .mono { margin-left: auto; }
+@keyframes beat { 0% { box-shadow: 0 0 0 0 rgba(69,208,139,.45); } 70%,100% { box-shadow: 0 0 0 6px rgba(69,208,139,0); } }
+.cam.c1 { left: var(--gut); top: 96px; } .cam.c2 { left: var(--gut); bottom: 112px; } .cam.c3 { right: var(--gut); top: 96px; } .cam.c4 { right: var(--gut); bottom: 112px; }
+.rays line { stroke: rgba(232,189,102,.38); stroke-width: 1.2; stroke-dasharray: 2 7; animation: march 1.2s linear infinite; }
+.rays .ret circle { fill: none; stroke: var(--plan-2); stroke-width: 1.2; }
+.rays .ret .pulse { transform-box: fill-box; transform-origin: center; animation: ping 2.4s var(--ease-out) infinite; }
+@keyframes march { to { stroke-dashoffset: -18; } }
+@keyframes ping { from { transform: scale(.4); opacity: .9; } to { transform: scale(2.6); opacity: 0; } }
+
+/* ── C: machinery of the stage, plan (gold) on the left, fact (white) on the right ── */
+.mcol { position: absolute; top: 96px; bottom: 112px; width: 210px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.mcol.plan { left: var(--gut); } .mcol.fact { right: var(--gut); align-items: flex-end; text-align: right; }
+.mcol .kicker { margin-bottom: 10px; } .mcol.plan .kicker { color: var(--plan-2); }
+.mrow { display: flex; align-items: center; gap: 10px; height: 34px; opacity: .2; transition: opacity 500ms var(--ease-out); }
+.mcol.fact .mrow { flex-direction: row-reverse; }
+.mrow.on { opacity: 1; }
+.mrow svg { width: 50px; height: 31px; flex: none; overflow: visible; fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.mcol.plan svg { stroke: var(--plan-2); } .mcol.fact svg { stroke: var(--fg); }
+.mrow span { font-size: 12px; color: var(--fg-2); white-space: nowrap; } .mrow small { display: block; font-size: 11px; color: var(--fg-3); }
+.mrow.on.miss small { color: var(--warn); }
+.mrow.on svg path, .mrow.on svg circle { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 900ms cubic-bezier(.4,0,.2,1) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* ── E: the object's own numbers at the edges ── */
+.panel { position: absolute; width: clamp(220px, 19vw, 300px); padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line-2); background: rgba(16,19,23,.6); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.panel.left { left: var(--gut); top: 96px; } .panel.right { right: var(--gut); top: 96px; } .panel.left2 { left: var(--gut); bottom: 112px; } .panel.right2 { right: var(--gut); bottom: 112px; }
+.panel .kicker { display: block; margin-bottom: 8px; }
+.panel h3 { margin: 0 0 4px; font: 400 17px/1.2 var(--f-display); letter-spacing: -.01em; }
+.panel p { margin: 0; color: var(--fg-2); font-size: 12.5px; }
+.panel .bar { height: 3px; border-radius: 2px; background: var(--line-2); margin: 10px 0 6px; overflow: hidden; } .panel .bar i { display: block; height: 100%; width: 80%; background: var(--plan-2); }
+.gantt { display: flex; gap: 3px; margin-top: 10px; } .gantt i { flex: 1; height: 6px; border-radius: 1px; background: rgba(207,157,61,.35); } .gantt i.now { background: var(--plan-2); } .gantt i.next { background: var(--line-2); }
+.panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.panel li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; } .panel li .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; } .panel li .dot.off { background: var(--warn); }
+.panel li .mono { margin-left: auto; color: var(--fg-3); font-size: 11px; }
+.panel .big { font: 400 34px/1 var(--f-display); } .panel .big small { font: 400 13px var(--f-ui); color: var(--fg-3); margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="intro" id="intro" data-v="cams">
+  <div class="glow"></div>
+  <canvas class="site" id="site" aria-hidden="true"></canvas>
+  <svg class="axes" id="axes" aria-hidden="true"></svg>
+
+  <div class="intro-type" id="type">
+    <div class="it-block">
+      <div class="it-line l0" aria-hidden="true"><span style="--i:0;--l:0">С</span><span style="--i:1;--l:0">Т</span><span style="--i:2;--l:0">Р</span><span style="--i:3;--l:0">О</span><span style="--i:4;--l:0">Й</span></div>
+      <div class="it-line l1" aria-hidden="true"><span style="--i:0;--l:1">К</span><span style="--i:1;--l:1">О</span><span style="--i:2;--l:1">Н</span><span style="--i:3;--l:1">Т</span><span style="--i:4;--l:1">Р</span><span style="--i:5;--l:1">О</span><span style="--i:6;--l:1">Л</span><span style="--i:7;--l:1">Ь</span></div>
+      <p class="it-tag"><span>Наблюдайте за этапами стройки</span><i></i><span>из единой точки</span></p>
+    </div>
+  </div>
+
+  <svg class="rays" id="rays" aria-hidden="true"></svg>
+  <div class="ring" id="ring" aria-hidden="true"><canvas id="ringCv"></canvas></div>
+  <canvas class="intro-canvas" id="cv" aria-hidden="true"></canvas>
+
+  <!-- A -->
+  <div class="side v-draw">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div class="elev" id="elev"></div>
+    <div class="stamp">
+      <span class="k">Лист</span><span>1 из 1</span>
+      <span class="k">Масштаб</span><span>1:200</span>
+      <span class="k">Показано</span><span id="stSubject">Экскаватор</span>
+      <span class="k">Поворот</span><span id="stYaw">0°</span>
+    </div>
+  </div>
+
+  <!-- B -->
+  <div class="side v-cams">
+    <figure class="cam c1" style="margin:0;animation-delay:80ms"><img src="assets/cam1.webp" alt=""><figcaption><span class="osd"><i class="dot"></i>КАМ 1<span class="mono clock"></span></span><span class="name">Котлован, общий план</span></figcaption></figure>
+    <figure class="cam c2" style="margin:0;animation-delay:160ms"><img src="assets/cam2.webp" alt=""><figcaption><span class="osd"><i class="dot"></i>КАМ 2<span class="mono clock"></span></span><span class="name">Кран и склад</span></figcaption></figure>
+    <figure class="cam c3" style="margin:0;animation-delay:240ms"><img src="assets/cam3.webp" alt=""><figcaption><span class="osd"><i class="dot"></i>КАМ 3<span class="mono clock"></span></span><span class="name">Котлован, запад</span></figcaption></figure>
+    <figure class="cam c4" style="margin:0;animation-delay:320ms"><img src="assets/cam1-truck.webp" alt=""><figcaption><span class="osd"><i class="dot off"></i>КАМ 4<span class="mono">нет сигнала</span></span><span class="name">Въезд</span></figcaption></figure>
+  </div>
+
+  <!-- C -->
+  <div class="side v-mach">
+    <div class="mcol plan" id="mplan"></div>
+    <div class="mcol fact" id="mfact"></div>
+  </div>
+
+  <!-- E -->
+  <div class="side v-data">
+    <div class="panel left" style="animation-delay:80ms">
+      <span class="kicker">Объект</span>
+      <h3>Объект строительства (design_probe)</h3>
+      <p>Зона: Котлован</p>
+    </div>
+    <div class="panel left2" style="animation-delay:160ms">
+      <span class="kicker">Этап 6 из 9</span>
+      <h3>Кладка наружных стен и перегородок</h3>
+      <div class="bar"><i></i></div>
+      <p class="mono" style="font-size:11.5px">день 32 из 40 · 15 сен — 24 окт</p>
+      <div class="gantt"><i></i><i></i><i></i><i></i><i></i><i class="now"></i><i class="next"></i><i class="next"></i><i class="next"></i></div>
+    </div>
+    <div class="panel right" style="animation-delay:240ms">
+      <span class="kicker">Источники · 3 из 4 дают кадры</span>
+      <ul>
+        <li><i class="dot"></i>Котлован, общий план<span class="mono">2 с</span></li>
+        <li><i class="dot"></i>Кран и склад<span class="mono">1 с</span></li>
+        <li><i class="dot"></i>Котлован, запад<span class="mono">3 с</span></li>
+        <li><i class="dot off"></i>Въезд<span class="mono">12 мин</span></li>
+      </ul>
+    </div>
+    <div class="panel right2" style="animation-delay:320ms">
+      <span class="kicker">Ждут решения</span>
+      <div class="big">2<small>события за смену</small></div>
+      <p style="margin-top:8px">Самосвал не замечен 6 минут</p>
+    </div>
+  </div>
+
+  <header class="intro-top">
+    <div class="brand">СК</div><span class="it-name">Строй-контроль</span><span class="grow"></span><span class="it-date" id="date"></span>
+  </header>
+  <footer class="intro-foot">
+    <div class="it-role"><span class="kicker">Ваша роль</span><b>Прораб</b><small>design_probe</small></div>
+    <ol class="it-steps" id="steps"></ol>
+    <button class="it-go" type="button">Начать работу <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
+  </footer>
+</div>
+
+<nav class="picker" id="picker" aria-label="Вариант заполнения краёв">
+  <button type="button" data-v="none"><kbd>0</kbd>Как сейчас</button>
+  <button type="button" data-v="cams"><kbd>1</kbd>Камеры</button>
+  <button type="button" data-v="mach"><kbd>2</kbd>Техника этапа</button>
+  <button type="button" data-v="site"><kbd>3</kbd>Площадка</button>
+  <button type="button" data-v="data"><kbd>4</kbd>Данные объекта</button>
+  <span class="sep"></span>
+  <button type="button" class="tog" id="axesBtn"><kbd>A</kbd>Чертёж</button>
+  <button type="button" class="tog" id="ringBtn"><kbd>R</kbd>3D-кольцо</button>
+</nav>
+<p class="idea" id="idea"></p>
+<aside class="tune" id="tune" hidden>
+  <header><b>Кольцо букв</b><button type="button" id="tuneCopy">Скопировать</button><button type="button" id="tuneReset">Сброс</button><button type="button" id="tuneHide" title="Свернуть панель (T)">—</button></header>
+  <label>Радиус кольца<output data-o="R"></output><input type="range" min="1.2" max="3.6" step="0.05" data-k="R"></label>
+  <label>Высота кольца<output data-o="y"></output><input type="range" min="-1.8" max="0.6" step="0.05" data-k="y"></label>
+  <label>Подъём дальней стороны, °<output data-o="tilt"></output><input type="range" min="0" max="30" step="1" data-k="tilt"></label>
+  <label>Где центр текста, °<output data-o="center"></output><input type="range" min="-80" max="80" step="1" data-k="center"></label>
+  <label>Высота букв<output data-o="size"></output><input type="range" min="0.1" max="0.6" step="0.01" data-k="size"></label>
+  <label>Толщина блоков<output data-o="depth"></output><input type="range" min="0.02" max="0.6" step="0.01" data-k="depth"></label>
+  <label>Покачивание, °<output data-o="sway"></output><input type="range" min="0" max="30" step="1" data-k="sway"></label>
+  <label class="chk"><input type="checkbox" data-k="spin">Вращать кольцо целиком</label>
+  <label class="chk"><input type="checkbox" data-k="tag">Слоган табличкой перед блоками</label>
+  <label class="chk"><input type="checkbox" data-k="refl">Мягкое отражение в полу</label>
+  <label class="chk"><input type="checkbox" data-k="props">Реквизит стройки на буквах</label>
+  <div class="kitset" aria-label="Что из реквизита показать">
+    <label><input type="checkbox" data-k="kitHat">Каска</label><label><input type="checkbox" data-k="kitBricks">Кирпичи</label><label><input type="checkbox" data-k="kitBucket">Ведро</label><label><input type="checkbox" data-k="kitCone">Конус</label><label><input type="checkbox" data-k="kitPlumb">Отвес</label><label><input type="checkbox" data-k="kitLevel">Уровень</label><label><input type="checkbox" data-k="kitSpade">Лопата</label>
+  </div>
+  <label>Каска<select data-k="hat"><option value="red">Красная, как у мастера и прораба</option><option value="white">Белая, как у инженера</option><option value="orange">Оранжевая, как у рабочего</option><option value="yellow">Жёлтая</option></select></label>
+  <label>Шрифт<select data-k="font"><option value="stolzl">Stolzl, как в приложении</option><option value="gost">ГОСТ 2.304, тип А</option></select></label>
+  <label>Материал<select data-k="mat"><option value="cycle">Меняется светом: графит → золото → керамика</option><option value="graphite">Графит</option><option value="gold">Матовое золото</option><option value="ceramic">Белая керамика</option></select></label>
+</aside>
+
+<script src="intro-sides.wire.js"></script>
+<script>
+const { WireScene, SUBJECTS, SIL, MACH } = Wire
+const intro = document.getElementById('intro')
+const $ = (id) => document.getElementById(id)
+const NS = 'http://www.w3.org/2000/svg'
+
+const IDEAS = {
+  none: 'Как в приложении сейчас: края пустые.',
+  cams: 'Камеры объекта по углам, от каждой к рисунку идёт пунктирный луч и все сходятся в одной точке: буквально «из единой точки». В приложении здесь были бы последние кадры реальных источников.',
+  mach: 'Справочник техники по краям: слева план этапа золотом, справа то, что видят камеры, белым. Набор меняется вместе с рисунком, силуэты те же, что в сверке на главном экране.',
+  site: 'Сама площадка вокруг: пунктирная сетка земли уходит в перспективу, по краям вдали кран, бытовки, забор и прожекторы со светом. Рисунок стоит на ней, края заполняются глубиной, а не интерфейсом.',
+  data: 'Живые цифры объекта в углах: объект и зона, этап и день, источники со свежестью кадра, сколько событий ждёт решения. В приложении берутся из API после входа.',
+}
+const AXES_IDEA = ' + Чертёж: координационные оси с марками по краям, высотные отметки справа, штамп листа с текущим поворотом.'
+const RING_IDEA = ' + 3D-кольцо: название объёмными буквами на кольце вокруг рисунка, в той же перспективе; на буквах реквизит стройки; форму подгоняют ползунки справа.'
+
+const par = { x: 0, y: 0 }
+const MACH_BY = [
+  { stage: 'Котлован', plan: ['excavator', 'dump_truck', 'bulldozer'], seen: ['excavator', 'dump_truck'] },
+  { stage: 'Монолитный каркас', plan: ['tower_crane', 'concrete_mixer', 'concrete_pump'], seen: ['tower_crane', 'concrete_mixer'] },
+  { stage: 'Вывоз грунта', plan: ['dump_truck', 'loader', 'excavator'], seen: ['dump_truck', 'excavator'] },
+  { stage: 'Высотная башня', plan: ['tower_crane', 'concrete_pump', 'truck_crane'], seen: ['tower_crane', 'concrete_pump'] },
+]
+const CODES = Object.keys(SIL)
+
+/* ── scene ── */
+const scene = new WireScene($('cv'), 1)
+scene.start()
+const steps = $('steps')
+SUBJECTS.forEach((s, i) => {
+  const li = document.createElement('li')
+  li.innerHTML = `<button type="button" ${s.gold ? 'data-gold' : ''}><span class="it-bar"><i></i></span><span class="it-lab"><span class="mono">0${i + 1}</span>${s.title}</span></button>`
+  li.firstChild.onclick = () => scene.show(i)
+  steps.append(li)
+})
+const fills = [...steps.querySelectorAll('.it-bar i')]
+let current = 0
+scene.on = {
+  onIndex: (i) => {
+    current = i
+    steps.querySelectorAll('button').forEach((b, j) => b.toggleAttribute('aria-current', j === i))
+    $('stSubject').textContent = SUBJECTS[i].title
+    renderMach(i)
+  },
+  onTick: (i, p) => fills.forEach((el, j) => (el.style.transform = `scaleX(${j < i ? 1 : j === i ? p : 0})`)),
+  onParallax: (x, y) => {
+    $('type').style.transform = `translate3d(${-x * 14}px, ${-y * 8}px, 0)`
+    par.x = x
+    par.y = y
+  },
+}
+scene.on.onIndex(scene.current)
+const WEEK = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота']
+const MON = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
+const now = new Date()
+$('date').textContent = `${WEEK[now.getDay()]}, ${now.getDate()} ${MON[now.getMonth()]} ${now.getFullYear()}`
+setInterval(() => {
+  const t = new Date().toTimeString().slice(0, 8)
+  document.querySelectorAll('.clock').forEach((el) => (el.textContent = t))
+  const deg = Math.round((((scene.yaw * 180) / Math.PI) % 360 + 360) % 360)
+  $('stYaw').textContent = `${deg}°`
+}, 250)
+
+/* layout of the drawing in the app (wire.ts, intro layout, landscape) */
+const centre = () => ({ x: innerWidth * 0.62, y: innerHeight * 0.47, unit: Math.min(innerWidth * 0.36, innerHeight * 0.45) })
+
+/* ── A: axes and elevations ── */
+function drawAxes() {
+  const svg = $('axes')
+  const w = innerWidth, h = innerHeight
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+  svg.innerHTML = ''
+  const cols = 8, rows = 4, x0 = 70, x1 = w - 110, y0 = 150, y1 = h - 150
+  const add = (tag, attrs, text) => { const el = document.createElementNS(NS, tag); for (const k in attrs) el.setAttribute(k, attrs[k]); if (text) el.textContent = text; svg.append(el); return el }
+  for (let i = 0; i < cols; i++) {
+    const x = x0 + ((x1 - x0) * i) / (cols - 1)
+    add('line', { x1: x, y1: 104, x2: x, y2: h - 96, class: 'ax' })
+    add('circle', { cx: x, cy: 92, r: 11 }); add('text', { x, y: 92 }, String(i + 1))
+  }
+  'АБВГ'.split('').forEach((ch, i) => {
+    const y = y0 + ((y1 - y0) * i) / (rows - 1)
+    add('line', { x1: 34, y1: y, x2: w - 96, y2: y, class: 'ax' })
+    add('circle', { cx: 22, cy: y, r: 11 }); add('text', { x: 22, y }, ch)
+  })
+  const elev = $('elev')
+  elev.innerHTML = ''
+  const top = 120, bottom = h - 120, n = 12
+  for (let k = 0; k <= n * 4; k++) {
+    const y = bottom - top - ((bottom - top) * k) / (n * 4)
+    const i = document.createElement('i')
+    i.style.top = `${y}px`; i.style.width = k % 4 ? '6px' : '12px'
+    elev.append(i)
+    if (k % 8 === 0) { const b = document.createElement('b'); b.style.top = `${y}px`; b.textContent = `+${(k / 4 * 3.3).toFixed(3).replace('.', ',')}`; elev.append(b) }
+  }
+}
+
+/* ── B: sight lines from each camera to the drawing ── */
+function drawRays() {
+  const svg = $('rays')
+  const w = innerWidth, h = innerHeight
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+  const c = centre()
+  let out = ''
+  document.querySelectorAll('.cam').forEach((cam) => {
+    const r = cam.getBoundingClientRect()
+    const fromLeft = r.left < w / 2
+    const x = fromLeft ? r.right : r.left
+    const y = r.top + r.height / 2
+    out += `<line x1="${x}" y1="${y}" x2="${c.x}" y2="${c.y}"/>`
+  })
+  out += `<g class="ret"><circle cx="${c.x}" cy="${c.y}" r="5"/><circle class="pulse" cx="${c.x}" cy="${c.y}" r="5"/></g>`
+  svg.innerHTML = out
+}
+
+/* ── C: plan and fact machinery per subject ── */
+function renderMach(i) {
+  const m = MACH_BY[i]
+  const row = (code, on, note, miss) => `<div class="mrow${on ? ' on' : ''}${miss ? ' miss' : ''}"><svg viewBox="0 0 64 40">${SIL[code]}</svg><span>${MACH[code].name}${on ? `<small>${note}</small>` : ''}</span></div>`
+  $('mplan').innerHTML = `<span class="kicker">План · ${m.stage}</span>` + CODES.map((c) => row(c, m.plan.includes(c), 'обязательна')).join('')
+  $('mfact').innerHTML = `<span class="kicker">Факт · камеры</span>` + CODES.map((c) => {
+    const planned = m.plan.includes(c), seen = m.seen.includes(c)
+    return row(c, planned, seen ? 'замечен · камеры 1, 3' : 'нет 6 мин', planned && !seen)
+  }).join('')
+  document.querySelectorAll('.mrow.on svg *').forEach((el) => el.setAttribute('pathLength', '1'))
+}
+
+/* ── D: the site around the drawing ── */
+const site = $('site'), sx = site.getContext('2d')
+function siteFrame() {
+  requestAnimationFrame(siteFrame)
+  if (intro.dataset.v !== 'site') return
+  const dpr = Math.min(2, devicePixelRatio || 1), w = innerWidth, h = innerHeight
+  if (site.width !== Math.round(w * dpr)) { site.width = Math.round(w * dpr); site.height = Math.round(h * dpr) }
+  sx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  sx.clearRect(0, 0, w, h)
+  const unit = Math.min(w * 0.36, h * 0.45), D = 5, f = unit * D, cx = w / 2, cy = h * 0.47
+  const yaw = par.x * 0.06, pitch = 0.3 + par.y * 0.02
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch)
+  const P = (x, y, z) => { const xr = x * cyw - z * syw, zr = x * syw + z * cyw, y2 = y * cp + zr * sp, z2 = -y * sp + zr * cp, d = f / (D + z2); return [cx + xr * d, cy - y2 * d, z2] }
+  const G = -0.62
+  const fade = (z) => Math.max(0, Math.min(1, 1 - (z - 0.5) / 5.5))
+  const seg = (a, b, alpha, dash = [3, 5]) => { const p = P(...a), q = P(...b); sx.globalAlpha = alpha * fade((p[2] + q[2]) / 2); sx.setLineDash(dash); sx.beginPath(); sx.moveTo(p[0], p[1]); sx.lineTo(q[0], q[1]); sx.stroke() }
+  const poly = (pts, alpha, closed) => { for (let i = 0; i < pts.length - (closed ? 0 : 1); i++) seg(pts[i], pts[(i + 1) % pts.length], alpha) }
+  const box = (x0, y0, z0, x1, y1, z1, a) => { const v = [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1],[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]; [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]].forEach(([i, j]) => seg(v[i], v[j], a)) }
+  sx.lineWidth = 1
+  // ground grid
+  sx.strokeStyle = 'rgb(242,239,233)'
+  for (let x = -8; x <= 8; x += 0.5) for (let z = -1.5; z < 6; z += 0.75) seg([x, G, z], [x, G, z + 0.75], 0.09)
+  for (let z = -1.5; z <= 6; z += 0.5) for (let x = -8; x < 8; x += 1) seg([x, G, z], [x + 1, G, z], 0.09)
+  // floodlights: light first, then the masts
+  for (const [x, z, h2] of [[-2.2, 0.3, 1.5], [2.5, 2.4, 1.9], [-1.4, 4.2, 1.8], [3.2, -0.2, 1.3]]) {
+    const top = P(x, G + h2, z), g1 = P(x - 0.9, G, z - 0.4), g2 = P(x + 0.9, G, z - 0.4)
+    const grad = sx.createLinearGradient(top[0], top[1], (g1[0] + g2[0]) / 2, g1[1])
+    grad.addColorStop(0, 'rgba(255,236,200,.085)'); grad.addColorStop(1, 'rgba(255,236,200,0)')
+    sx.globalAlpha = fade(top[2]); sx.fillStyle = grad
+    sx.beginPath(); sx.moveTo(top[0], top[1]); sx.lineTo(g1[0], g1[1]); sx.lineTo(g2[0], g2[1]); sx.closePath(); sx.fill()
+    const pool = P(x, G, z - 0.3), rg = sx.createRadialGradient(pool[0], pool[1], 0, pool[0], pool[1], 160 * (f / (D + pool[2])) / f * 5)
+    rg.addColorStop(0, 'rgba(255,236,200,.07)'); rg.addColorStop(1, 'rgba(255,236,200,0)')
+    sx.fillStyle = rg; sx.fillRect(pool[0] - 400, pool[1] - 200, 800, 400)
+    sx.strokeStyle = 'rgb(242,239,233)'
+    seg([x, G, z], [x, G + h2, z], 0.4)
+    box(x - 0.12, G + h2, z - 0.05, x + 0.12, G + h2 + 0.1, z + 0.05, 0.5)
+    const lamp = P(x, G + h2, z - 0.05); sx.globalAlpha = 0.9 * fade(lamp[2]); sx.fillStyle = '#ffe9c4'; sx.beginPath(); sx.arc(lamp[0], lamp[1], 2.2, 0, 7); sx.fill()
+  }
+  // a tower crane far left
+  sx.strokeStyle = 'rgb(232,189,102)'
+  const mx = -3.1, mz = 2.2, mh = 2.2
+  for (const [dx, dz] of [[-0.06, -0.06], [0.06, -0.06], [0.06, 0.06], [-0.06, 0.06]]) seg([mx + dx, G, mz + dz], [mx + dx, G + mh, mz + dz], 0.45)
+  for (let y = 0; y < mh; y += 0.18) seg([mx - 0.06, G + y, mz - 0.06], [mx + 0.06, G + y + 0.18, mz - 0.06], 0.3)
+  seg([mx - 0.5, G + mh, mz], [mx + 1.8, G + mh, mz], 0.45); seg([mx, G + mh + 0.3, mz], [mx + 1.8, G + mh, mz], 0.3); seg([mx, G + mh + 0.35, mz], [mx - 0.6, G + mh, mz], 0.3)
+  seg([mx + 1.2, G + mh, mz], [mx + 1.2, G + mh - 0.8, mz], 0.3)
+  box(mx - 0.5, G + mh - 0.2, mz - 0.08, mx - 0.3, G + mh, mz + 0.08, 0.4)
+  // site cabins and a fence on the right
+  sx.strokeStyle = 'rgb(242,239,233)'
+  for (const [x, y] of [[1.9, 0], [2.55, 0], [1.9, 0.32]]) box(x, G + y, 1.1, x + 0.6, G + y + 0.3, 1.35, 0.42)
+  for (let x = 1.7; x <= 5; x += 0.3) seg([x, G, -0.5], [x, G + 0.24, -0.5], 0.32)
+  seg([1.7, G + 0.22, -0.5], [5, G + 0.22, -0.5], 0.32); seg([1.7, G + 0.07, -0.5], [5, G + 0.07, -0.5], 0.32)
+  for (let x = -5; x <= -1.6; x += 0.3) seg([x, G, -0.7], [x, G + 0.24, -0.7], 0.32)
+  seg([-5, G + 0.22, -0.7], [-1.6, G + 0.22, -0.7], 0.32)
+  // stacks of material
+  for (const [x, z] of [[-2.4, 1.2], [-2.0, 1.3]]) for (let k = 0; k < 3; k++) box(x, G + k * 0.06, z, x + 0.3, G + k * 0.06 + 0.05, z + 0.5, 0.36)
+  sx.globalAlpha = 1; sx.setLineDash([])
+}
+requestAnimationFrame(siteFrame)
+
+
+/* ── 3D ring of letters ──
+   Same camera as the drawing (wire.ts: distance 5, pitch 0.3, unit, centre at 62 % / 47 %), so the
+   blocks and the model share one perspective. Drawn on a canvas under the model: every letter is a
+   stack of sprites from its back wall to its face, each placed by the projection of its own corners.
+   The wall sprites are shaded from the outline's normals, so top faces catch the light from above,
+   left walls are half lit, right walls fall into shade; the face gets a chamfer of light along its
+   upper edges and a lit copy whose opacity is the light falling on it. */
+const FONT_PX = 140, TAG_PX = 18, PAD = 10, LEVELS = 16
+const WORD = 'СТРОЙ КОНТРОЛЬ', TAG = 'НАБЛЮДАЙТЕ ЗА ЭТАПАМИ СТРОЙКИ · ИЗ ЕДИНОЙ ТОЧКИ'
+const ringCv = $('ringCv'), rc = ringCv.getContext('2d')
+const reflCv = document.createElement('canvas'), xc = reflCv.getContext('2d')
+const RING = {}
+let glyphs = [], floorProps = [], met = null, tagMet = null, shadowSprite = null
+const sprites = new Map()
+const vp = () => {
+  const w = innerWidth, h = innerHeight, unit = Math.min(w * 0.36, h * 0.45), cx = w * 0.62
+  return { w, h, unit, cx, cy: h * 0.47, D: 5, f: unit * 5 }
+}
+function ringDefaults() {
+  const v = vp()
+  const R = Math.min(2.4, Math.max(1.4, (v.cx - 0.1 * v.w) / (v.unit * 0.9)))
+  const size = +(0.127 * R).toFixed(2)
+  // standing on the ground the drawing stands on (its lowest base), level, still, deep as blocks
+  return { R: +R.toFixed(2), y: -0.75, tilt: 0, center: -20, size, depth: +(0.6 * size).toFixed(2), sway: 0, spin: false, tag: true, mat: 'cycle', refl: true, font: 'stolzl', props: true, hat: 'red', kitHat: true, kitBricks: true, kitBucket: true, kitCone: true, kitPlumb: true, kitLevel: true, kitSpade: true }
+}
+function measure(font) {
+  const c = document.createElement('canvas').getContext('2d')
+  c.font = font
+  const px = parseFloat(font.split(' ')[1])
+  const m = c.measureText('Н')
+  return { c, px, cap: m.actualBoundingBoxAscent, base: (px - (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent)) / 2 + m.fontBoundingBoxAscent }
+}
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c }
+/* Materials. Colours are 0..1 RGB. `face` is the environment reflected in the face from top to
+   bottom (sky, horizon, the warm ground), `rim` a thin chamfer of light along the upper outlines,
+   `fres` a glow along every outline. Walls take `top` where they face up, `side` where they face
+   left, `shade` where they face away; `spec` is a glint along the front edge of the top faces.
+   `sheen` is the softbox reflection that slides over a face as it turns to the camera, `refl` how
+   strongly the blocks are mirrored in a glossy floor. */
+const MATS = {
+  graphite: { name: 'Графит', face: [[0, [0.24, 0.24, 0.25]], [1, [0.14, 0.14, 0.15]]], rim: [0.6, 0.59, 0.57], rimK: 0.3, rimPow: 2, fres: 0, top: [0.56, 0.56, 0.57], side: [0.2, 0.2, 0.21], shade: [0.05, 0.05, 0.06], spec: 0, back: 0.5, sheen: [1, 0.98, 0.94], sheenA: 0.05, sheenW: 0.35, glow: 0.16, grain: 0.035, refl: 0.2 },
+  gold: { name: 'Матовое золото', face: [[0, [0.62, 0.47, 0.22]], [1, [0.4, 0.28, 0.11]]], rim: [1, 0.88, 0.62], rimK: 0.32, rimPow: 2, fres: 0, top: [0.98, 0.83, 0.52], side: [0.44, 0.3, 0.11], shade: [0.15, 0.09, 0.03], spec: 0, back: 0.5, sheen: [1, 0.94, 0.8], sheenA: 0.07, sheenW: 0.35, glow: 0.2, grain: 0.03, refl: 0.2 },
+  ceramic: { name: 'Белая керамика', face: [[0, [0.74, 0.73, 0.71]], [1, [0.56, 0.55, 0.53]]], rim: [1, 1, 1], rimK: 0.28, rimPow: 2, fres: 0, top: [0.98, 0.97, 0.95], side: [0.46, 0.45, 0.44], shade: [0.2, 0.19, 0.18], spec: 0, back: 0.45, sheen: [1, 1, 1], sheenA: 0.06, sheenW: 0.35, glow: 0.18, grain: 0.025, refl: 0.18 },
+}
+// the order the passing light carries the letters through
+const MAT_SEQ = ['graphite', 'gold', 'ceramic']
+const ramp = (stops, x, out) => {
+  let k = 0
+  while (k < stops.length - 2 && x > stops[k + 1][0]) k++
+  const [x0, c0] = stops[k], [x1, c1] = stops[Math.min(k + 1, stops.length - 1)]
+  const u = x1 > x0 ? Math.max(0, Math.min(1, (x - x0) / (x1 - x0))) : 0
+  for (let c = 0; c < 3; c++) out[c] = c0[c] + (c1[c] - c0[c]) * u
+  return out
+}
+// sprites of one letter in the current material: walls at LEVELS depths, the face, its floor reflection
+/* ГОСТ 2.304-81, тип А, built on its own grid: the line is d = h/14 thick, capitals are 14d tall,
+   6d (С) or 7d (the rest here) wide, 2d apart, words 6d apart, slanted at 75°. Strokes are in d
+   from the baseline, y up; arcs are tessellated. Only the letters of the name are drawn. */
+const GOST_SKEW = Math.tan((15 * Math.PI) / 180)
+const garc = (cx, cy, rx, ry, a0, a1, n = 14) => Array.from({ length: n + 1 }, (_, i) => { const a = ((a0 + ((a1 - a0) * i) / n) * Math.PI) / 180; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)] })
+const GOST = {
+  'С': { w: 6, s: [[...garc(3, 11, 3, 3, 20, 180), ...garc(3, 3, 3, 3, 180, 340)]] },
+  'Т': { w: 7, s: [[[0, 14], [7, 14]], [[3.5, 14], [3.5, 0]]] },
+  'Р': { w: 7, s: [[[0, 0], [0, 14], [3.5, 14], ...garc(3.5, 10.5, 3.5, 3.5, 90, -90), [0, 7]]] },
+  'О': { w: 7, s: [[...garc(3.5, 10.5, 3.5, 3.5, 0, 180), ...garc(3.5, 3.5, 3.5, 3.5, 180, 360), [7, 10.5]]] },
+  'Й': { w: 7, s: [[[0, 14], [0, 0], [7, 14], [7, 0]], garc(3.5, 16.3, 1.9, 1.15, 180, 360, 10)] },
+  'К': { w: 7, s: [[[0, 0], [0, 14]], [[7, 14], [0, 6]], [[2.2, 8.5], [7, 0]]] },
+  'Н': { w: 7, s: [[[0, 0], [0, 14]], [[7, 0], [7, 14]], [[0, 7], [7, 7]]] },
+  'Л': { w: 7, s: [[[0, 0], [3, 14], [7, 14], [7, 0]]] },
+  'Ь': { w: 7, s: [[[0, 14], [0, 0], [3.5, 0], ...garc(3.5, 3.5, 3.5, 3.5, -90, 90), [0, 7]]] },
+}
+const gostU = () => met.cap / 14 // sprite px per d
+const glyphAdv = (ch) => RING.font === 'gost' ? (ch === ' ' ? 6 : GOST[ch].w + 2) * gostU() : met.c.measureText(ch).width * (ch === ' ' ? 1.5 : 1)
+// the letter's ink, white on clear, with its alpha; the kit on the letters finds its place from it
+const masks = new Map()
+function glyphMask(ch) {
+  const gost = RING.font === 'gost'
+  const key = RING.font + ':' + ch
+  if (masks.has(key)) return masks.get(key)
+  const u = gostU()
+  const adv = gost ? (GOST[ch].w + 2) * u : met.c.measureText(ch).width
+  const w = gost ? Math.ceil((GOST[ch].w + 1 + 14 * GOST_SKEW + 1) * u) + PAD * 2 : Math.ceil(adv) + PAD * 2, h = FONT_PX + PAD * 2
+  const mask = mk(w, h), m = mask.getContext('2d')
+  if (gost) {
+    // one even line with round ends, slanted like a drawing's lettering
+    m.strokeStyle = '#fff'
+    m.lineWidth = u
+    m.lineCap = 'round'
+    m.lineJoin = 'round'
+    for (const line of GOST[ch].s) {
+      m.beginPath()
+      line.forEach(([x, y], i) => { const X = PAD + u * (0.5 + x + y * GOST_SKEW), Y = PAD + met.base - u * y; i ? m.lineTo(X, Y) : m.moveTo(X, Y) })
+      m.stroke()
+    }
+  } else {
+    m.font = `700 ${FONT_PX}px Stolzl`
+    m.fillStyle = '#fff'
+    m.fillText(ch, PAD, PAD + met.base)
+  }
+  const gm = { w, h, adv, mask, A: m.getImageData(0, 0, w, h).data }
+  masks.set(key, gm)
+  return gm
+}
+function letterSprites(ch, mat) {
+  const gost = RING.font === 'gost'
+  const key = RING.font + ':' + mat + ':' + ch
+  if (sprites.has(key)) return sprites.get(key)
+  const M = MATS[mat]
+  const { w, h, adv, mask, A } = glyphMask(ch)
+  const soft = mk(w, h), b = soft.getContext('2d')
+  b.filter = gost ? 'blur(1.5px)' : 'blur(4px)'
+  b.drawImage(mask, 0, 0)
+  const B = b.getImageData(0, 0, w, h).data
+  const n = w * h, nx = new Float32Array(n), ny = new Float32Array(n), edge = new Float32Array(n)
+  let gmax = 1e-6
+  for (let y = 1; y < h - 1; y++)
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const gx = B[(i + 1) * 4 + 3] - B[(i - 1) * 4 + 3], gy = B[(i + w) * 4 + 3] - B[(i - w) * 4 + 3]
+      const g = Math.hypot(gx, gy)
+      if (g > 0) { nx[i] = -gx / g; ny[i] = -gy / g } // alpha grows inwards, so the outward normal is minus the gradient
+      edge[i] = g
+      gmax = Math.max(gmax, g)
+    }
+  const yTop = PAD + met.base - met.cap
+  const out = [0, 0, 0]
+  const seed = ch.charCodeAt(0)
+  const paint = (fn) => {
+    const c = mk(w, h), x = c.getContext('2d'), img = x.createImageData(w, h)
+    for (let i = 0; i < n; i++) {
+      const a = A[i * 4 + 3]
+      if (!a) continue
+      const am = fn(i, out)
+      const r = Math.sin(i * 12.9898 + seed) * 43758.5453, gn = (r - Math.floor(r) - 0.5) * (M.grain || 0)
+      img.data[i * 4] = Math.min(255, (out[0] + gn) * 255); img.data[i * 4 + 1] = Math.min(255, (out[1] + gn) * 255); img.data[i * 4 + 2] = Math.min(255, (out[2] + gn) * 255)
+      img.data[i * 4 + 3] = a * (am === undefined ? 1 : am)
+    }
+    x.putImageData(img, 0, 0)
+    return c
+  }
+  const S = (i) => Math.min(1, edge[i] / (gmax * 0.3))
+  const LX = -0.42, LY = -0.91 // light in image space: from above, a little from the left
+  const faceAt = (i, o) => {
+    const s = S(i), yf = (Math.floor(i / w) - yTop) / met.cap
+    ramp(M.face, Math.max(0, Math.min(1, yf)), o)
+    const lam = Math.max(0, nx[i] * LX + ny[i] * LY)
+    const rim = M.rimK * Math.pow(s, M.rimPow) * lam, fr = M.fres * Math.pow(s, 3)
+    for (let c = 0; c < 3; c++) o[c] = o[c] * (1 - rim) + M.rim[c] * rim + fr
+    return yf
+  }
+  const sp = { w, h, adv, walls: [] }
+  for (let lv = 0; lv < LEVELS; lv++) {
+    const lf = lv / (LEVELS - 1)
+    const glint = M.spec * Math.exp(-(((lf - 0.06) / 0.06) ** 2))
+    sp.walls.push(paint((i, o) => {
+      const s = S(i)
+      // tops catch the light; undersides are never seen on the block itself, only in the floor
+      // mirror, so they take the same light and the reflection keeps the block's volume
+      const wt = Math.pow(Math.abs(ny[i]), 1.3), wl = Math.max(0, -nx[i]) * (1 - wt)
+      for (let c = 0; c < 3; c++) {
+        const v = M.shade[c] + (M.side[c] - M.shade[c]) * wl + (M.top[c] - M.shade[c]) * wt + glint * wt
+        o[c] = (M.shade[c] * (1 - s) + v * s) * (1 - M.back * lf)
+      }
+    }))
+  }
+  sp.face = paint((i, o) => { faceAt(i, o) })
+  sprites.set(key, sp)
+  return sp
+}
+function tagSprite(ch) {
+  const key = 'tag:' + ch
+  if (sprites.has(key)) return sprites.get(key)
+  const adv = tagMet.c.measureText(ch).width
+  const w = Math.ceil(adv) + 4, h = TAG_PX + 4, c = mk(w, h), x = c.getContext('2d')
+  x.font = `500 ${TAG_PX}px "Vela Sans"`
+  x.fillStyle = '#b9b6b0'
+  x.fillText(ch, 2, 2 + tagMet.base)
+  const sp = { w, h, adv, pad: 2, face: c }
+  sprites.set(key, sp)
+  return sp
+}
+function buildRing() {
+  met = met || measure(`700 ${FONT_PX}px Stolzl`)
+  tagMet = tagMet || measure(`500 ${TAG_PX}px "Vela Sans"`)
+  if (!shadowSprite) {
+    shadowSprite = mk(128, 128)
+    const x = shadowSprite.getContext('2d'), g = x.createRadialGradient(64, 64, 0, 64, 64, 64)
+    g.addColorStop(0, 'rgba(0,0,0,.7)'); g.addColorStop(0.55, 'rgba(0,0,0,.32)'); g.addColorStop(1, 'rgba(0,0,0,0)')
+    x.fillStyle = g
+    x.fillRect(0, 0, 128, 128)
+  }
+  const s = RING.size / met.cap
+  const sTag = Math.max(0.026, RING.size * 0.13) / tagMet.cap
+  const adv = glyphAdv
+  const wordLen = [...WORD].reduce((a, ch) => a + adv(ch), 0)
+  const gap = FONT_PX * 0.9
+  // spinning: the name repeats all the way round, so the far side is never empty
+  const copies = RING.spin ? Math.max(1, Math.floor((2 * Math.PI * RING.R) / ((wordLen + gap) * s))) : 1
+  glyphs = []
+  floorProps = []
+  const mats = RING.mat === 'cycle' ? MAT_SEQ : [RING.mat]
+  let bi = 0
+  for (let c = 0; c < copies; c++) {
+    const base = c * (wordLen + gap)
+    let cum = 0
+    // where each character of the name is along the run, and its block
+    const at = [], byCi = {}
+    for (const ch of WORD) {
+      const a = adv(ch)
+      if (ch !== ' ') {
+        const sps = {}
+        for (const mt of mats) sps[mt] = letterSprites(ch, mt)
+        glyphs.push((byCi[at.length] = { at: base + cum + a / 2, sp: sps[mats[0]], sps, idx: bi++, sc: s, base: met.base, pad: PAD, rOff: 0, block: true, top: [], mid: [] }))
+      }
+      at.push(base + cum + a / 2)
+      cum += a
+    }
+    placeKit(at, byCi)
+    if (!RING.tag) continue
+    // the tagline, a low plate on the ground in front of the blocks, spread to the length of the name
+    const tAdv = [...TAG].map((ch) => tagMet.c.measureText(ch).width * (ch === ' ' ? 1.6 : 1))
+    const spread = wordLen / (tAdv.reduce((x, y) => x + y, 0) * (sTag / s))
+    let tc = 0
+    ;[...TAG].forEach((ch, j) => {
+      const at = base + (tc + tAdv[j] / 2) * (sTag / s) * spread
+      tc += tAdv[j]
+      if (ch !== ' ') glyphs.push({ at, sp: tagSprite(ch), sc: sTag, base: tagMet.base, pad: 2, rOff: -(0.12 + RING.size * 0.25) })
+    })
+  }
+  RING.total = RING.spin ? copies * (wordLen + gap) : wordLen
+  RING.s = s
+}
+
+/* ── the site's kit on the letters ──
+   A hard hat on the Т of СТРОЙ, a stack of bricks before the С and a loose one by the Т, a traffic
+   cone between the words, a plumb bob swinging under the arm of the Т of КОНТРОЛЬ, a spirit level on
+   the Л. Little meshes measured in letter heights, drawn face by face from the back (painter's
+   order) in the light of the letter they belong to; what stands on the floor also gets a contact
+   shadow and a mirror image. */
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches
+// hat colours by the site custom: red for masters and foremen, white for engineers, orange for workers
+const HATS = { red: [0.7, 0.11, 0.08], white: [0.86, 0.86, 0.84], orange: [0.94, 0.4, 0.07], yellow: [0.95, 0.73, 0.1] }
+const FINISH = {
+  plastic: { amb: 0.22, dif: 0.85, spec: 0.34, shin: 20 },
+  paint: { amb: 0.22, dif: 0.85, spec: 0.12, shin: 12 },
+  matte: { amb: 0.22, dif: 0.85, spec: 0, shin: 1 },
+  brass: { amb: 0.2, dif: 0.75, spec: 0.75, shin: 40 },
+  metal: { amb: 0.24, dif: 0.72, spec: 0.5, shin: 18 },
+}
+const BRICK = [0.36, 0.09, 0.17] // 250 × 65 × 120 mm next to a letter about 70 cm tall
+// contact shadows of the floor kit: across, deep, strength
+const KIT_SHADOW = { stack: [0.56, 0.7, 0.75], brick: [0.48, 0.3, 0.7], half: [0.3, 0.28, 0.65], cone: [0.44, 0.44, 0.7], bucket: [0.32, 0.32, 0.75], spade: [0.24, 0.14, 0.5] }
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+const avg = (ps) => { const o = [0, 0, 0]; for (const q of ps) { o[0] += q[0]; o[1] += q[1]; o[2] += q[2] } return [o[0] / ps.length, o[1] / ps.length, o[2] / ps.length] }
+const mul3 = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]))
+const app3 = (M, q) => M.map((r) => r[0] * q[0] + r[1] * q[1] + r[2] * q[2])
+// turned about the vertical (yaw, front towards the right), then the depth axis (roll), then the length (pitch)
+function rotM(yaw = 0, roll = 0, pitch = 0) {
+  const c = Math.cos, s = Math.sin
+  return mul3(mul3([[c(yaw), 0, s(yaw)], [0, 1, 0], [-s(yaw), 0, c(yaw)]], [[c(roll), -s(roll), 0], [s(roll), c(roll), 0], [0, 0, 1]]), [[1, 0, 0], [0, c(pitch), -s(pitch)], [0, s(pitch), c(pitch)]])
+}
+/* A face: its points, outward normal, colour, finish; `grp` is drawn over lower groups (what rests on
+   what, seen from above), `body` keeps a part's faces together when they are sorted. */
+function boxMesh(out, x0, y0, z0, x1, y1, z1, c, m, grp = 0, body = 0) {
+  const v = (i, j, k) => [i ? x1 : x0, j ? y1 : y0, k ? z1 : z0]
+  const f = (p, n) => out.push({ p, n, c, m, grp, body })
+  f([v(0, 0, 1), v(1, 0, 1), v(1, 1, 1), v(0, 1, 1)], [0, 0, 1])
+  f([v(1, 0, 0), v(0, 0, 0), v(0, 1, 0), v(1, 1, 0)], [0, 0, -1])
+  f([v(0, 1, 1), v(1, 1, 1), v(1, 1, 0), v(0, 1, 0)], [0, 1, 0])
+  f([v(0, 0, 0), v(1, 0, 0), v(1, 0, 1), v(0, 0, 1)], [0, -1, 0])
+  f([v(1, 0, 1), v(1, 0, 0), v(1, 1, 0), v(1, 1, 1)], [1, 0, 0])
+  f([v(0, 0, 0), v(0, 0, 1), v(0, 1, 1), v(0, 1, 0)], [-1, 0, 0])
+  return out
+}
+function placed(faces, M, t, out) {
+  for (const f of faces) out.push({ ...f, p: f.p.map((q) => { const r = app3(M, q); return [r[0] + t[0], r[1] + t[1], r[2] + t[2]] }), n: app3(M, f.n) })
+  return out
+}
+// a body of revolution round the vertical from a profile of [radius, height] running from the top down
+function lathe(out, prof, seg, colOf, m, grp = 0, body = 0) {
+  const P = (r, y, a) => [r * Math.sin(a), y, r * Math.cos(a)]
+  for (let i = 0; i < prof.length - 1; i++) {
+    const [r0, y0] = prof[i], [r1, y1] = prof[i + 1]
+    const l = Math.hypot(r1 - r0, y1 - y0) || 1, nr = (y0 - y1) / l, ny = (r1 - r0) / l
+    for (let k = 0; k < seg; k++) {
+      const a0 = (k / seg) * 2 * Math.PI, a1 = ((k + 1) / seg) * 2 * Math.PI, am = (a0 + a1) / 2
+      out.push({ p: [P(r0, y0, a0), P(r1, y1, a0), P(r1, y1, a1), P(r0, y0, a1)], n: [nr * Math.sin(am), ny, nr * Math.cos(am)], c: colOf(i), m, grp, body })
+    }
+  }
+  return out
+}
+// a hard hat: a tall shell with a ridge from front to back, a brim all round that turns down at the
+// back into a gutter, and a peak sloping down in front
+function hatMesh(col) {
+  const out = [], a = 0.145, c = 0.17, H = 0.17, N = 44, NR = 11
+  const th = (s) => 2 * Math.PI * s - 0.34 * Math.sin(4 * Math.PI * s) // denser at the front and back, where the ridge runs
+  const shell = (t, f) => {
+    const sf = Math.sin(f), r = Math.pow(Math.cos(f), 0.62), x = a * Math.sin(t) * r
+    // a crest along the middle and a lower rib either side of it
+    const ribs = 0.04 * Math.exp(-((x / 0.024) ** 2)) * Math.pow(sf, 0.9) + 0.016 * (Math.exp(-(((x - 0.072) / 0.016) ** 2)) + Math.exp(-(((x + 0.072) / 0.016) ** 2))) * sf * sf
+    return [x, H * Math.pow(sf, 0.9) + ribs, c * Math.cos(t) * r - 0.012 * sf]
+  }
+  const reach = (t) => { const k = Math.cos(t); return 0.016 + 0.1 * Math.pow(Math.max(0, k), 1.7) + 0.034 * Math.pow(Math.max(0, -k), 2) }
+  const rim = (t) => [a * Math.sin(t), 0, c * Math.cos(t)]
+  const edge = (t, dy = 0) => {
+    const n = norm([Math.sin(t) / a, 0, Math.cos(t) / c]), e = reach(t)
+    return [a * Math.sin(t) + n[0] * e, dy - 0.3 * e - 0.02 * Math.pow(Math.max(0, -Math.cos(t)), 1.5), c * Math.cos(t) + n[2] * e]
+  }
+  for (let i = 0; i < N; i++) {
+    const t0 = th(i / N), t1 = th((i + 1) / N)
+    for (let j = 0; j < NR; j++) {
+      const f0 = ((j / NR) * Math.PI) / 2, f1 = (((j + 1) / NR) * Math.PI) / 2
+      out.push({ p: [shell(t0, f0), shell(t1, f0), shell(t1, f1), shell(t0, f1)], c: col, m: 'plastic', grp: 1, body: 1 })
+    }
+    out.push({ p: [rim(t0), rim(t1), edge(t1), edge(t0)], c: col, m: 'plastic', grp: 0, body: 0 })
+    out.push({ p: [edge(t0), edge(t1), edge(t1, -0.008), edge(t0, -0.008)], c: col, m: 'plastic', grp: 0, body: 0 })
+  }
+  // normals from the faces, turned away from a point well under the hat
+  for (const f of out) {
+    const n = norm(cross(sub(f.p[2], f.p[0]), sub(f.p[3], f.p[1])))
+    f.n = dot(n, sub(avg(f.p), [0, -1, 0])) < 0 ? n.map((x) => -x) : n
+  }
+  return out
+}
+const rnd = (i) => { const r = Math.sin(i * 91.7 + 3.1) * 43758.5453; return r - Math.floor(r) }
+// a brick of fired clay; every one a little different, every side of it a little different
+function brick(out, x, y, z, yaw, i, grp, half = false) {
+  const [l, h, w] = BRICK, L = half ? l / 2 : l, f = rnd(i), tint = [0.56 + 0.1 * f, 0.25 + 0.05 * f, 0.16 + 0.04 * f]
+  const faces = boxMesh([], -L / 2, 0, -w / 2, L / 2, h, w / 2, tint, 'matte', grp, i)
+  faces.forEach((fc, k) => { const d = 0.93 + 0.12 * rnd(i * 7 + k); fc.c = fc.c.map((x) => x * d) })
+  return placed(faces, rotM(yaw), [x, y, z], out)
+}
+// a little pile: three bricks, two across them, one more on top
+function stackMesh() {
+  const out = [], [, h, w] = BRICK, d = w + 0.012, e = d / 2
+  ;[-d, 0, d].forEach((z, i) => brick(out, 0, 0, z, 0, 11 + i, 0))
+  brick(out, e, h, 0, Math.PI / 2, 21, 1); brick(out, -e, h, 0, Math.PI / 2, 22, 1)
+  brick(out, 0.01, 2 * h, 0.02, 0.38, 23, 2)
+  return out
+}
+// a road cone: black square foot, orange body with two white bands
+function coneMesh() {
+  const out = [], or = [0.93, 0.38, 0.07], wh = [0.9, 0.9, 0.88]
+  boxMesh(out, -0.15, 0, -0.15, 0.15, 0.024, 0.15, [0.07, 0.07, 0.08], 'matte', 0, 0)
+  const y0 = 0.024, y1 = 0.49, r = (y) => 0.11 + ((0.022 - 0.11) * (y - y0)) / (y1 - y0)
+  lathe(out, [[0, y1 + 0.006], [0.022, y1], ...[0.39, 0.325, 0.27, 0.2].map((y) => [r(y), y]), [0.11, y0]], 20, (i) => (i === 2 || i === 4 ? wh : or), 'paint', 1, 1)
+  return out
+}
+// a brass plumb bob, its top at the thread
+const plumbMesh = () => lathe([], [[0, 0.006], [0.01, 0.006], [0.014, 0], [0.034, -0.011], [0.042, -0.03], [0.042, -0.098], [0.034, -0.112], [0, -0.21]], 16, () => [0.86, 0.66, 0.32], 'brass')
+// a spirit level: yellow body on black rubber ends, the green vial seen from the front and from above
+function levelMesh(len) {
+  const out = [], hl = len / 2, H = 0.075, D = 0.045, e = 0.035, k = [0.07, 0.07, 0.08], g = [0.36, 0.8, 0.2]
+  boxMesh(out, -hl + e, 0.003, -D / 2, hl - e, H + 0.003, D / 2, [0.95, 0.74, 0.14], 'paint', 0, 0)
+  boxMesh(out, -hl, 0, -D / 2 - 0.004, -hl + e, H + 0.006, D / 2 + 0.004, k, 'matte', 1, 1)
+  boxMesh(out, hl - e, 0, -D / 2 - 0.004, hl, H + 0.006, D / 2 + 0.004, k, 'matte', 1, 2)
+  const z = D / 2 + 0.0015, y = H + 0.0045
+  out.push({ p: [[-0.055, 0.02, z], [0.055, 0.02, z], [0.055, 0.058, z], [-0.055, 0.058, z]], n: [0, 0, 1], c: g, m: 'plastic', grp: 2, body: 3 })
+  out.push({ p: [[-0.045, y, 0.011], [0.045, y, 0.011], [0.045, y, -0.011], [-0.045, y, -0.011]], n: [0, 1, 0], c: g, m: 'plastic', grp: 2, body: 4 })
+  out.push({ p: [[-0.012, 0.032, z + 0.0005], [0.012, 0.032, z + 0.0005], [0.012, 0.046, z + 0.0005], [-0.012, 0.046, z + 0.0005]], n: [0, 0, 1], c: [0.84, 0.96, 0.78], m: 'plastic', grp: 3, body: 5 })
+  return out
+}
+// a small spade, point down: a flat steel blade, the socket, a wooden handle with a crossbar grip
+function spadeMesh() {
+  const out = [], st = [0.46, 0.48, 0.51], wood = [0.6, 0.43, 0.26], T = 0.004
+  const ol = [[0, 0], [0.05, 0.02], [0.08, 0.07], [0.08, 0.2], [-0.08, 0.2], [-0.08, 0.07], [-0.05, 0.02]]
+  out.push({ p: ol.map(([x, y]) => [x, y, T]), n: [0, 0, 1], c: st, m: 'metal', grp: 0, body: 0 })
+  out.push({ p: ol.map(([x, y]) => [x, y, -T]).reverse(), n: [0, 0, -1], c: st, m: 'metal', grp: 0, body: 0 })
+  ol.forEach(([x0, y0], i) => {
+    const [x1, y1] = ol[(i + 1) % ol.length]
+    out.push({ p: [[x0, y0, T], [x1, y1, T], [x1, y1, -T], [x0, y0, -T]], n: norm([y1 - y0, x0 - x1, 0]), c: st, m: 'metal', grp: 0, body: 0 })
+  })
+  lathe(out, [[0.016, 0.27], [0.022, 0.2]], 10, () => st, 'metal', 1, 1)
+  lathe(out, [[0.014, 0.7], [0.014, 0.27]], 10, () => wood, 'matte', 1, 2)
+  boxMesh(out, -0.045, 0.7, -0.012, 0.045, 0.724, 0.012, wood, 'matte', 2, 3)
+  return out
+}
+// a zinc bucket of mortar: the inside over the rim, the mortar, the wall, the rolled rim (the handle is a wire, drawn as a line)
+function bucketMesh() {
+  const out = [], zn = [0.62, 0.64, 0.66], rb = 0.075, rt = 0.098, h = 0.165, N = 20
+  lathe(out, [[rb - 0.003, 0.012], [rt - 0.006, h]], N, () => [0.36, 0.37, 0.38], 'metal', 0, 0) // profile upwards: normals face in
+  lathe(out, [[0, 0.115], [rb + (rt - rb) * (0.115 / h) - 0.005, 0.115]], N, () => [0.58, 0.56, 0.53], 'matte', 1, 1)
+  lathe(out, [[rt, h], [rb, 0]], N, () => zn, 'metal', 2, 2)
+  lathe(out, [[rt - 0.006, h], [rt - 0.002, h + 0.005], [rt + 0.004, h + 0.002], [rt + 0.004, h - 0.006]], N, () => zn, 'metal', 3, 3)
+  return out
+}
+const BUCKET_HANDLE = (a) => [-0.098 * Math.cos(a), 0.17 + 0.09 * Math.sin(a), 0]
+const kitCache = new Map()
+const KIT_MESH = { hat: () => hatMesh(HATS[RING.hat] || HATS.red), stack: stackMesh, brick: () => brick([], 0, 0, 0, 0, 7, 0), half: () => brick([], 0, 0, 0, 0, 9, 0, true), cone: coneMesh, plumb: plumbMesh, spade: spadeMesh, bucket: bucketMesh, level: levelMesh }
+function kitMesh(kind, arg) {
+  const key = kind + ':' + (kind === 'hat' ? RING.hat : arg ?? '')
+  if (!kitCache.has(key)) kitCache.set(key, KIT_MESH[kind](arg))
+  return kitCache.get(key)
+}
+// reading a letter's ink: solid pixels, the top of it, the runs of ink on a row
+const solid = (gm, x, y) => x >= 0 && y >= 0 && x < gm.w && y < gm.h && gm.A[(y * gm.w + x) * 4 + 3] > 127
+function inkTop(gm) {
+  let y = 0
+  find: for (; y < gm.h; y++) for (let x = 0; x < gm.w; x++) if (solid(gm, x, y)) break find
+  let xa = gm.w, xb = -1
+  for (let x = 0; x < gm.w; x++) if (solid(gm, x, y + 3)) { xa = Math.min(xa, x); xb = x }
+  return { y, xa, xb }
+}
+const inkRuns = (gm, y) => { const r = []; let s = -1; for (let x = 0; x <= gm.w; x++) { const on = solid(gm, x, y); if (on && s < 0) s = x; else if (!on && s >= 0) { r.push([s, x - 1]); s = -1 } } return r }
+const inkLeft = (gm) => { for (let x = 0; x < gm.w; x++) for (let y = 0; y < gm.h; y++) if (solid(gm, x, y)) return x; return 0 }
+const inkRight = (gm) => { for (let x = gm.w - 1; x >= 0; x--) for (let y = 0; y < gm.h; y++) if (solid(gm, x, y)) return x; return gm.w - 1 }
+/* Where the kit goes, by the characters of the name (index in WORD). Places are in letter heights:
+   u along the text from the letter's middle, v up from the floor, w out of the face (wd in block
+   depths, wc in letter heights). What sits on or hangs from a letter goes with its block; what
+   stands on the floor gets its own place along the run. */
+function placeKit(at, byCi) {
+  const cap = met.cap, gm = (ci) => glyphMask(WORD[ci])
+  const U = (ci, x) => (x - PAD - gm(ci).adv / 2) / cap, V = (y) => (PAD + met.base - y) / cap
+  // the hat on top of the Т of СТРОЙ, turned a little as if just put down
+  const t1 = inkTop(gm(1))
+  byCi[1].top.push({ kind: 'hat', set: 'kitHat', u: U(1, (t1.xa + t1.xb) / 2), v: V(t1.y), wd: -0.5, wc: 0, yaw: 0.3 })
+  // masonry by the С: a pile of bricks, a bucket of mortar; a brick and a half left lying in front
+  const c0 = U(0, inkLeft(gm(0)))
+  floorProps.push({ kind: 'stack', set: 'kitBricks', at: at[0] + (c0 - 0.42) * cap, wd: -0.5, wc: 0, yaw: 0.15 })
+  floorProps.push({ kind: 'bucket', set: 'kitBucket', at: at[0] + (c0 + 0.02) * cap, wd: 0, wc: 0.32, yaw: -0.9 })
+  floorProps.push({ kind: 'brick', set: 'kitBricks', at: at[1] + 0.2 * cap, wd: 0, wc: 0.25, yaw: -0.5 })
+  floorProps.push({ kind: 'half', set: 'kitBricks', at: at[2] + 0.1 * cap, wd: 0, wc: 0.3, yaw: 0.4 })
+  // the cone in the gap between the words, a step forward
+  floorProps.push({ kind: 'cone', set: 'kitCone', at: at[5], wd: 0, wc: 0.14, yaw: 0.35 })
+  // the plumb bob hangs from the underside of the right arm of the Т of КОНТРОЛЬ
+  const T9 = gm(9), t9 = inkTop(T9), stem = inkRuns(T9, Math.round(t9.y + cap * 0.4))
+  const sb = stem.length ? stem[stem.length - 1][1] : (t9.xa + t9.xb) / 2, xh = Math.round(sb + (t9.xb - sb) * 0.55)
+  let yh = 0
+  while (yh < T9.h && !solid(T9, xh, yh)) yh++
+  while (yh < T9.h && solid(T9, xh, yh)) yh++
+  byCi[9].mid.push({ kind: 'plumb', set: 'kitPlumb', u: U(9, xh), v: V(yh), wd: -0.3, wc: 0 })
+  // the level along the top of the Л
+  const t12 = inkTop(gm(12))
+  byCi[12].top.push({ kind: 'level', set: 'kitLevel', u: U(12, (t12.xa + t12.xb) / 2), v: V(t12.y), wd: -0.45, wc: 0, yaw: -0.07, len: +Math.max(0.5, Math.min(0.85, ((t12.xb - t12.xa) / cap) * 1.1)).toFixed(2) })
+  // the spade leaning on the end of the name, its handle on the side of the Ь
+  floorProps.push({ kind: 'spade', set: 'kitSpade', at: at[13] + (U(13, inkRight(gm(13))) + 0.3) * cap, wd: -0.35, wc: 0, yaw: 0.35, roll: 0.42 })
+}
+const LIGHT = (() => { const l = [0.15, 0.45, -0.88], n = Math.hypot(...l); return l.map((x) => x / n) })()
+const norm = (v) => { const n = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / n, v[1] / n, v[2] / n] }
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+function ringFrame(now) {
+  requestAnimationFrame(ringFrame)
+  if (!intro.hasAttribute('data-ring') || !met) return
+  const v = vp(), dpr = Math.min(2, devicePixelRatio || 1)
+  if (ringCv.width !== Math.round(v.w * dpr) || ringCv.height !== Math.round(v.h * dpr)) { ringCv.width = Math.round(v.w * dpr); ringCv.height = Math.round(v.h * dpr) }
+  rc.setTransform(1, 0, 0, 1, 0, 0)
+  rc.clearRect(0, 0, ringCv.width, ringCv.height)
+  rc.imageSmoothingQuality = 'high'
+  const aim = scene.aim || { sx: 0, sy: 0 }
+  const yaw = aim.sx * Wire.PARALLAX.yaw, pitch = 0.3 + aim.sy * Wire.PARALLAX.pitch
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), spt = Math.sin(pitch)
+  const cam = (p) => { const xr = p[0] * cyw - p[2] * syw, zr = p[0] * syw + p[2] * cyw; return [xr, p[1] * cp + zr * spt, -p[1] * spt + zr * cp] }
+  const proj = (p) => { const q = cam(p), m = v.f / (v.D + q[2]); return [v.cx + q[0] * m, v.cy - q[1] * m, q[2]] }
+  // a sprite whose top-left corner sits at world point O, its rows along U and its columns down along V (world per sprite px)
+  const affine = (w, h, O, U, V, k = dpr) => {
+    const p0 = proj(O), p1 = proj([O[0] + U[0] * w, O[1] + U[1] * w, O[2] + U[2] * w]), p2 = proj([O[0] + V[0] * h, O[1] + V[1] * h, O[2] + V[2] * h])
+    return [(k * (p1[0] - p0[0])) / w, (k * (p1[1] - p0[1])) / w, (k * (p2[0] - p0[0])) / h, (k * (p2[1] - p0[1])) / h, k * p0[0], k * p0[1]]
+  }
+  const put = (img, O, U, V, alpha = 1, ctx = rc, k = dpr) => {
+    ctx.setTransform(...affine(img.width, img.height, O, U, V, k))
+    ctx.globalAlpha = alpha
+    ctx.drawImage(img, 0, 0)
+  }
+  const t = now / 1000
+  const R = RING.R, s = RING.s
+  const tau = (RING.tilt * Math.PI) / 180, st = Math.sin(tau), ct = Math.cos(tau)
+  const onRing = (phi, r = R) => [r * Math.sin(phi), RING.y + r * Math.cos(phi) * st, r * Math.cos(phi) * ct]
+  // the band on the ground the blocks stand on: a line under the faces and one behind the back walls
+  rc.setTransform(dpr, 0, 0, dpr, 0, 0)
+  rc.globalAlpha = 1
+  rc.lineWidth = 1
+  rc.setLineDash([3, 6])
+  ;[[R - 0.03, 0.16], [R + RING.depth + 0.03, 0.09]].forEach(([r, a]) => {
+    rc.strokeStyle = `rgba(242,239,233,${a})`
+    rc.beginPath()
+    for (let k = 0; k <= 160; k++) { const q = proj(onRing((k / 160) * 2 * Math.PI, r)); k ? rc.lineTo(q[0], q[1]) : rc.moveTo(q[0], q[1]) }
+    rc.stroke()
+  })
+  rc.setLineDash([])
+  // where the run of text sits on the ring, and how it moves
+  const run = (RING.total * s) / R
+  const swing = RING.spin ? -t * 0.09 : (Math.sin((t * 2 * Math.PI) / 14) * RING.sway * Math.PI) / 180
+  const start = (RING.spin ? 0 : (RING.center * Math.PI) / 180 - run / 2) + swing
+  const fill = RING.spin ? (2 * Math.PI) / run : 1 // spinning: the copies close the circle exactly
+  const sweep = ((t - 2) % 9 + 9) % 9 // a light passing along the name every 9 s
+  const nL = Math.max(10, Math.min(64, Math.round(RING.depth / 0.004)))
+  // with the cycle on, each pass of the light carries the letters on to the next material
+  const cyc = RING.mat === 'cycle', c = Math.floor((t - 2) / 9), mod = (x) => ((x % 3) + 3) % 3
+  const fromMat = cyc ? MAT_SEQ[mod(c)] : RING.mat, toMat = cyc ? MAT_SEQ[mod(c + 1)] : RING.mat
+  const list = []
+  // the frame of a place on the run: the point on the ring, the text's direction, the face's normal.
+  // Blocks stand upright and level whatever the ring does: baseline horizontal, up is up, and the
+  // face looks at the axis, and so at the camera on the far side
+  const frameAt = (at, rOff = 0) => {
+    const phi = start + ((at * s) / R) * fill
+    const sn = Math.sin(phi), cs = Math.cos(phi)
+    return { P: onRing(phi, R + rOff), tan: [cs, 0, -sn], nIn: [-sn, 0, -cs] }
+  }
+  // fading out as a face turns away from the camera
+  const facing = (pt, nIn) => {
+    const Oc = cam(pt)
+    return Math.max(0, Math.min(1, (dot(cam(nIn), norm([-Oc[0], -Oc[1], -v.D - Oc[2]])) - 0.12) * 5))
+  }
+  for (const g of glyphs) {
+    const fr = frameAt(g.at, g.rOff), { P, tan, nIn } = fr
+    const sc = g.sc, sp = g.sp
+    const origin = [P[0] - tan[0] * (g.pad + sp.adv / 2) * sc, P[1] + (g.pad + g.base) * sc, P[2] - tan[2] * (g.pad + sp.adv / 2) * sc]
+    const vis = facing(origin, nIn)
+    if (vis === 0) continue
+    // where the passing light is on this letter: -0.3 before it, 1.3 past it
+    const pass = g.block ? (sweep - g.idx * 0.13) / 0.55 : 0
+    list.push({ g, fr, P, tan, nIn, origin, vis, pass, z: cam(P)[2] })
+  }
+  const SZ = RING.size
+  if (RING.props)
+    for (const fp of floorProps) {
+      if (!RING[fp.set]) continue
+      const fr = frameAt(fp.at), vis = facing(fr.P, fr.nIn)
+      if (vis === 0) continue
+      const w = fp.wd * RING.depth + fp.wc * SZ
+      list.push({ fp, fr, vis, w, M: rotM(fp.yaw, fp.roll), z: cam([fr.P[0] + fr.nIn[0] * w, fr.P[1], fr.P[2] + fr.nIn[2] * w])[2] })
+    }
+  list.sort((a, b) => b.z - a.z) // farther first
+  const mirror = (O, yg) => [O[0], 2 * yg - O[1], O[2]]
+  // walls from the back to the front; with `yg` the same walls mirrored in the floor at that height
+  const walls = (sp, origin, nIn, U, V, alpha, step, yg, ctx = rc, k = dpr) => {
+    for (let j = nL; j >= 1; j -= step) {
+      const dz = (j / nL) * RING.depth
+      const lv = Math.min(LEVELS - 1, Math.round((j / nL) * (LEVELS - 1)))
+      const O = [origin[0] - nIn[0] * dz, origin[1] - nIn[1] * dz, origin[2] - nIn[2] * dz]
+      put(sp.walls[lv], yg === undefined ? O : mirror(O, yg), U, V, alpha, ctx, k)
+    }
+  }
+  // the face composed off-screen: less light where it turns from the lamp, the softbox reflection
+  // sliding across as the face turns to the camera, the glint of the passing light
+  const compose = (g, slot, sp, M, light, Nc, pass, keepAfter) => {
+    g.oc = g.oc || []
+    const oc = g.oc[slot] || (g.oc[slot] = mk(sp.w, sp.h))
+    const ox = oc.getContext('2d')
+    ox.globalCompositeOperation = 'source-over'
+    ox.clearRect(0, 0, sp.w, sp.h)
+    ox.drawImage(sp.face, 0, 0)
+    ox.globalCompositeOperation = 'source-atop'
+    ox.fillStyle = `rgba(0,0,0,${(0.4 * (1 - light)).toFixed(3)})`
+    ox.fillRect(0, 0, sp.w, sp.h)
+    const col = M.sheen.map((x) => Math.round(x * 255)).join(',')
+    const band = (pos, a, wd) => {
+      if (a <= 0.005 || pos < -wd || pos > 1 + wd) return
+      const gr = ox.createLinearGradient(0, 0, sp.w, sp.h * 0.4)
+      gr.addColorStop(Math.max(0, Math.min(1, pos - wd)), `rgba(${col},0)`)
+      gr.addColorStop(Math.max(0, Math.min(1, pos)), `rgba(${col},${a.toFixed(3)})`)
+      gr.addColorStop(Math.max(0, Math.min(1, pos + wd)), `rgba(${col},0)`)
+      ox.fillStyle = gr
+      ox.fillRect(0, 0, sp.w, sp.h)
+    }
+    band(0.5 + 1.9 * Nc[0], M.sheenA, M.sheenW)
+    if (pass > -0.4 && pass < 1.4) band(pass, M.glow, 0.3)
+    if (keepAfter !== undefined) {
+      // the old material fades out across the light instead of ending on a hard line
+      ox.globalCompositeOperation = 'destination-in'
+      const gr = ox.createLinearGradient(0, 0, sp.w, sp.h * 0.4)
+      gr.addColorStop(Math.max(0, Math.min(1, keepAfter - 0.14)), 'rgba(0,0,0,0)')
+      gr.addColorStop(Math.max(0, Math.min(1, keepAfter + 0.14)), 'rgba(0,0,0,1)')
+      ox.fillStyle = gr
+      ox.fillRect(0, 0, sp.w, sp.h)
+    }
+    return oc
+  }
+  // the half of a letter the light has already crossed (before) or not yet (after), along the glint's slant
+  const clipSide = (sp, origin, U, V, pass, before) => {
+    rc.setTransform(...affine(sp.w, sp.h, origin, U, V))
+    const ax = sp.w, ay = sp.h * 0.4, len = Math.hypot(ax, ay), ux = ax / len, uy = ay / len, big = 6 * Math.max(sp.w, sp.h)
+    const px = ax * pass, py = ay * pass, dx = -uy * big, dy = ux * big, sx = (before ? -ux : ux) * big, sy = (before ? -uy : uy) * big
+    rc.beginPath()
+    rc.moveTo(px + dx, py + dy)
+    rc.lineTo(px - dx, py - dy)
+    rc.lineTo(px - dx + sx, py - dy + sy)
+    rc.lineTo(px + dx + sx, py + dy + sy)
+    rc.closePath()
+    rc.clip()
+  }
+  // a point of a letter's frame in the world: u along the text, h up from the floor, w out of the face
+  const inFrame = (fr, u, h, w) => [fr.P[0] + fr.tan[0] * u + fr.nIn[0] * w, fr.P[1] + h, fr.P[2] + fr.tan[2] * u + fr.nIn[2] * w]
+  // the camera's turn as a matrix, the same as cam()
+  const CM = [[cyw, 0, -syw], [syw * spt, cp, cyw * spt], [syw * cp, -spt, cyw * cp]]
+  /* A piece of kit: its faces (in letter heights) turned by M and set at o of a letter's frame, lit
+     like the letter, from above, a little from the left and from the front. `yg` mirrors it in the
+     floor at that height, `ao` darkens it near what it stands on (a height in letter heights). The
+     chain piece → frame → world → camera is one matrix A and an offset T. */
+  const kit = (faces, fr, o, M, alpha, { ctx = rc, k = dpr, yg, ao } = {}) => {
+    const my = yg === undefined ? 1 : -1
+    const A = mul3(CM, mul3([[fr.tan[0], 0, fr.nIn[0]], [0, my, 0], [fr.tan[2], 0, fr.nIn[2]]], M))
+    const O = inFrame(fr, o[0], o[1], o[2])
+    if (yg !== undefined) O[1] = 2 * yg - O[1]
+    const T = cam(O), Lc = cam(norm([-0.42 * fr.tan[0] + 0.38 * fr.nIn[0], 0.82, -0.42 * fr.tan[2] + 0.38 * fr.nIn[2]]))
+    const [a0, a1, a2] = A, M1 = M[1], h0 = o[1] / SZ
+    const out = [], bodies = new Map()
+    for (const f of faces) {
+      const c = f.cl || (f.cl = avg(f.p)), n = f.n
+      const qx = T[0] + SZ * (a0[0] * c[0] + a0[1] * c[1] + a0[2] * c[2]), qy = T[1] + SZ * (a1[0] * c[0] + a1[1] * c[1] + a1[2] * c[2]), qz = T[2] + SZ * (a2[0] * c[0] + a2[1] * c[1] + a2[2] * c[2])
+      const nx = a0[0] * n[0] + a0[1] * n[1] + a0[2] * n[2], ny = a1[0] * n[0] + a1[1] * n[1] + a1[2] * n[2], nz = a2[0] * n[0] + a2[1] * n[1] + a2[2] * n[2]
+      const vl = Math.hypot(qx, qy, v.D + qz), vx = -qx / vl, vy = -qy / vl, vz = (-v.D - qz) / vl
+      if (nx * vx + ny * vy + nz * vz <= 0) continue
+      const fin = FINISH[f.m], hy = Math.abs(h0 + M1[0] * c[0] + M1[1] * c[1] + M1[2] * c[2])
+      let lum = fin.amb * (0.72 + 0.28 * my * (M1[0] * n[0] + M1[1] * n[1] + M1[2] * n[2])) + fin.dif * Math.max(0, nx * Lc[0] + ny * Lc[1] + nz * Lc[2])
+      if (ao !== undefined) lum *= 0.62 + 0.38 * Math.min(1, Math.max(0, (hy - ao) / 0.09))
+      let gl = 0
+      if (fin.spec) { const hx = Lc[0] + vx, hyv = Lc[1] + vy, hz = Lc[2] + vz, hl = Math.hypot(hx, hyv, hz) || 1; gl = fin.spec * Math.pow(Math.max(0, (nx * hx + ny * hyv + nz * hz) / hl), fin.shin) }
+      const fa = yg === undefined ? 1 : 0.9 - hy / 0.85
+      if (fa <= 0.02) continue
+      const pts = new Array(f.p.length * 2)
+      f.p.forEach((p, i) => {
+        const x = T[0] + SZ * (a0[0] * p[0] + a0[1] * p[1] + a0[2] * p[2]), y = T[1] + SZ * (a1[0] * p[0] + a1[1] * p[1] + a1[2] * p[2]), z = T[2] + SZ * (a2[0] * p[0] + a2[1] * p[1] + a2[2] * p[2])
+        const m = v.f / (v.D + z)
+        pts[2 * i] = v.cx + x * m
+        pts[2 * i + 1] = v.cy - y * m
+      })
+      const col = `rgb(${Math.round(255 * Math.min(1, f.c[0] * lum + gl))},${Math.round(255 * Math.min(1, f.c[1] * lum + gl))},${Math.round(255 * Math.min(1, f.c[2] * lum + gl))})`
+      out.push({ pts, z: qz, grp: f.grp, body: f.body, col, a: Math.min(1, fa) })
+      const b = bodies.get(f.body) || { z: 0, n: 0 }
+      b.z += qz
+      b.n++
+      bodies.set(f.body, b)
+    }
+    // what rests on something comes after it, then parts and faces from the back; in the mirror the
+    // other way up
+    for (const f of out) { const b = bodies.get(f.body); f.bz = b.z / b.n }
+    out.sort((a, b) => my * (a.grp - b.grp) || b.bz - a.bz || b.z - a.z)
+    ctx.setTransform(k, 0, 0, k, 0, 0)
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = 0.7
+    const seams = yg === undefined && alpha > 0.98
+    for (const f of out) {
+      const p = f.pts
+      ctx.globalAlpha = alpha * f.a
+      ctx.beginPath()
+      ctx.moveTo(p[0], p[1])
+      for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1])
+      ctx.closePath()
+      ctx.fillStyle = f.col
+      ctx.fill()
+      // the face's own colour round it closes the hairlines antialiasing leaves between faces
+      if (seams) { ctx.strokeStyle = f.col; ctx.stroke() }
+    }
+  }
+  // a soft shadow on a level surface at o, du across and dw deep along the turned piece
+  const kitShadow = (fr, o, yaw, du, dw, alpha) => {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw)
+    const X = [fr.tan[0] * cy - fr.nIn[0] * sy, 0, fr.tan[2] * cy - fr.nIn[2] * sy], Z = [fr.tan[0] * sy + fr.nIn[0] * cy, 0, fr.tan[2] * sy + fr.nIn[2] * cy]
+    const C = inFrame(fr, o[0], o[1], o[2])
+    put(shadowSprite, [C[0] - (X[0] * du + Z[0] * dw) / 2, C[1], C[2] - (X[2] * du + Z[2] * dw) / 2], X.map((x) => (x * du) / 128), Z.map((x) => (x * dw) / 128), alpha)
+  }
+  // a thin line through points of a frame: a thread, a wire
+  const wire = (fr, pts, col, width, alpha) => {
+    rc.setTransform(dpr, 0, 0, dpr, 0, 0)
+    rc.globalAlpha = alpha
+    rc.strokeStyle = col
+    rc.lineWidth = width
+    rc.lineCap = 'round'
+    rc.beginPath()
+    pts.forEach((p, i) => { const q = proj(inFrame(fr, p[0], p[1], p[2])); i ? rc.lineTo(q[0], q[1]) : rc.moveTo(q[0], q[1]) })
+    rc.stroke()
+  }
+  // a piece on the floor; the bucket's handle stands up over its rim
+  const floorKit = (it) => {
+    const { fp, fr, vis, w, M } = it
+    kit(kitMesh(fp.kind), fr, [0, 0, w], M, vis, { ao: 0 })
+    if (fp.kind === 'bucket')
+      wire(fr, Array.from({ length: 17 }, (_, i) => { const r = app3(M, BUCKET_HANDLE((i / 16) * Math.PI)); return [r[0] * SZ, r[1] * SZ, w + r[2] * SZ] }), 'rgb(158,160,164)', 1.1, vis)
+  }
+  // the kit of one letter: `mid` between its walls and its face (the face hides where a thread is
+  // tied under an arm), `top` over it all
+  const onLetter = (it, pr) => {
+    const { fr, vis } = it
+    const o = [pr.u * SZ, pr.v * SZ, pr.wd * RING.depth + pr.wc * SZ]
+    if (pr.kind === 'hat') {
+      kitShadow(fr, o, pr.yaw, 0.46 * SZ, 0.4 * SZ, vis * 0.5)
+      // it rests on the tip of its peak and the gutter at the back
+      kit(kitMesh('hat'), fr, [o[0], o[1] + 0.04 * SZ, o[2]], rotM(pr.yaw), vis, { ao: pr.v })
+    } else if (pr.kind === 'level') {
+      kitShadow(fr, o, pr.yaw, (pr.len + 0.1) * SZ, 0.13 * SZ, vis * 0.45)
+      kit(kitMesh('level', pr.len), fr, o, rotM(pr.yaw), vis, { ao: pr.v })
+    } else if (pr.kind === 'plumb') {
+      // swinging slowly along the letter and a little in and out of it
+      const ph = (t * 2 * Math.PI) / 3.4, M = rotM(0, RM ? 0 : 0.1 * Math.sin(ph), RM ? 0 : 0.035 * Math.sin(ph + 1.2))
+      const d = app3(M, [0, -0.36 * SZ, 0]), bob = [o[0] + d[0], o[1] + d[1], o[2] + d[2]]
+      wire(fr, [o, bob], 'rgb(212,206,194)', 0.8, vis * 0.85)
+      kit(kitMesh('plumb'), fr, bob, M, vis)
+    }
+  }
+  // 1. the floor mirror: whole blocks, walls and face, upside down under their bases, fading with
+  //    depth; drawn at a third of the size and blown up, so a matte floor gives a soft reflection
+  if (RING.refl) {
+    const RS = 3, kk = dpr / RS
+    const rw = Math.max(1, Math.round(ringCv.width / RS)), rh = Math.max(1, Math.round(ringCv.height / RS))
+    if (reflCv.width !== rw || reflCv.height !== rh) { reflCv.width = rw; reflCv.height = rh }
+    xc.setTransform(1, 0, 0, 1, 0, 0)
+    xc.globalCompositeOperation = 'source-over'
+    xc.clearRect(0, 0, rw, rh)
+    for (const it of list) {
+      if (it.fp) { kit(kitMesh(it.fp.kind), it.fr, [0, 0, it.w], it.M, it.vis * 0.22, { ctx: xc, k: kk, yg: it.fr.P[1] }); continue }
+      const { g, P, tan, nIn, origin, vis, pass } = it
+      if (!g.block) continue
+      const U = tan.map((x) => x * g.sc), Vm = [0, g.sc, 0], yg = P[1]
+      const f = fromMat === toMat ? 1 : Math.max(0, Math.min(1, pass))
+      for (const [mat, a] of [[fromMat, 1 - f], [toMat, f]]) {
+        const M = MATS[mat], sp = g.sps[mat]
+        if (a < 0.01 || !M.refl) continue
+        walls(sp, origin, nIn, U, Vm, vis * a * M.refl, 2, yg, xc, kk)
+        put(sp.face, mirror(origin, yg), U, Vm, vis * a * M.refl, xc, kk)
+      }
+      const sp = g.sp, yb = g.pad + g.base
+      xc.save()
+      xc.setTransform(...affine(sp.w, sp.h, mirror(origin, yg), U, Vm, kk))
+      xc.globalCompositeOperation = 'destination-out'
+      xc.globalAlpha = 1
+      const gr = xc.createLinearGradient(0, yb, 0, yb - met.cap * 0.85)
+      gr.addColorStop(0, 'rgba(0,0,0,0.1)')
+      gr.addColorStop(1, 'rgba(0,0,0,1)')
+      xc.fillStyle = gr
+      xc.fillRect(-sp.w * 0.5, yb - sp.h * 3, sp.w * 2, sp.h * 3)
+      xc.restore()
+    }
+    rc.setTransform(1, 0, 0, 1, 0, 0)
+    rc.globalAlpha = 1
+    rc.imageSmoothingEnabled = true
+    rc.drawImage(reflCv, 0, 0, ringCv.width, ringCv.height)
+  }
+  // 2. shadows and blocks; a letter the light is crossing shows the new material behind the glint.
+  //    The floor kit's shadows go down first, so no block standing behind a piece is darkened by it
+  for (const it of list) {
+    if (!it.fp) continue
+    const [du, dw, a] = KIT_SHADOW[it.fp.kind]
+    kitShadow(it.fr, [0, 0, it.w], it.fp.yaw, du * SZ, dw * SZ, it.vis * a)
+  }
+  for (const it of list) {
+    if (it.fp) { floorKit(it); continue }
+    const { g, P, tan, nIn, origin, vis, pass } = it
+    const U = tan.map((x) => x * g.sc), V = [0, -g.sc, 0]
+    if (!g.block) { put(g.sp.face, origin, U, V, vis); continue }
+    const wW = g.sp.adv * g.sc * 1.4, front = 0.05, back = RING.depth + 0.15 * RING.size
+    const o = [0, 1, 2].map((k) => P[k] - tan[k] * wW * 0.5 + nIn[k] * front)
+    put(shadowSprite, o, tan.map((x) => (x * wW) / 128), nIn.map((x) => (-x * (front + back)) / 128), vis * 0.85)
+    const Nc = cam(nIn), light = Math.max(0, dot(nIn, LIGHT))
+    const W = 0.3
+    const one = fromMat === toMat || pass >= 1 + W ? toMat : pass <= -W ? fromMat : null
+    if (one) walls(g.sps[one], origin, nIn, U, V, vis, 1)
+    else {
+      rc.save(); clipSide(g.sp, origin, U, V, pass, false); walls(g.sps[fromMat], origin, nIn, U, V, vis, 1); rc.restore()
+      rc.save(); clipSide(g.sp, origin, U, V, pass, true); walls(g.sps[toMat], origin, nIn, U, V, vis, 1); rc.restore()
+    }
+    if (RING.props) for (const pr of g.mid) if (RING[pr.set]) onLetter(it, pr)
+    if (one) put(compose(g, 0, g.sps[one], MATS[one], light, Nc, pass), origin, U, V, vis)
+    else {
+      put(compose(g, 1, g.sps[toMat], MATS[toMat], light, Nc, pass), origin, U, V, vis)
+      put(compose(g, 0, g.sps[fromMat], MATS[fromMat], light, Nc, pass, pass), origin, U, V, vis)
+    }
+    if (RING.props) for (const pr of g.top) if (RING[pr.set]) onLetter(it, pr)
+  }
+  rc.globalAlpha = 1
+  rc.globalCompositeOperation = 'source-over'
+}
+function syncTune() {
+  document.querySelectorAll('#tune [data-k]').forEach((el) => {
+    if (el.type === 'checkbox') el.checked = !!RING[el.dataset.k]
+    else el.value = RING[el.dataset.k]
+  })
+  document.querySelectorAll('#tune [data-o]').forEach((o) => (o.textContent = RING[o.dataset.o]))
+}
+document.querySelectorAll('#tune [data-k]').forEach((el) =>
+  el.addEventListener('input', () => {
+    const k = el.dataset.k
+    RING[k] = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : +el.value
+    syncTune()
+    // the run of letters changes with their size, the tagline switch, or the radius when the name repeats
+    if (k === 'spin' || k === 'size' || k === 'tag' || k === 'mat' || k === 'font' || (RING.spin && k === 'R')) buildRing()
+  }),
+)
+$('tuneReset').onclick = () => { Object.assign(RING, ringDefaults()); syncTune(); buildRing() }
+$('tuneCopy').onclick = () => {
+  const line = `R=${RING.R} y=${RING.y} наклон=${RING.tilt}° центр=${RING.center}° буквы=${RING.size} толщина=${RING.depth} покачивание=${RING.sway}° вращение=${RING.spin ? 'да' : 'нет'} слоган=${RING.tag ? 'на кольце' : 'нет'} реквизит=${RING.props ? 'да' : 'нет'} каска=${RING.hat}`
+  navigator.clipboard?.writeText(line).then(() => { $('tuneCopy').textContent = 'Скопировано'; setTimeout(() => ($('tuneCopy').textContent = 'Скопировать'), 1200) })
+}
+function toggleRing() {
+  intro.toggleAttribute('data-ring')
+  const on = intro.hasAttribute('data-ring')
+  $('ringBtn').setAttribute('aria-pressed', String(on))
+  $('tune').hidden = !on
+  if (on && !glyphs.length)
+    Promise.all([document.fonts.load(`700 ${FONT_PX}px Stolzl`), document.fonts.load(`500 ${TAG_PX}px "Vela Sans"`)]).then(() => { Object.assign(RING, ringDefaults()); syncTune(); buildRing() })
+  setV(intro.dataset.v)
+}
+$('ringBtn').onclick = toggleRing
+$('tuneHide').onclick = () => ($('tune').hidden = true)
+requestAnimationFrame(ringFrame)
+
+/* ── picker ── */
+function setV(v) {
+  intro.dataset.v = v
+  document.querySelectorAll('#picker [data-v]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)))
+  $('idea').textContent = IDEAS[v] + (intro.hasAttribute('data-axes') ? AXES_IDEA : '') + (intro.hasAttribute('data-ring') ? RING_IDEA : '')
+  // restart the entrance of the side layer that just appeared
+  document.querySelectorAll('.side > *').forEach((el) => { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = '' })
+  if (v === 'cams') requestAnimationFrame(drawRays)
+  if (v === 'mach') renderMach(current)
+}
+function toggleAxes() {
+  intro.toggleAttribute('data-axes')
+  $('axesBtn').setAttribute('aria-pressed', String(intro.hasAttribute('data-axes')))
+  setV(intro.dataset.v)
+}
+document.querySelectorAll('#picker [data-v]').forEach((b) => (b.onclick = () => setV(b.dataset.v)))
+$('axesBtn').onclick = toggleAxes
+addEventListener('keydown', (e) => {
+  const map = { 0: 'none', 1: 'cams', 2: 'mach', 3: 'site', 4: 'data' }
+  if (map[e.key]) setV(map[e.key])
+  if (e.target.closest && e.target.closest('.tune')) return
+  if (e.key === 'a' || e.key === 'ф') toggleAxes()
+  if (e.key === 'r' || e.key === 'к') toggleRing()
+  if ((e.key === 't' || e.key === 'е') && intro.hasAttribute('data-ring')) $('tune').hidden = !$('tune').hidden
+})
+addEventListener('resize', () => { drawAxes(); drawRays() })
+drawAxes()
+const start = new URLSearchParams(location.search)
+if (start.has('axes')) toggleAxes()
+if (start.has('ring')) toggleRing()
+setV(start.get('v') || 'cams')
+</script>
+</body>
+</html>

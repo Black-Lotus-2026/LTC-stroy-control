@@ -854,7 +854,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
   .time-pill[data-live="true"] .dot { animation: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .dock, .chip-mat, .box b, .f-state .msg { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
+  .dock, .chip-mat, .box b, .f-state .msg, .intro .auth-card { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--surface); }
 }
 @media (prefers-contrast: more) {
   :root { --line: rgba(236,232,224,.2); --line-2: rgba(236,232,224,.32); --fg-3: #a9a7a2; --fg-4: #8a8884; }
@@ -1311,19 +1311,33 @@ button.ctx#ctxZone { cursor: pointer; }
 .intro {
   position: fixed; inset: 0; z-index: 200;
   overflow: hidden;
-  background: radial-gradient(1200px 760px at 62% 47%, rgba(207,157,61,.055), transparent 70%), var(--bg);
+  /* a soft overhead light falling on the lettering from the upper left, like a work lamp at dusk */
+  background:
+    radial-gradient(90% 75% at 30% 18%, rgba(236,232,224,.075), transparent 70%),
+    radial-gradient(60% 50% at 18% 60%, rgba(236,232,224,.03), transparent 70%),
+    var(--bg);
   animation: itIn 320ms var(--ease-out) both;
 }
+/* warm glow under the drawing; follows it from the centre (sign-in) to the right (intro) */
+.intro::after {
+  content: ""; position: absolute; left: 50%; top: 47%; z-index: -1; pointer-events: none;
+  /* the glow fades out inside its own box, so moving it never shows an edge */
+  width: 2000px; height: 1300px;
+  background: radial-gradient(closest-side, rgba(207,157,61,.085), rgba(207,157,61,.03) 55%, transparent);
+  transform: translate(-50%, -50%);
+  transition: transform 1250ms var(--ease-in-out);
+}
+.intro[data-mode="intro"]::after { transform: translate(calc(-50% + 12vw), -50%); }
 /* drafting-table dot grid, fading towards the edges */
 .intro::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
-  background-image: radial-gradient(rgba(236,232,224,.08) 1px, transparent 1.4px);
+  background-image: radial-gradient(rgba(236,232,224,.1) 1px, transparent 1.4px);
   background-size: 26px 26px;
   -webkit-mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%);
   mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%);
 }
 .intro-type {
-  position: absolute; inset: 0;
+  position: absolute; inset: 0; z-index: 0;
   display: grid; place-items: center;
   pointer-events: none;
   will-change: transform;
@@ -1342,11 +1356,16 @@ button.ctx#ctxZone { cursor: pointer; }
 .it-line span {
   display: block;
   color: transparent;
-  background: linear-gradient(180deg, rgba(242,239,233,.11), rgba(242,239,233,.035) 85%);
+  /* lit from above, plus a band of light that passes across the letters now and then */
+  background:
+    linear-gradient(105deg, transparent 38%, rgba(255,250,240,.26) 50%, transparent 62%) no-repeat,
+    linear-gradient(180deg, rgba(242,239,233,.22), rgba(242,239,233,.075) 85%);
+  background-size: 300% 100%, 100% 100%;
+  background-position: 0% 0, 0 0;
   -webkit-background-clip: text; background-clip: text;
-  -webkit-text-stroke: 1px rgba(242,239,233,.07);
-  animation: itRise 1100ms var(--ease-out) both;
-  animation-delay: calc(140ms + var(--l) * 130ms + var(--i) * 38ms);
+  -webkit-text-stroke: 1px rgba(242,239,233,.12);
+  animation: itRise 1100ms var(--ease-out) both, itSweep 9s linear infinite;
+  animation-delay: calc(140ms + var(--l) * 130ms + var(--i) * 38ms), calc(1.8s + var(--l) * 80ms + var(--i) * 270ms);
 }
 .it-tag {
   display: flex; align-items: center; gap: 22px;
@@ -1363,10 +1382,42 @@ button.ctx#ctxZone { cursor: pointer; }
   transform-origin: left;
   animation: itRule 1000ms var(--ease-out) 640ms both;
 }
-.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.intro-canvas { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; display: block; }
+/* wide screens: the name stands in solid letters on a ring round the drawing (lib/ring.ts) in place of
+   the flat type; it comes up once its letters are made */
+.intro-ring {
+  position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; display: block; pointer-events: none;
+  opacity: 0; transform: translateY(16px);
+  transition: opacity 900ms var(--ease-out), transform 1100ms var(--ease-out);
+}
+.intro-ring[data-ready] { opacity: 1; transform: none; }
+@media (min-width: 721px) and (min-aspect-ratio: 5/6) {
+  .it-line, .it-tag { visibility: hidden; }
+}
+@media not all and (min-width: 721px) and (min-aspect-ratio: 5/6) {
+  .intro-ring { display: none; }
+}
+
+/* sign-in over the drawing: the form on a frosted panel so the dashes behind never fight the text */
+.intro > .auth { position: absolute; inset: 0; z-index: 2; min-height: 0; overflow-y: auto; background: none; }
+.intro .auth-card {
+  padding: 28px 28px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line-2);
+  background: rgba(16, 19, 23, .62);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15); backdrop-filter: blur(18px) saturate(1.15);
+  box-shadow: 0 40px 90px -40px rgba(0, 0, 0, .8);
+  animation: itUp 700ms var(--ease-out) 120ms both;
+}
+.intro .auth[data-leaving] .auth-card { animation: authOut 240ms var(--ease-out) forwards; }
+@keyframes authOut { to { opacity: 0; transform: scale(.97); } }
+/* portrait: the form fills the width, so it sits low and leaves the drawing room above */
+@media (max-aspect-ratio: 5/6) {
+  .intro > .auth { place-items: end center; padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+}
 
 .intro-top {
-  position: absolute; left: 0; right: 0; top: 0;
+  position: absolute; left: 0; right: 0; top: 0; z-index: 2;
   display: flex; align-items: center; gap: 10px;
   padding: 18px var(--gut);
 }
@@ -1375,7 +1426,7 @@ button.ctx#ctxZone { cursor: pointer; }
 .it-date { color: var(--fg-3); font-size: 13px; }
 
 .intro-foot {
-  position: absolute; left: 0; right: 0; bottom: 0;
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 24px;
   padding: 0 var(--gut) max(24px, env(safe-area-inset-bottom));
 }
@@ -1406,6 +1457,8 @@ button.ctx#ctxZone { cursor: pointer; }
 .it-go svg { transition: transform 200ms var(--ease-out); }
 
 @keyframes itIn { from { opacity: 0; } }
+/* band from the left edge of a letter to past its right edge in ~0.5 s, then waits off to the right */
+@keyframes itSweep { 0% { background-position: 100% 0, 0 0; } 5.5%, 100% { background-position: 0% 0, 0 0; } }
 @keyframes itRise { from { transform: translateY(100%); opacity: 0; } }
 @keyframes itFade { from { transform: translateY(6px); opacity: 0; } }
 @keyframes itRule { from { transform: scaleX(0); } }
@@ -1414,7 +1467,8 @@ button.ctx#ctxZone { cursor: pointer; }
 
 /* leaving: the drawing comes at you, the name parts, the page fades off the workspace */
 .intro[data-leaving] { pointer-events: none; animation: itOut 520ms var(--ease-out) 200ms forwards; }
-.intro[data-leaving] .intro-canvas { animation: itZoom 760ms var(--ease-in-out) forwards; }
+.intro[data-leaving] .intro-canvas,
+.intro[data-leaving] .intro-ring { animation: itZoom 760ms var(--ease-in-out) forwards; }
 .intro[data-leaving] .it-line.l0 { animation: itAwayUp 700ms var(--ease-in-out) forwards; }
 .intro[data-leaving] .it-line.l1 { animation: itAwayDown 700ms var(--ease-in-out) forwards; }
 .intro[data-leaving] .intro-top,
@@ -1447,8 +1501,12 @@ button.ctx#ctxZone { cursor: pointer; }
   .it-line + .it-line { margin-top: 24vh; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .it-line span, .it-tag span, .it-tag i, .intro-top > *, .intro-foot > * { animation-name: itFadeOnly; }
+  .it-tag span, .it-tag i, .intro-top > *, .intro-foot > *, .intro .auth-card { animation-name: itFadeOnly; }
+  .it-line span { animation: itFadeOnly 600ms var(--ease-out) both; }
+  .intro::after { transition: none; }
+  .intro-ring { transform: none; transition: opacity 600ms var(--ease-out); }
   .intro[data-leaving] .intro-canvas,
+  .intro[data-leaving] .intro-ring,
   .intro[data-leaving] .it-line.l0,
   .intro[data-leaving] .it-line.l1,
   .intro[data-leaving] .intro-top,

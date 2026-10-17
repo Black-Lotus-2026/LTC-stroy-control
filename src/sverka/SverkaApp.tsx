@@ -19,7 +19,7 @@ import { SettingsSheet, type SheetTab } from './parts/Settings'
 import { Setup } from './parts/Setup'
 import { Auth } from './parts/Auth'
 import { Journal } from './parts/Journal'
-import { Intro } from './parts/Intro'
+import { Intro, Showcase } from './parts/Intro'
 
 export function SverkaApp() {
   const [user, setUser] = useState<UserProfile | null | undefined>(undefined)
@@ -40,13 +40,15 @@ export function SverkaApp() {
       setUser(null)
     })
   }, [])
+  // sign-in and the intro share one backdrop, so the drawing carries over from one to the other
+  const showcase = user === null || (!!user && intro !== 'off')
   return (
     <ToastProvider>
       {user === undefined ? (
         <div className="auth" aria-busy="true" />
-      ) : user ? (
+      ) : (
         <>
-          {entered && (
+          {user && entered && (
             <div className="ws-host" inert={intro === 'on'}>
               <Workspace
                 user={user}
@@ -61,10 +63,12 @@ export function SverkaApp() {
               />
             </div>
           )}
-          {intro !== 'off' && <Intro user={user} leaving={intro === 'leaving'} onContinue={leaveIntro} onGone={dropIntro} />}
+          {showcase && (
+            <Showcase mode={user ? 'intro' : 'auth'} leaving={!!user && intro === 'leaving'} onGone={dropIntro}>
+              {user ? <Intro user={user} leaving={intro === 'leaving'} onContinue={leaveIntro} /> : <Auth onAuth={setUser} offline={offline} />}
+            </Showcase>
+          )}
         </>
-      ) : (
-        <Auth onAuth={setUser} offline={offline} />
       )}
     </ToastProvider>
   )

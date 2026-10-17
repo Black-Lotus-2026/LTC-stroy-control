@@ -1,25 +1,89 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { UserProfile } from '../api'
 import { fmtDayLong } from '../lib/format'
+import { LetterRing } from '../lib/ring'
 import { SUBJECTS, WireScene } from '../lib/wire'
 import { ROLE_LABEL } from '../model'
+
+const SceneCtx = createContext<WireScene | null>(null)
+
+/**
+ * The backdrop shared by sign-in and the intro page: the dashed wireframe turning on its stand.
+ * It stays mounted from one to the other, so after signing in the same drawing glides from the
+ * centre to its place on the intro page without restarting. Pages inside put their layers above
+ * and below the canvas with z-index (the canvas is z 1).
+ */
+export function Showcase({ mode, leaving = false, onGone, children }: { mode: 'auth' | 'intro'; leaving?: boolean; onGone?: () => void; children: ReactNode }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const [scene, setScene] = useState<WireScene | null>(null)
+  const initial = useRef(mode)
+
+  useEffect(() => {
+    const s = new WireScene(canvas.current!, initial.current === 'intro' ? 1 : 0)
+    s.start()
+    setScene(s)
+    return () => {
+      s.stop()
+      setScene(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    scene?.setLayout(mode === 'intro' ? 1 : 0)
+  }, [scene, mode])
+
+  useEffect(() => {
+    if (!leaving || !onGone) return
+    // in case the exit animation never reports its end (hidden tab)
+    const t = window.setTimeout(onGone, 1400)
+    return () => clearTimeout(t)
+  }, [leaving, onGone])
+
+  return (
+    <div
+      className="intro"
+      data-mode={mode}
+      data-leaving={leaving || undefined}
+      onAnimationEnd={(e) => {
+        if (leaving && e.target === e.currentTarget && e.animationName === 'itOut') onGone?.()
+      }}
+    >
+      <canvas className="intro-canvas" ref={canvas} aria-hidden="true" />
+      <SceneCtx.Provider value={scene}>{children}</SceneCtx.Provider>
+    </div>
+  )
+}
 
 const WORDS = ['СТРОЙ', 'КОНТРОЛЬ']
 
 /**
- * The page before the workspace: a dashed wireframe turning slowly on its stand and rebuilding
- * itself from a machine into a building and back, the product name set huge behind it, the role
- * at the bottom. Continuing mounts the workspace underneath while this page leaves off the top.
+ * The page before the workspace, drawn over the Showcase: the product name behind the wireframe, the
+ * tagline, the role at the bottom. On wide screens the name stands in solid letters on a ring round
+ * the drawing, with the site's kit about them (lib/ring.ts); elsewhere it is set huge and flat.
+ * Continuing mounts the workspace underneath while the Showcase leaves off the top.
  */
-export function Intro({ user, leaving, onContinue, onGone }: { user: UserProfile; leaving: boolean; onContinue: () => void; onGone: () => void }) {
-  const canvas = useRef<HTMLCanvasElement>(null)
+export function Intro({ user, leaving, onContinue }: { user: UserProfile; leaving: boolean; onContinue: () => void }) {
+  const scene = useContext(SceneCtx)
   const type = useRef<HTMLDivElement>(null)
   const fills = useRef<(HTMLElement | null)[]>([])
-  const scene = useRef<WireScene | null>(null)
+  const ringCanvas = useRef<HTMLCanvasElement>(null)
+  const ring = useRef<LetterRing | null>(null)
+  const [ringReady, setRingReady] = useState(false)
   const [idx, setIdx] = useState(0)
 
   useEffect(() => {
-    const s = new WireScene(canvas.current!, {
+    const r = new LetterRing(ringCanvas.current!, () => setRingReady(true))
+    ring.current = r
+    r.start()
+    return () => {
+      r.stop()
+      ring.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!scene) return
+    scene.on = {
       onIndex: setIdx,
       onTick: (i, p) =>
         fills.current.forEach((el, j) => {
@@ -27,37 +91,26 @@ export function Intro({ user, leaving, onContinue, onGone }: { user: UserProfile
         }),
       onParallax: (x, y) => {
         if (type.current) type.current.style.transform = `translate3d(${(-x * 14).toFixed(2)}px, ${(-y * 8).toFixed(2)}px, 0)`
+        ring.current?.look(x, y)
       },
-    })
-    scene.current = s
-    s.start()
-    return () => {
-      s.stop()
-      scene.current = null
     }
-  }, [])
+    scene.on.onIndex?.(scene.current)
+    return () => {
+      scene.on = {}
+    }
+  }, [scene])
 
   useEffect(() => {
-    if (leaving) {
-      // in case the exit animation never reports its end (hidden tab)
-      const t = window.setTimeout(onGone, 1400)
-      return () => clearTimeout(t)
-    }
+    if (leaving) return
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onContinue()
     }
     addEventListener('keydown', key)
     return () => removeEventListener('keydown', key)
-  }, [leaving, onContinue, onGone])
+  }, [leaving, onContinue])
 
   return (
-    <div
-      className="intro"
-      data-leaving={leaving || undefined}
-      onAnimationEnd={(e) => {
-        if (leaving && e.target === e.currentTarget && e.animationName === 'itOut') onGone()
-      }}
-    >
+    <>
       <div className="intro-type" ref={type}>
         <div className="it-block">
           <h1 className="sr">Строй-контроль</h1>
@@ -77,8 +130,7 @@ export function Intro({ user, leaving, onContinue, onGone }: { user: UserProfile
           </p>
         </div>
       </div>
-
-      <canvas className="intro-canvas" ref={canvas} aria-hidden="true" />
+      <canvas className="intro-ring" ref={ringCanvas} data-ready={ringReady || undefined} aria-hidden="true" />
 
       <header className="intro-top">
         <div className="brand" aria-hidden="true">
@@ -98,7 +150,7 @@ export function Intro({ user, leaving, onContinue, onGone }: { user: UserProfile
         <ol className="it-steps" aria-label="Что на заставке">
           {SUBJECTS.map((s, i) => (
             <li key={s.title}>
-              <button type="button" aria-current={i === idx || undefined} data-gold={s.gold || undefined} onClick={() => scene.current?.show(i)}>
+              <button type="button" aria-current={i === idx || undefined} data-gold={s.gold || undefined} onClick={() => scene?.show(i)}>
                 <span className="it-bar">
                   <i
                     ref={(el) => {
@@ -121,6 +173,6 @@ export function Intro({ user, leaving, onContinue, onGone }: { user: UserProfile
           </svg>
         </button>
       </footer>
-    </div>
+    </>
   )
 }

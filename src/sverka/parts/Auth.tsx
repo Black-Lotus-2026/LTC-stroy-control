@@ -1,12 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import * as api from '../api'
 import type { UserProfile } from '../api'
+import { reducedMotion } from '../lib/spring'
 
 export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; offline?: string | null }) {
   const [tab, setTab] = useState<'login' | 'register'>('login')
   const [f, setF] = useState({ u: '', p: '', c: '' })
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // signed in: the form steps aside first, then the drawing behind it moves to the intro layout
+  const [done, setDone] = useState<UserProfile | null>(null)
+  useEffect(() => {
+    if (!done) return
+    const t = window.setTimeout(() => onAuth(done), reducedMotion() ? 0 : 240)
+    return () => clearTimeout(t)
+  }, [done, onAuth])
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setErr(null)
@@ -16,7 +24,7 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
     }
     setBusy(true)
     try {
-      onAuth(tab === 'login' ? await api.login(f.u.trim(), f.p) : await api.register(f.u.trim(), f.p, f.c))
+      setDone(tab === 'login' ? await api.login(f.u.trim(), f.p) : await api.register(f.u.trim(), f.p, f.c))
     } catch (x) {
       setErr(x instanceof Error ? x.message : 'Не получилось')
     } finally {
@@ -24,7 +32,7 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
     }
   }
   return (
-    <main className="auth">
+    <main className="auth" data-leaving={done ? true : undefined}>
       <div className="auth-card">
         <div className="brand" aria-hidden="true">
           СК
@@ -59,7 +67,7 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
           </div>
           {err && <p className="err-line">{err}</p>}
           <div className="form-actions">
-            <button type="submit" className="btn primary" disabled={busy} style={{ width: '100%' }}>
+            <button type="submit" className="btn primary" disabled={busy || !!done} style={{ width: '100%' }}>
               {busy ? 'Подождите…' : tab === 'login' ? 'Войти' : 'Создать учётную запись'}
             </button>
           </div>

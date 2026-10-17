@@ -373,8 +373,11 @@ const MORPH = SPREAD + JITTER + FLIGHT
 const ENTRY_SPREAD = 1.1
 const ENTRY_FLIGHT = 1.05
 const FADE = 0.9 // reduced motion: cross-fade instead of flight
+const GLIDE = 1.25 // moving between the sign-in layout and the intro layout
 const SPIN = 0.16 // rad/s, a turn in about 40 s
 const PITCH = 0.3
+/** How far the pointer turns the view: a nudge, so heading for a button does not swing the drawing. */
+export const PARALLAX = { yaw: 0.08, pitch: 0.025 }
 const DIST = 5
 
 const INK: V3 = [242, 239, 233]
@@ -384,6 +387,9 @@ const AL = 6 // alpha steps
 
 const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2)
 const smooth = (dt: number, rate: number) => 1 - Math.exp(-dt * rate)
+
+/** 0: centred and dimmed behind the sign-in form; 1: large, right of centre, on the intro page. */
+export type Layout = 0 | 1
 
 export interface SceneEvents {
   /** The subject being assembled changed (also fires for the first one). */
@@ -424,8 +430,12 @@ export class WireScene {
   private dt = 1 / 60
   private ro: ResizeObserver
   private reduce = reducedMotion()
+  private lay = { from: 0, to: 0, t: 1 }
+  /** Event handlers; the page currently in front of the scene sets them. */
+  on: SceneEvents = {}
 
-  constructor(private canvas: HTMLCanvasElement, private on: SceneEvents = {}) {
+  constructor(private canvas: HTMLCanvasElement, layout: Layout = 1) {
+    this.lay.from = this.lay.to = layout
     this.ctx = canvas.getContext('2d')!
     const { shapes, slots } = buildShapes()
     this.shapes = shapes
@@ -481,6 +491,23 @@ export class WireScene {
     this.ro.disconnect()
   }
 
+  /** Index of the subject being assembled or shown. */
+  get current() {
+    return this.idx
+  }
+
+  /** Glide to the other layout, carrying on with whatever is being assembled. */
+  setLayout(layout: Layout) {
+    if (layout === this.lay.to) return
+    this.lay.from = this.layout
+    this.lay.to = layout
+    this.lay.t = this.reduce ? 1 : 0
+  }
+
+  private get layout() {
+    return this.lay.from + (this.lay.to - this.lay.from) * easeInOut(this.lay.t)
+  }
+
   /** Reassemble into subject i now, from wherever the dashes are. */
   show(i: number) {
     if (i === this.idx && this.phase === 'morph') return
@@ -523,6 +550,7 @@ export class WireScene {
     const sh = this.shapes[this.idx]
     const n = this.n
     if (!this.reduce) this.yaw += dt * SPIN
+    this.lay.t = Math.min(1, this.lay.t + dt / GLIDE)
     const k = smooth(dt, 3)
     this.aim.sx += (this.aim.x - this.aim.sx) * k
     this.aim.sy += (this.aim.y - this.aim.sy) * k
@@ -593,14 +621,17 @@ export class WireScene {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
     if (!w || !h) return
-    // landscape: large and right of centre, clear of СТРОЙ; portrait: centred between the words
+    // sign-in: centred behind the form, dimmed; intro: right of centre, clear of СТРОЙ.
+    // Portrait: above the form on sign-in (it fills the width), then down between the words
     const portrait = h > w * 1.2
+    const l = this.layout
     const unit = portrait ? Math.min(w * 0.42, h * 0.36) : Math.min(w * 0.36, h * 0.45)
-    const cx = portrait ? w / 2 : w * 0.62
-    const cy = h * 0.47
+    const cx = portrait ? w / 2 : w * (0.5 + 0.12 * l)
+    const cy = h * (portrait ? 0.27 + 0.2 * l : 0.47)
+    const lit = 0.6 + 0.4 * l
     const f = unit * DIST
-    const yaw = this.yaw + this.aim.sx * 0.35
-    const pitch = PITCH + this.aim.sy * 0.08
+    const yaw = this.yaw + this.aim.sx * PARALLAX.yaw
+    const pitch = PITCH + this.aim.sy * PARALLAX.pitch
     const cyw = Math.cos(yaw), syw = Math.sin(yaw), cpt = Math.cos(pitch), spt = Math.sin(pitch)
     // world → screen; returns depth for fading the far side
     let sx = 0, sy = 0
@@ -617,7 +648,7 @@ export class WireScene {
 
     // turntable under the subject
     ctx.lineWidth = 1
-    ctx.strokeStyle = 'rgba(242,239,233,0.14)'
+    ctx.strokeStyle = `rgba(242,239,233,${(0.14 * lit).toFixed(3)})`
     ctx.beginPath()
     const { g, r } = this.ring
     for (let i = 0; i < 120; i++) {
@@ -662,7 +693,7 @@ export class WireScene {
         by0 = Math.min(by0, sy); by1 = Math.max(by1, sy)
       }
       const depth = 1 - 0.62 * Math.min(1, Math.max(0, (z2 + 1) / 2))
-      const al = Math.min(AL - 1, Math.max(0, Math.round(a * depth * AL) - 1))
+      const al = Math.min(AL - 1, Math.max(0, Math.round(a * depth * lit * AL) - 1))
       const gl = Math.round(cg[i] * (GL - 1))
       const b = gl * AL + al
       bucket[i] = b
@@ -686,11 +717,11 @@ export class WireScene {
       ctx.stroke()
     }
 
-    this.drawFrame(bx0, by0, bx1, by1)
+    this.drawFrame(bx0, by0, bx1, by1, l)
   }
 
   /** Viewfinder corners that lock onto the subject once it is assembled, like the boxes on a camera frame. */
-  private drawFrame(x0: number, y0: number, x1: number, y1: number) {
+  private drawFrame(x0: number, y0: number, x1: number, y1: number, show: number) {
     const fr = this.frame
     const dt = this.dt
     const want = this.phase === 'hold' && this.hold > 0.15 && Number.isFinite(x0) ? 1 : 0
@@ -706,12 +737,12 @@ export class WireScene {
       fr.x1 += (x1 + pad - fr.x1) * k; fr.y1 += (y1 + pad - fr.y1) * k
     }
     fr.a += (want - fr.a) * (this.reduce ? 1 : smooth(dt, want ? 4 : 12))
-    if (fr.a < 0.02) return
+    if (fr.a * show < 0.02) return
     const { ctx } = this
     const sh = this.shapes[this.idx]
     const col = sh.gold ? GOLD : INK
     const L = 12
-    ctx.globalAlpha = fr.a * 0.85
+    ctx.globalAlpha = fr.a * show * 0.85
     ctx.strokeStyle = `rgb(${col[0]},${col[1]},${col[2]})`
     ctx.lineWidth = 1.5
     ctx.beginPath()
