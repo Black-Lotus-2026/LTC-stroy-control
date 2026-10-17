@@ -4,6 +4,7 @@ import { fmtDayLong } from '../lib/format'
 import { LetterRing } from '../lib/ring'
 import { SUBJECTS, WireScene } from '../lib/wire'
 import { ROLE_LABEL } from '../model'
+import { SideSwitch, Sides, useSide, type Side } from './IntroSides'
 
 const SceneCtx = createContext<WireScene | null>(null)
 
@@ -59,7 +60,9 @@ const WORDS = ['СТРОЙ', 'КОНТРОЛЬ']
 /**
  * The page before the workspace, drawn over the Showcase: the product name behind the wireframe, the
  * tagline, the role at the bottom. On wide screens the name stands in solid letters on a ring round
- * the drawing, with the site's kit about them (lib/ring.ts); elsewhere it is set huge and flat.
+ * the drawing, with the site's kit about them (lib/ring.ts), and the sides show the object: its
+ * cameras, the stage's machinery, the site, its numbers or a drawing sheet (IntroSides.tsx), as
+ * picked in the header. Elsewhere the name is set huge and flat.
  * Continuing mounts the workspace underneath while the Showcase leaves off the top.
  */
 export function Intro({ user, leaving, onContinue }: { user: UserProfile; leaving: boolean; onContinue: () => void }) {
@@ -70,6 +73,13 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
   const ring = useRef<LetterRing | null>(null)
   const [ringReady, setRingReady] = useState(false)
   const [idx, setIdx] = useState(0)
+  const [side, setSide] = useSide()
+  const [switched, setSwitched] = useState(false)
+  const aim = useRef({ x: 0, y: 0 })
+  const pickSide = (s: Side) => {
+    setSwitched(true)
+    setSide(s)
+  }
 
   useEffect(() => {
     const r = new LetterRing(ringCanvas.current!, () => setRingReady(true))
@@ -92,6 +102,8 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
       onParallax: (x, y) => {
         if (type.current) type.current.style.transform = `translate3d(${(-x * 14).toFixed(2)}px, ${(-y * 8).toFixed(2)}px, 0)`
         ring.current?.look(x, y)
+        aim.current.x = x
+        aim.current.y = y
       },
     }
     scene.on.onIndex?.(scene.current)
@@ -130,6 +142,7 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
           </p>
         </div>
       </div>
+      <Sides side={side} user={user} scene={scene} aim={aim} subject={SUBJECTS[idx]?.title ?? ''} switched={switched} />
       <canvas className="intro-ring" ref={ringCanvas} data-ready={ringReady || undefined} aria-hidden="true" />
 
       <header className="intro-top">
@@ -137,6 +150,7 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
           СК
         </div>
         <span className="it-name">Строй-контроль</span>
+        <SideSwitch side={side} onSide={pickSide} />
         <span className="grow" />
         <span className="it-date">{fmtDayLong(Date.now())}</span>
       </header>

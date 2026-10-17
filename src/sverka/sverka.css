@@ -1315,7 +1315,9 @@ button.ctx#ctxZone { cursor: pointer; }
 
 .intro {
   position: fixed; inset: 0; z-index: 200;
-  overflow: hidden;
+  /* clip, not hidden: the glow reaches past the edge, and a hidden overflow can still be scrolled
+     (focus, scrollIntoView), which would shift the whole page sideways */
+  overflow: hidden; overflow: clip;
   /* a soft overhead light falling on the lettering from the upper left, like a work lamp at dusk */
   background:
     radial-gradient(90% 75% at 30% 18%, rgba(236,232,224,.075), transparent 70%),
@@ -1400,8 +1402,141 @@ button.ctx#ctxZone { cursor: pointer; }
   .it-line, .it-tag { visibility: hidden; }
 }
 @media not all and (min-width: 721px) and (min-aspect-ratio: 5/6) {
-  .intro-ring { display: none; }
+  .intro-ring, .it-side, .intro-top .it-sides { display: none; }
 }
+
+/* ── sides of a wide intro (IntroSides.tsx) ── */
+/* the switch sits in the middle of the header */
+.it-sides {
+  position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content;
+  display: flex; gap: 2px; padding: 3px;
+  border-radius: 10px; border: 1px solid var(--line-2); background: rgba(16, 19, 23, .62);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.it-sides button { height: 28px; padding: 0 11px; border-radius: 7px; font-size: 12.5px; color: var(--fg-3); white-space: nowrap; transition: color 140ms ease, background-color 140ms ease; }
+.it-sides button[aria-pressed="true"] { background: var(--surface-3); color: var(--fg); }
+@media (hover: hover) and (pointer: fine) { .it-sides button:hover { color: var(--fg); } }
+/* a side is a layer of its own; its pieces come in after the page, at once when picked by hand */
+.it-side { position: absolute; inset: 0; pointer-events: none; }
+.it-side > *, .it-mcol > * { animation: itUp 700ms var(--ease-out) both; animation-delay: calc(620ms + var(--k, 0) * 80ms); }
+.it-side[data-switched] > *, .it-side[data-switched] .it-mcol > * { animation-duration: 420ms; animation-delay: calc(var(--k, 0) * 40ms); }
+.it-side > .it-rays, .it-side > .it-site, .it-side > .it-axes, .it-side > .it-mcol, .it-side > .it-elev { animation-name: itFadeOnly; }
+
+/* cameras in the corners, each with a dashed sight line to the drawing */
+.it-rays { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; overflow: visible; }
+.it-rays line { stroke: rgba(232, 189, 102, .38); stroke-width: 1.2; stroke-dasharray: 2 7; animation: itMarch 1.2s linear infinite; }
+.it-rays circle { fill: none; stroke: var(--plan-2); stroke-width: 1.2; }
+.it-rays .pulse { transform-box: fill-box; transform-origin: center; animation: itPing 2.4s var(--ease-out) infinite; }
+.it-cam {
+  position: absolute; z-index: 2; margin: 0;
+  width: clamp(176px, 15vw, 250px); aspect-ratio: 16 / 9;
+  border-radius: 6px; overflow: hidden; background: #000;
+  box-shadow: 0 20px 50px -24px rgba(0, 0, 0, .9);
+}
+.it-cam.c1, .it-panel.tl { left: var(--gut); top: 96px; }
+.it-cam.c2, .it-panel.bl { left: var(--gut); bottom: 112px; }
+.it-cam.c3, .it-panel.tr { right: var(--gut); top: 96px; }
+.it-cam.c4, .it-panel.br { right: var(--gut); bottom: 112px; }
+.it-cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; filter: grayscale(.55) brightness(.62) contrast(1.08); }
+/* scan lines and viewfinder corners */
+.it-cam::before { content: ""; position: absolute; inset: 0; z-index: 1; background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .18) 0 1px, transparent 1px 3px); }
+.it-cam::after {
+  content: ""; position: absolute; inset: 7px; z-index: 1; --c: rgba(242, 239, 233, .8); --s: 10px;
+  background:
+    linear-gradient(var(--c), var(--c)) 0 0 / var(--s) 1.5px no-repeat, linear-gradient(var(--c), var(--c)) 0 0 / 1.5px var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) 100% 0 / var(--s) 1.5px no-repeat, linear-gradient(var(--c), var(--c)) 100% 0 / 1.5px var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) 0 100% / var(--s) 1.5px no-repeat, linear-gradient(var(--c), var(--c)) 0 100% / 1.5px var(--s) no-repeat,
+    linear-gradient(var(--c), var(--c)) 100% 100% / var(--s) 1.5px no-repeat, linear-gradient(var(--c), var(--c)) 100% 100% / 1.5px var(--s) no-repeat;
+}
+.it-cam figcaption {
+  position: absolute; inset: 0; z-index: 2;
+  display: grid; grid-template-rows: auto 1fr auto;
+  padding: 12px 13px 10px; font-size: 11.5px; color: var(--fg);
+  background: linear-gradient(rgba(0, 0, 0, .45), transparent 35%, transparent 60%, rgba(0, 0, 0, .65));
+}
+.it-cam .osd { display: flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--f-mono); color: var(--fg-2); }
+.it-cam .osd .mono { margin-left: auto; }
+.it-cam .dot, .it-panel li .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--fg-4); }
+.it-cam[data-state="live"] .dot, .it-panel li[data-state="live"] .dot { background: var(--ok); }
+.it-cam[data-state="live"] .dot { animation: itBeat 2s ease-out infinite; }
+.it-cam[data-state="off"] .dot, .it-panel li[data-state="off"] .dot { background: var(--warn); }
+.it-cam .name { grid-row: 3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* machinery of the stage: the plan in gold on the left, the journal in white on the right */
+.it-mcol { position: absolute; z-index: 2; top: 96px; bottom: 112px; width: 220px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.it-mcol.plan { left: var(--gut); }
+.it-mcol.fact { right: var(--gut); align-items: flex-end; text-align: right; }
+.it-mcol .kicker { margin-bottom: 10px; max-width: 100%; }
+.it-mcol.plan .kicker { color: var(--plan-2); }
+.it-mrow { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+.it-mrow:not(.on) { opacity: .2; }
+.it-mcol.fact .it-mrow { flex-direction: row-reverse; }
+.it-mrow svg { width: 50px; height: 31px; flex: none; overflow: visible; fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.it-mcol.plan svg { stroke: var(--plan-2); }
+.it-mcol.fact svg { stroke: var(--fg); }
+.it-mrow > span { font-size: 12px; color: var(--fg-2); white-space: nowrap; }
+.it-mrow small { display: block; font-size: 11px; color: var(--fg-3); }
+.it-mrow.miss small { color: var(--warn); }
+.it-mcol.fact .it-mrow.miss svg { stroke: var(--warn); }
+.it-mrow.on svg path, .it-mrow.on svg circle { stroke-dasharray: 1; stroke-dashoffset: 1; animation: itDraw 900ms cubic-bezier(.4, 0, .2, 1) forwards; animation-delay: calc(700ms + var(--k) * 40ms); }
+.it-side[data-switched] .it-mrow.on svg path, .it-side[data-switched] .it-mrow.on svg circle { animation-delay: calc(120ms + var(--k) * 30ms); }
+
+/* the site round the drawing */
+.it-site { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; display: block; }
+
+/* the object's numbers */
+.it-panel {
+  position: absolute; z-index: 2; width: clamp(220px, 19vw, 300px); padding: 14px 16px;
+  border-radius: 12px; border: 1px solid var(--line-2); background: rgba(16, 19, 23, .6);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.it-panel .kicker { display: block; margin-bottom: 8px; }
+.it-panel h3 { margin: 0 0 4px; font: 400 17px/1.2 var(--f-display); letter-spacing: -.01em; }
+.it-panel p { margin: 0; color: var(--fg-2); font-size: 12.5px; }
+.it-panel p.mono { font: 400 11.5px/1.3 var(--f-mono); }
+.it-panel .bar { height: 3px; border-radius: 2px; background: var(--line-2); margin: 10px 0 6px; overflow: hidden; }
+.it-panel .bar i { display: block; height: 100%; background: var(--plan-2); transform-origin: left; }
+.it-panel .gantt { display: flex; gap: 3px; margin-top: 10px; }
+.it-panel .gantt i { flex: 1; height: 6px; border-radius: 1px; background: var(--line-2); }
+.it-panel .gantt i.done { background: rgba(207, 157, 61, .35); }
+.it-panel .gantt i.now { background: var(--plan-2); }
+.it-panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.it-panel li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+.it-panel li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it-panel li .mono { margin-left: auto; color: var(--fg-3); font-size: 11px; white-space: nowrap; }
+.it-panel .big { font: 400 34px/1 var(--f-display); }
+.it-panel .big small { font: 400 13px var(--f-ui); color: var(--fg-3); margin-left: 6px; }
+.it-panel.br p { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the page as a drawing sheet */
+.it-axes { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; }
+.it-axes .ax { stroke: rgba(236, 232, 224, .07); stroke-width: 1; stroke-dasharray: 18 5 2 5; fill: none; }
+.it-axes circle { fill: var(--bg); stroke: var(--line-3); stroke-width: 1; }
+.it-axes text { fill: var(--fg-3); font: 500 11px var(--f-ui); text-anchor: middle; dominant-baseline: central; }
+.it-elev { position: absolute; z-index: 2; right: 14px; top: 120px; bottom: 120px; width: 70px; }
+.it-elev i { position: absolute; right: 0; height: 1px; background: var(--line-3); }
+.it-elev b { position: absolute; right: 16px; transform: translateY(-50%); font: 400 10px/1 var(--f-mono); color: var(--fg-3); white-space: nowrap; }
+.it-elev b::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border: 1px solid var(--fg-3); border-top: 0; transform: translateY(-2px) rotate(-45deg) scaleY(.7); }
+.it-stamp {
+  /* clear of the row marks on the left edge and the column marks along the top */
+  position: absolute; z-index: 2; left: 48px; top: 92px; margin: 0;
+  display: grid; grid-template-columns: auto minmax(0, 220px);
+  border: 1px solid var(--line-2); background: rgba(12, 14, 17, .6);
+  font: 400 10.5px/1 var(--f-mono); color: var(--fg);
+}
+.it-stamp dt, .it-stamp dd { margin: 0; padding: 6px 9px; border-bottom: 1px solid var(--line-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it-stamp dt { color: var(--fg-3); border-right: 1px solid var(--line-2); }
+.it-stamp dt:nth-last-of-type(1), .it-stamp dd:nth-last-of-type(1) { border-bottom: 0; }
+.it-corner { position: absolute; z-index: 2; width: 16px; height: 16px; border: 0 solid var(--line-3); }
+.it-corner.tl { left: 10px; top: 10px; border-left-width: 1px; border-top-width: 1px; }
+.it-corner.tr { right: 10px; top: 10px; border-right-width: 1px; border-top-width: 1px; }
+.it-corner.bl { left: 10px; bottom: 10px; border-left-width: 1px; border-bottom-width: 1px; }
+.it-corner.br { right: 10px; bottom: 10px; border-right-width: 1px; border-bottom-width: 1px; }
+
+@keyframes itMarch { to { stroke-dashoffset: -18; } }
+@keyframes itPing { from { transform: scale(.4); opacity: .9; } to { transform: scale(2.6); opacity: 0; } }
+@keyframes itBeat { 0% { box-shadow: 0 0 0 0 rgba(69, 208, 139, .45); } 70%, 100% { box-shadow: 0 0 0 6px rgba(69, 208, 139, 0); } }
+@keyframes itDraw { to { stroke-dashoffset: 0; } }
 
 /* sign-in over the drawing: the form on a frosted panel so the dashes behind never fight the text */
 .intro > .auth { position: absolute; inset: 0; z-index: 2; min-height: 0; overflow-y: auto; background: none; }
@@ -1478,6 +1613,7 @@ button.ctx#ctxZone { cursor: pointer; }
 .intro[data-leaving] .it-line.l1 { animation: itAwayDown 700ms var(--ease-in-out) forwards; }
 .intro[data-leaving] .intro-top,
 .intro[data-leaving] .intro-foot,
+.intro[data-leaving] .it-side,
 .intro[data-leaving] .it-tag { animation: itGone 260ms var(--ease-out) forwards; }
 @keyframes itOut { to { opacity: 0; } }
 @keyframes itZoom { to { transform: scale(1.4); opacity: 0; } }
@@ -1510,6 +1646,9 @@ button.ctx#ctxZone { cursor: pointer; }
   .it-line span { animation: itFadeOnly 600ms var(--ease-out) both; }
   .intro::after { transition: none; }
   .intro-ring { transform: none; transition: opacity 600ms var(--ease-out); }
+  .it-side > *, .it-mcol > * { animation-name: itFadeOnly; }
+  .it-rays line, .it-rays .pulse, .it-cam[data-state="live"] .dot { animation: none; }
+  .it-mrow.on svg path, .it-mrow.on svg circle { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; }
   .intro[data-leaving] .intro-canvas,
   .intro[data-leaving] .intro-ring,
   .intro[data-leaving] .it-line.l0,

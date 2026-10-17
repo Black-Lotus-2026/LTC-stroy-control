@@ -491,6 +491,10 @@ export class WireScene {
     this.ro.disconnect()
   }
 
+  /** How far the stand has turned, radians. */
+  get turn() {
+    return this.yaw
+  }
   /** Index of the subject being assembled or shown. */
   get current() {
     return this.idx
