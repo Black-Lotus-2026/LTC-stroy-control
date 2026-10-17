@@ -2,6 +2,11 @@ import type { ApiIncident, ApiProfile, StageItem } from './api'
 import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
 
+/* ── Role ───────────────────────────────────────────────── */
+/** The role shown to the user. The server has admin / manager / viewer and no site roles yet,
+    so until they are agreed everyone is shown as a foreman. Access still follows user.role. */
+export const ROLE_LABEL = 'Прораб'
+
 /* ── Requirement levels ─────────────────────────────────── */
 export type Level = 'req' | 'rec' | 'ok' | 'no' | 'skip'
 export const LV: Record<Level, { label: string; group: string; explain: string }> = {

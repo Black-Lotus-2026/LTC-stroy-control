@@ -3,7 +3,7 @@ import * as api from './api'
 import type { ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, DEMO_LINE, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
@@ -19,10 +19,21 @@ import { SettingsSheet, type SheetTab } from './parts/Settings'
 import { Setup } from './parts/Setup'
 import { Auth } from './parts/Auth'
 import { Journal } from './parts/Journal'
+import { Intro } from './parts/Intro'
 
 export function SverkaApp() {
   const [user, setUser] = useState<UserProfile | null | undefined>(undefined)
   const [offline, setOffline] = useState<string | null>(null)
+  // the intro page comes after sign-in and before the workspace; it can be called back from the
+  // workspace, which then stays mounted underneath and keeps observing
+  const [intro, setIntro] = useState<'on' | 'leaving' | 'off'>('on')
+  const [entered, setEntered] = useState(false)
+  const leaveIntro = useCallback(() => {
+    setEntered(true)
+    setIntro((s) => (s === 'on' ? 'leaving' : s))
+  }, [])
+  const dropIntro = useCallback(() => setIntro('off'), [])
+  const showIntro = useCallback(() => setIntro('on'), [])
   useEffect(() => {
     api.me().then(setUser, (e: Error) => {
       setOffline(e.message)
@@ -34,13 +45,24 @@ export function SverkaApp() {
       {user === undefined ? (
         <div className="auth" aria-busy="true" />
       ) : user ? (
-        <Workspace
-          user={user}
-          onLogout={() => {
-            api.logout()
-            setUser(null)
-          }}
-        />
+        <>
+          {entered && (
+            <div className="ws-host" inert={intro === 'on'}>
+              <Workspace
+                user={user}
+                covered={intro === 'on'}
+                onIntro={showIntro}
+                onLogout={() => {
+                  api.logout()
+                  setUser(null)
+                  setIntro('on')
+                  setEntered(false)
+                }}
+              />
+            </div>
+          )}
+          {intro !== 'off' && <Intro user={user} leaving={intro === 'leaving'} onContinue={leaveIntro} onGone={dropIntro} />}
+        </>
       ) : (
         <Auth onAuth={setUser} offline={offline} />
       )}
@@ -78,7 +100,7 @@ const store = {
   },
 }
 
-function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void }) {
+function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; covered: boolean; onIntro: () => void; onLogout: () => void }) {
   const toast = useToast()
   const [engine] = useState(() => new Engine())
   const obs = useObservation(engine)
@@ -596,7 +618,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || caseOpen || rule || sheet || journal) return
+      if (covered || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || caseOpen || rule || sheet || journal) return
       if (e.key === 'Escape' && dockOpen) setDockOpen(false)
       if (e.key === 'p' || e.key === 'з') setDockOpen((o) => !o)
       if (['j', 'k', 'о', 'л'].includes(e.key)) {
@@ -625,9 +647,9 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
   return (
     <div className="app" id="app">
       <header className="bar">
-        <div className="brand" aria-hidden="true">
+        <button type="button" className="brand brand-btn" onClick={onIntro} aria-label="Заставка" title="Заставка">
           СК
-        </div>
+        </button>
         <button type="button" className="ctx" onClick={(e) => setMenu({ kind: 'project', anchor: e.currentTarget.getBoundingClientRect() })} aria-haspopup="menu">
           <small>Объект</small>
           <span>{project?.name || 'Новый объект'}</span>
@@ -834,7 +856,7 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
             </>
           ) : (
             <>
-              <div className="m-k kicker">{user.username} · {user.role === 'admin' ? 'администратор' : 'инженер технадзора'}</div>
+              <div className="m-k kicker">{user.username} · {ROLE_LABEL.toLowerCase()}</div>
               <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setJournal({ origin: menu.anchor }) }}>
                 <span />
                 <span><b>Журнал и акт</b><small>События за период, выгрузка акта</small></span>
@@ -842,6 +864,10 @@ function Workspace({ user, onLogout }: { user: UserProfile; onLogout: () => void
               <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setSetupOpen(true) }}>
                 <span />
                 <span><b>Первый запуск</b><small>План, источники, проверка</small></span>
+              </button>
+              <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); onIntro() }}>
+                <span />
+                <span><b>Заставка</b><small>Стартовый экран с ролью</small></span>
               </button>
               <a className="m-item" role="menuitem" href="#legacy" onClick={() => setTimeout(() => location.reload(), 0)}>
                 <span />

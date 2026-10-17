@@ -35,6 +35,9 @@
   --f-ui: "Vela Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
   --bar-h: 56px;
   --dock-min: 104px;
   --side-w: 392px;
@@ -1297,3 +1300,159 @@ button.ctx#ctxZone { cursor: pointer; }
   .a-wrap { grid-template-columns: minmax(0, 1fr); }
   .a-preview { justify-content: flex-start; }
 }
+
+/* ── Intro: the page between sign-in and the workspace ─── */
+/* the workspace stays mounted under a returning intro; this wrapper only carries `inert` */
+.ws-host { display: contents; }
+.brand-btn { transition: background-color 140ms ease, transform 120ms var(--ease-out); }
+.brand-btn:active { transform: scale(.94); }
+@media (hover: hover) and (pointer: fine) { .brand-btn:hover { background: var(--plan-2); } }
+
+.intro {
+  position: fixed; inset: 0; z-index: 200;
+  overflow: hidden;
+  background: radial-gradient(1200px 760px at 62% 47%, rgba(207,157,61,.055), transparent 70%), var(--bg);
+  animation: itIn 320ms var(--ease-out) both;
+}
+/* drafting-table dot grid, fading towards the edges */
+.intro::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(236,232,224,.08) 1px, transparent 1.4px);
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%);
+  mask-image: radial-gradient(75% 65% at 50% 47%, #000 20%, transparent 100%);
+}
+.intro-type {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  pointer-events: none;
+  will-change: transform;
+}
+.it-block { width: min(94vw, 1500px); margin-top: -2vh; }
+.it-line {
+  display: flex; justify-content: space-between;
+  font: 700 min(14.6vw, 236px)/0.84 var(--f-display);
+  letter-spacing: 0;
+  /* clip only below, so letters rise out of the baseline and the breve of Й is not cut */
+  clip-path: inset(-40% -4% 0 -4%);
+}
+.it-line + .it-line { margin-top: .05em; }
+/* СТРОЙ sits flush left at its natural spacing; КОНТРОЛЬ spans the full width under it */
+.it-line.l0 { justify-content: flex-start; }
+.it-line span {
+  display: block;
+  color: transparent;
+  background: linear-gradient(180deg, rgba(242,239,233,.11), rgba(242,239,233,.035) 85%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-stroke: 1px rgba(242,239,233,.07);
+  animation: itRise 1100ms var(--ease-out) both;
+  animation-delay: calc(140ms + var(--l) * 130ms + var(--i) * 38ms);
+}
+.it-tag {
+  display: flex; align-items: center; gap: 22px;
+  margin: clamp(16px, 2.4vw, 36px) 0 0;
+  font: 500 clamp(10.5px, 1vw, 14px)/1.3 var(--f-ui);
+  letter-spacing: .32em; text-transform: uppercase;
+  color: var(--fg-2);
+}
+.it-tag span { white-space: nowrap; animation: itFade 700ms var(--ease-out) 560ms both; }
+.it-tag span:last-child { margin-right: -.32em; animation-delay: 760ms; }
+.it-tag i {
+  flex: 1; height: 1px;
+  background: repeating-linear-gradient(90deg, var(--line-3) 0 6px, transparent 6px 12px);
+  transform-origin: left;
+  animation: itRule 1000ms var(--ease-out) 640ms both;
+}
+.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.intro-top {
+  position: absolute; left: 0; right: 0; top: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px var(--gut);
+}
+.intro-top > * { animation: itDrop 700ms var(--ease-out) 420ms both; }
+.it-name { font: 500 14px/1.2 var(--f-ui); }
+.it-date { color: var(--fg-3); font-size: 13px; }
+
+.intro-foot {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 24px;
+  padding: 0 var(--gut) max(24px, env(safe-area-inset-bottom));
+}
+.intro-foot > * { animation: itUp 800ms var(--ease-out) 820ms both; }
+.intro-foot > :nth-child(2) { animation-delay: 900ms; }
+.intro-foot > :nth-child(3) { animation-delay: 980ms; }
+.it-role { display: grid; gap: 5px; justify-items: start; min-width: 0; }
+.it-role b { font: 400 30px/1.05 var(--f-display); letter-spacing: -0.02em; font-weight: 400; }
+.it-role small { color: var(--fg-3); font-size: 13px; }
+.it-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+.it-steps button {
+  display: grid; gap: 9px; width: 136px; padding: 10px 0 4px;
+  text-align: left; color: var(--fg-3);
+  transition: color 160ms ease;
+}
+.it-steps button[aria-current] { color: var(--fg); }
+@media (hover: hover) and (pointer: fine) {
+  .it-steps button:hover { color: var(--fg-2); }
+  .it-steps button[aria-current]:hover { color: var(--fg); }
+  .it-go:hover svg { transform: translateX(3px); }
+}
+.it-bar { position: relative; height: 2px; border-radius: 1px; background: var(--line-2); overflow: hidden; }
+.it-bar i { position: absolute; inset: 0; background: var(--fg); transform: scaleX(0); transform-origin: left; }
+.it-steps button[data-gold] .it-bar i { background: var(--plan-2); }
+.it-lab { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.it-lab .mono { color: var(--fg-4); margin-right: 6px; }
+.it-go { justify-self: end; height: 46px; padding: 0 18px 0 22px; font-size: 14.5px; border-radius: 10px; gap: 10px; }
+.it-go svg { transition: transform 200ms var(--ease-out); }
+
+@keyframes itIn { from { opacity: 0; } }
+@keyframes itRise { from { transform: translateY(100%); opacity: 0; } }
+@keyframes itFade { from { transform: translateY(6px); opacity: 0; } }
+@keyframes itRule { from { transform: scaleX(0); } }
+@keyframes itDrop { from { transform: translateY(-8px); opacity: 0; } }
+@keyframes itUp { from { transform: translateY(14px); opacity: 0; } }
+
+/* leaving: the drawing comes at you, the name parts, the page fades off the workspace */
+.intro[data-leaving] { pointer-events: none; animation: itOut 520ms var(--ease-out) 200ms forwards; }
+.intro[data-leaving] .intro-canvas { animation: itZoom 760ms var(--ease-in-out) forwards; }
+.intro[data-leaving] .it-line.l0 { animation: itAwayUp 700ms var(--ease-in-out) forwards; }
+.intro[data-leaving] .it-line.l1 { animation: itAwayDown 700ms var(--ease-in-out) forwards; }
+.intro[data-leaving] .intro-top,
+.intro[data-leaving] .intro-foot,
+.intro[data-leaving] .it-tag { animation: itGone 260ms var(--ease-out) forwards; }
+@keyframes itOut { to { opacity: 0; } }
+@keyframes itZoom { to { transform: scale(1.4); opacity: 0; } }
+@keyframes itAwayUp { to { transform: translateY(-40%); opacity: 0; } }
+@keyframes itAwayDown { to { transform: translateY(40%); opacity: 0; } }
+@keyframes itGone { to { transform: translateY(6px); opacity: 0; } }
+
+@media (max-width: 720px) {
+  .intro-foot { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "steps steps" "role go"; row-gap: 14px; }
+  .it-steps { grid-area: steps; }
+  .it-steps li { flex: 1; }
+  .it-steps button { width: 100%; }
+  .it-lab { display: none; }
+  .it-role { grid-area: role; }
+  .it-role b { font-size: 24px; }
+  .it-go { grid-area: go; }
+  .it-date { display: none; }
+  .it-tag { flex-direction: column; gap: 4px; letter-spacing: .2em; text-align: center; }
+  .it-tag span:last-child { margin-right: 0; }
+  .it-tag i { display: none; }
+}
+/* portrait: the words frame the drawing from above and below instead of sitting in one band */
+@media (max-aspect-ratio: 4/5) {
+  .it-block { margin-top: 0; }
+  .it-line { font-size: 15.4vw; }
+  .it-line + .it-line { margin-top: 24vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .it-line span, .it-tag span, .it-tag i, .intro-top > *, .intro-foot > * { animation-name: itFadeOnly; }
+  .intro[data-leaving] .intro-canvas,
+  .intro[data-leaving] .it-line.l0,
+  .intro[data-leaving] .it-line.l1,
+  .intro[data-leaving] .intro-top,
+  .intro[data-leaving] .intro-foot,
+  .intro[data-leaving] .it-tag { animation-name: itOut; }
+}
+@keyframes itFadeOnly { from { opacity: 0; } }
