@@ -31,6 +31,7 @@ from app.models.enums import (
     ZoneRiskLevel,
 )
 from app.models.alert import AlertNotification
+from app.models.geocoding import GeocodingThrottle
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.project import (
@@ -47,6 +48,7 @@ from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
+from app.models.weather import WeatherForecast
 
 __all__ = [
     "ManagementRun", "ManagementRunStep", "TaskDependency",
@@ -59,6 +61,8 @@ __all__ = [
     "Zone",
     "Camera",
     "CameraHealthEvent",
+    "WeatherForecast",
+    "GeocodingThrottle",
     # План и методика
     "ScheduleTask",
     "RuleSet",

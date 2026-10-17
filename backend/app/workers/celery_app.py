@@ -71,4 +71,8 @@ celery_app.conf.beat_schedule = {
         "task": "alerts.deliver_emails",
         "schedule": crontab(minute="*"),
     },
+    "refresh-weather-forecast": {
+        "task": "weather.refresh_all",
+        "schedule": crontab(hour=3, minute=0),
+    },
 }

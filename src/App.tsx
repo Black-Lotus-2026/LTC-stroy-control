@@ -61,6 +61,7 @@ import {
   updateMyEmail,
 } from './api/stroyControlApi'
 import { AlertCenter } from './components/AlertCenter'
+import { WeatherForecast } from './components/WeatherForecast'
 
 const nav: { id: PageKey; label: string; icon: string }[] = [
   { id: 'management', label: 'Отклонения', icon: 'alert' },
@@ -543,6 +544,7 @@ function Monitoring({ activeProject, activeZones, camerasList, selectedCameraId,
         {rules && <p>Обязательная техника: {rules.mandatory.join(', ') || 'Не задана'}</p>}
         {activeZones.length === 1 && <small>{activeZones[0].name}</small>}
       </div></details>
+      {activeProject && <WeatherForecast projectId={activeProject.id} configured={!!activeProject.address?.trim()} />}
     </main>
   </div>
 }
@@ -631,7 +633,7 @@ function Settings({
     setAlertChief(activeProject?.escalation_user_id || '')
     setErrorMinutes(activeProject?.alert_error_deadline_minutes || 120)
     setWarningMinutes(activeProject?.alert_warning_deadline_minutes || 1440)
-  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes])
+  }, [activeProject?.id, activeProject?.owner_username, activeProject?.escalation_user_id, activeProject?.alert_error_deadline_minutes, activeProject?.alert_warning_deadline_minutes, activeProject?.address])
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -645,7 +647,7 @@ function Settings({
       await onUpdateProject(activeProject.id, {
         name: name.trim(),
         code: code.trim() || activeProject.code,
-        address: address.trim() || undefined,
+        address: address.trim(),
         object_kind: objectKind,
       })
     } finally {

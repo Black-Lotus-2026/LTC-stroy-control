@@ -167,6 +167,36 @@ export interface ProjectItem {
   escalation_user_id?: string | null
 }
 
+export interface WeatherDay {
+  forecast_date: string
+  fetched_at: string
+  provider: string
+  weather_code: number | null
+  temperature_min_c: number | null
+  temperature_max_c: number | null
+  precipitation_mm: number | null
+  snowfall_cm: number | null
+  wind_gust_kmh: number | null
+  conditions: string[]
+  warnings: string[]
+}
+
+export interface WeatherForecast {
+  project_id: string
+  timezone: string
+  location_configured: boolean
+  resolved_address: string | null
+  days: WeatherDay[]
+}
+
+export function fetchWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather`, {}, 'Не удалось загрузить прогноз')
+}
+
+export function refreshWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather/refresh`, { method: 'POST' }, 'Не удалось обновить прогноз')
+}
+
 export interface ProjectAlertSettings {
   project_id: string
   owner_username: string | null
