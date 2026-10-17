@@ -32,6 +32,8 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(256))
     address: Mapped[str | None] = mapped_column(Text, default=None)
+    geocoded_address: Mapped[str | None] = mapped_column(Text, default=None)
+    weather_location_name: Mapped[str | None] = mapped_column(Text, default=None)
     latitude: Mapped[float | None] = mapped_column(Float, default=None)
     longitude: Mapped[float | None] = mapped_column(Float, default=None)
 

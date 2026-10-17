@@ -18,7 +18,7 @@ export function WeatherForecast({ projectId, configured }: { projectId: string; 
       .then(async saved => {
         if (!active) return saved
         setForecast(saved)
-        return saved.days.length === 7 ? saved : refreshWeather(projectId)
+        return saved.days.length === 7 && saved.resolved_address ? saved : refreshWeather(projectId)
       })
       .then(data => { if (active) setForecast(data) })
       .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Прогноз недоступен') })
@@ -43,9 +43,10 @@ export function WeatherForecast({ projectId, configured }: { projectId: string; 
       <div><h3>Погода на 7 дней</h3><p>Прогноз для объекта строительства</p></div>
       {configured && <button className="button" type="button" disabled={busy} onClick={refresh}>Обновить</button>}
     </div>
-    {!configured && <p>Укажите широту и долготу объекта в настройках, чтобы получать прогноз.</p>}
+    {!configured && <p>Укажите адрес объекта в настройках, чтобы получать прогноз.</p>}
     {busy && !forecast && <p>Загружаем прогноз…</p>}
     {error && <p className="weather-forecast-error" role="alert">{error}</p>}
+    {forecast?.resolved_address && <p className="weather-forecast-location">Найденное место: {forecast.resolved_address} · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></p>}
     {forecast?.days.length === 0 && !busy && <p>Сохранённого прогноза пока нет.</p>}
     {!!forecast?.days.length && <>
       <div className="weather-forecast-grid">
@@ -58,7 +59,7 @@ export function WeatherForecast({ projectId, configured }: { projectId: string; 
           {day.warnings.map(warning => <em key={warning}>⚠ {warning}</em>)}
         </article>)}
       </div>
-      <p className="weather-forecast-source">Open-Meteo · обновлено {new Date(forecast.days[0].fetched_at).toLocaleString('ru-RU')}</p>
+      <p className="weather-forecast-source">Погода: Open-Meteo · обновлено {new Date(forecast.days[0].fetched_at).toLocaleString('ru-RU')}</p>
     </>}
   </section>
 }

@@ -31,6 +31,7 @@ from app.models.enums import (
     ZoneRiskLevel,
 )
 from app.models.alert import AlertNotification
+from app.models.geocoding import GeocodingThrottle
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.project import (
@@ -61,6 +62,7 @@ __all__ = [
     "Camera",
     "CameraHealthEvent",
     "WeatherForecast",
+    "GeocodingThrottle",
     # План и методика
     "ScheduleTask",
     "RuleSet",

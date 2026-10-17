@@ -156,8 +156,6 @@ export interface ProjectItem {
   code: string
   name: string
   address?: string | null
-  latitude?: number | null
-  longitude?: number | null
   object_kind?: string | null
   status: string
   zones: ZoneItem[]
@@ -187,6 +185,7 @@ export interface WeatherForecast {
   project_id: string
   timezone: string
   location_configured: boolean
+  resolved_address: string | null
   days: WeatherDay[]
 }
 
@@ -441,8 +440,6 @@ export async function createProject(data: {
   name: string
   code?: string
   address?: string
-  latitude?: number
-  longitude?: number
   object_kind?: string
   owner_username?: string
 }): Promise<ProjectItem> {
@@ -464,8 +461,6 @@ export async function updateProject(
     name?: string
     code?: string
     address?: string
-    latitude?: number | null
-    longitude?: number | null
     object_kind?: string
     status?: string
   }

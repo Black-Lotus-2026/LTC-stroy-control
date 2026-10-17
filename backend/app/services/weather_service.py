@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.project import Project
 from app.models.weather import WeatherForecast
+from app.services.geocoding import GeocodingUnavailable, LocationNotFound, geocode_address
 
 logger = logging.getLogger(__name__)
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -68,7 +69,7 @@ def weather_warnings(
 
 def fetch_forecast(project: Project, *, client: httpx.Client | None = None) -> list[dict]:
     if project.latitude is None or project.longitude is None:
-        raise ValueError("Для прогноза задайте широту и долготу объекта")
+        raise ValueError("Не удалось определить местоположение по адресу объекта")
     params = {
         "latitude": project.latitude,
         "longitude": project.longitude,
@@ -119,12 +120,19 @@ def fetch_forecast(project: Project, *, client: httpx.Client | None = None) -> l
 
 
 def save_forecast(db: Session, project: Project, *, client: httpx.Client | None = None) -> list[WeatherForecast]:
-    location = (project.latitude, project.longitude, project.timezone)
-    days = fetch_forecast(project, client=client)
-    # Сериализуем ручное и плановое обновления одного объекта до поиска строк.
     db.refresh(project, with_for_update=True)
-    if location != (project.latitude, project.longitude, project.timezone):
-        raise ValueError("Координаты объекта изменились во время запроса прогноза")
+    address = (project.address or "").strip()
+    if not address:
+        raise ValueError("Для прогноза укажите адрес объекта")
+    if (project.geocoded_address != address or project.latitude is None
+            or project.longitude is None):
+        latitude, longitude, matched_name = geocode_address(db, address, client=client)
+        project.latitude = latitude
+        project.longitude = longitude
+        project.geocoded_address = address
+        project.weather_location_name = matched_name
+        db.flush()
+    days = fetch_forecast(project, client=client)
     fetched_at = datetime.now(UTC)
     existing = {
         row.forecast_date: row
@@ -151,15 +159,17 @@ def run_weather_refresh(db: Session, *, client: httpx.Client | None = None) -> d
     counts = {"updated": 0, "skipped": 0, "failed": 0}
     projects = db.scalars(select(Project).where(Project.status == "active")).all()
     for project in projects:
-        if project.latitude is None or project.longitude is None:
+        if not project.address or not project.address.strip():
             counts["skipped"] += 1
             continue
         try:
-            with db.begin_nested():
-                save_forecast(db, project, client=client)
+            save_forecast(db, project, client=client)
             db.commit()
             counts["updated"] += 1
-        except (WeatherProviderError, ValueError):
+        except (WeatherProviderError, GeocodingUnavailable, LocationNotFound, ValueError):
+            # Ошибки происходят до записи прогноза. Сохраняем время запроса
+            # геокодирования и успешно найденное место даже при сбое погоды.
+            db.commit()
             counts["failed"] += 1
             logger.warning("Weather refresh failed for project %s", project.id, exc_info=True)
     return counts

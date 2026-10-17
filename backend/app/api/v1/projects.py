@@ -64,8 +64,6 @@ def list_projects(db: DbSession, current_user: OptionalUser = None) -> list[Proj
                 code=p.code,
                 name=p.name,
                 address=p.address,
-                latitude=p.latitude,
-                longitude=p.longitude,
                 object_kind=p.object_kind,
                 status=p.status,
                 owner_username=getattr(p, "owner_username", None),
@@ -116,8 +114,6 @@ def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUse
         code=code,
         name=data.name.strip(),
         address=data.address.strip() if data.address else None,
-        latitude=data.latitude,
-        longitude=data.longitude,
         object_kind=data.object_kind.strip() if data.object_kind else "Жильё",
         owner_username=owner,
     )
@@ -130,8 +126,6 @@ def create_project(data: ProjectCreate, db: DbSession, current_user: OptionalUse
         code=project.code,
         name=project.name,
         address=project.address,
-        latitude=project.latitude,
-        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
@@ -172,8 +166,6 @@ def get_project(project_id: uuid.UUID, db: DbSession) -> ProjectItem:
         code=project.code,
         name=project.name,
         address=project.address,
-        latitude=project.latitude,
-        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=getattr(project, "owner_username", None),
@@ -297,17 +289,14 @@ def update_project(
     if data.code is not None and data.code.strip():
         project.code = data.code.strip()
     if data.address is not None:
-        project.address = data.address.strip() if data.address.strip() else None
-    location_changed = (
-        ("latitude" in data.model_fields_set and data.latitude != project.latitude)
-        or ("longitude" in data.model_fields_set and data.longitude != project.longitude)
-    )
-    if "latitude" in data.model_fields_set:
-        project.latitude = data.latitude
-    if "longitude" in data.model_fields_set:
-        project.longitude = data.longitude
-    if location_changed:
-        db.execute(delete(WeatherForecast).where(WeatherForecast.project_id == project.id))
+        new_address = data.address.strip() or None
+        if new_address != project.address:
+            project.address = new_address
+            project.geocoded_address = None
+            project.weather_location_name = None
+            project.latitude = None
+            project.longitude = None
+            db.execute(delete(WeatherForecast).where(WeatherForecast.project_id == project.id))
     if data.object_kind is not None and data.object_kind.strip():
         project.object_kind = data.object_kind.strip()
     if data.status is not None and data.status.strip():
@@ -330,8 +319,6 @@ def update_project(
         code=project.code,
         name=project.name,
         address=project.address,
-        latitude=project.latitude,
-        longitude=project.longitude,
         object_kind=project.object_kind,
         status=project.status,
         owner_username=project.owner_username,
