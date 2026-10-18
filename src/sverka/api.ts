@@ -227,6 +227,7 @@ export interface ApiIncident {
   stage_name?: string | null
   zone_name?: string | null
   camera_name?: string | null
+  camera_id?: string | null
   title?: string | null
   description?: string | null
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
@@ -249,7 +250,18 @@ export interface ApiIncident {
   verification_status?: string
   last_checked_at?: string | null
   escalated_at?: string | null
-  verification_details?: { working_cameras?: number; configured_cameras?: number; observed_machinery?: string[]; checked_at?: string; reason?: string }
+  verification_details?: {
+    working_cameras?: number
+    configured_cameras?: number
+    observed_machinery?: string[]
+    checked_at?: string
+    reason?: string
+    /** a camera view recheck: the match of each fresh frame with the approved view */
+    view_match?: number[]
+    /** how a camera view event closed: accepted (new view approved) or restored (camera put back) */
+    resolution?: 'accepted' | 'restored'
+    resolved_by?: string
+  }
 }
 export interface IncidentCreate {
   project_id: string
@@ -265,7 +277,7 @@ export interface IncidentCreate {
   observation_key?: string
   model_status?: 'valid' | 'unavailable' | 'failed'
   severity: 'ERROR' | 'WARNING'
-  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE'
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE' | 'VIEW_CHANGED'
   machinery_type?: string | null
   stage_probability?: number
   observed_count?: number
@@ -310,3 +322,36 @@ export const resetProfile = (stageId: string) =>
 export const incidentConfig = () => req<{ violation_evaluation_window_seconds: number }>('/incidents/config')
 export const setIncidentConfig = (seconds: number) =>
   req<{ violation_evaluation_window_seconds: number }>('/incidents/config', json('PATCH', { violation_evaluation_window_seconds: seconds }), 'Не удалось сохранить окно сверки')
+
+/* camera view: the approved reference, proposals of a new view, agreed moves. The administrator decides. */
+export interface ViewPhoto { url: string; at?: string | null; by?: string | null; by_id?: string | null; note?: string | null }
+export interface ViewMove { status: 'requested' | 'approved'; until: string; reason: string; by?: string | null; by_id?: string | null; at?: string | null; approved_by?: string | null; approved_at?: string | null }
+export interface ViewHistoryItem { kind: string; at: string; by?: string | null; note?: string | null; url?: string | null; until?: string | null }
+export interface CameraViewState {
+  camera_id: string
+  camera_name: string
+  reference: ViewPhoto | null
+  proposal: ViewPhoto | null
+  move: ViewMove | null
+  history: ViewHistoryItem[]
+  match_ok: number
+  match_bad: number
+}
+const viewPath = (projectId: string, cameraId: string) => `/projects/${projectId}/cameras/${cameraId}/view`
+export const cameraViews = (projectId: string) => req<CameraViewState[]>(`/projects/${projectId}/camera-views`, {}, 'Ракурсы камер не загрузились')
+/** An administrator approves at once; anyone else sends the view for approval. */
+export const submitView = (projectId: string, cameraId: string, snapshot: string, note?: string) =>
+  req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference`, json('PUT', { snapshot_base64: snapshot, note: note || null }), 'Ракурс не сохранён')
+export const approveView = (projectId: string, cameraId: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference/approve`, { method: 'POST' }, 'Ракурс не утверждён')
+export const rejectView = (projectId: string, cameraId: string, note?: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference/reject`, json('POST', { note: note || null }), 'Не удалось отклонить')
+export const requestMove = (projectId: string, cameraId: string, until: string, reason: string) =>
+  req<CameraViewState>(`${viewPath(projectId, cameraId)}/move`, json('POST', { until, reason }), 'Перенос не сохранён')
+export const approveMove = (projectId: string, cameraId: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/move/approve`, { method: 'POST' }, 'Перенос не согласован')
+export const rejectMove = (projectId: string, cameraId: string, note?: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/move/reject`, json('POST', { note: note || null }), 'Не удалось отклонить')
+export const cancelMove = (projectId: string, cameraId: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/move`, { method: 'DELETE' }, 'Перенос не отменён')
+/** The approved frame itself, to compare against in this browser. */
+export async function viewImage(url: string) {
+  const res = await fetch(mediaUrl(url)!)
+  if (!res.ok) throw new ApiError('Утверждённый кадр не загрузился', res.status)
+  return createImageBitmap(await res.blob())
+}

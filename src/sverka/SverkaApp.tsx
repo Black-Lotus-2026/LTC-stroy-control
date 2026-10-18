@@ -3,7 +3,8 @@ import * as api from './api'
 import type { AdminRecipient, ApiAlert, ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { PROBLEM_WORD, turnWords } from './lib/view'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
@@ -16,7 +17,7 @@ import { Queue } from './parts/Queue'
 import { Dock } from './parts/Dock'
 import { CaseFile } from './parts/CaseFile'
 import { RuleEditor } from './parts/RuleEditor'
-import { SettingsSheet, type SheetTab } from './parts/Settings'
+import { SettingsSheet, type SheetTab, type ViewActions } from './parts/Settings'
 import { Setup } from './parts/Setup'
 import { Auth } from './parts/Auth'
 import { Journal } from './parts/Journal'
@@ -116,6 +117,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const [projectId, setProjectId] = useState<string | null>(() => store.get('sverka:project'))
   const [zones, setZones] = useState<ZoneItem[]>([])
   const [cameras, setCameras] = useState<CameraItem[]>([])
+  const [views, setViews] = useState<api.CameraViewState[]>([])
   const [stages, setStages] = useState<Stage[]>([])
   const [loaded, setLoaded] = useState(false)
   const [apiProfiles, setApiProfiles] = useState<Map<string, ApiProfile>>(new Map())
@@ -146,6 +148,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   // per camera: was it live in this session, and the loss we are writing (resolves true once it is in the journal)
   const signal = useRef(new Map<string, { live: boolean; lost?: { at: number; written: Promise<boolean> } }>())
   const created = useRef(new Map<string, string | number>())
+  // camera id → the open view event, "pending" while it is being written, or when to try again
+  const viewSent = useRef(new Map<string, string | number>())
   const lastSaveError = useRef(0)
 
   // the server gives a non-admin only the objects they own (an object without an owner is the administrator's)
@@ -183,6 +187,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     engine.reset()
     setZones([])
     setCameras([])
+    setViews([])
+    viewSent.current.clear()
     setStages([])
     setApiProfiles(new Map())
     setEvents([])
@@ -209,6 +215,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
         setZones(z)
         setCameras(c)
         engine.setCameras(c)
+        loadViews(project.id, token)
         setStages(toStages(s))
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
         if (cfg) setSettingsState((x) => ({ ...x, window: cfg.violation_evaluation_window_seconds }))
@@ -226,6 +233,17 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       })
     loadWeather(project.id, token)
   }, [project?.id, projects == null])
+
+  /* camera views: a server without them answers 404 and the comparison simply does not run */
+  const loadViews = (id: string, token: number) =>
+    api.cameraViews(id).then(
+      (v) => {
+        if (token !== loadToken.current) return
+        setViews(v)
+        engine.setViews(v)
+      },
+      () => undefined,
+    )
 
   /* the forecast is extra: a server without it (404) or a weather service that is down leaves the plan as it was */
   const noWeather = useRef(false)
@@ -254,6 +272,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
         if (id !== project.id) return
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
       }, () => undefined)
+      // approvals made by the administrator elsewhere
+      loadViews(id, loadToken.current)
     }, 15_000)
     return () => clearInterval(timer)
   }, [project])
@@ -514,6 +534,69 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     }
   })
 
+  /* a camera that looks away from its approved view: one event per turn, with the frame before and after */
+  useEffect(() => {
+    if (!project || !loaded || !ev.inShift) return
+    for (const src of obs.sources) {
+      const v = src.view
+      if (src.kind !== 'camera' || !v) continue
+      if (v.state !== 'changed') {
+        // back in place: a later turn is a new event (the server joins it to one still open)
+        if (v.state === 'ok' && typeof viewSent.current.get(src.id) !== 'number') viewSent.current.delete(src.id)
+        continue
+      }
+      const sent = viewSent.current.get(src.id)
+      if (typeof sent === 'string' || (typeof sent === 'number' && Date.now() < sent) || !src.snapshot) continue
+      const open = events.find((e) => e.type === 'VIEW_CHANGED' && e.cameraId === src.id && isOpen(e))
+      if (open) {
+        viewSent.current.set(src.id, open.id)
+        continue
+      }
+      const at = v.since ?? obs.t
+      const problem = v.problem ?? 'different'
+      const turn = problem === 'turned' ? turnWords(v) : ''
+      const what = problem === 'covered' ? `Камера закрыта: ${src.name}` : problem === 'blurred' ? `Изображение размыто: ${src.name}` : `Ракурс камеры изменён: ${src.name}`
+      const ref = v.refAt ? `утверждён ${fmtDay(v.refAt)} в ${hhmm(v.refAt)}${v.refBy ? `, ${v.refBy}` : ''}` : 'утверждён администратором'
+      viewSent.current.set(src.id, 'pending')
+      api
+        .createIncident({
+          project_id: project.id,
+          stage_id: stage?.id ?? null,
+          stage_name: stage?.name ?? null,
+          zone_id: zoneIdOf(src.id),
+          zone_name: zoneOf(src.id),
+          camera_id: src.id,
+          camera_name: src.name,
+          captured_at: new Date(at).toISOString(),
+          observation_key: `${src.id}|VIEW|${Math.round(at / 1000)}`,
+          severity: 'ERROR',
+          discrepancy_type: 'VIEW_CHANGED',
+          title: what,
+          description: [
+            `Правило: камера «${src.name}» сверяется с утверждённым ракурсом (${ref}). Смещение согласует администратор.`,
+            `Наблюдение: с ${hhmmss(at)} ${PROBLEM_WORD[problem]}${turn ? ` ${turn}` : ''}; совпадение с утверждённым ракурсом ${Math.round((v.match ?? 0) * 100)} %.`,
+            'Качество данных: пока камера смотрит не туда, её кадры не учитываются в сверке техники.',
+          ].join('\n'),
+          album_snapshots: [
+            { camera_name: `${src.name} · сейчас`, snapshot_base64: src.snapshot, is_primary: true },
+            ...(v.before ? [{ camera_name: `${src.name} · до смещения${v.beforeAt ? `, ${hhmmss(v.beforeAt)}` : ''}`, snapshot_base64: v.before }] : []),
+          ],
+        })
+        .then((res) => {
+          viewSent.current.set(src.id, res.id)
+          setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
+          toast(`${what} · ${res.code}`, { error: true })
+        })
+        .catch((e: Error) => {
+          viewSent.current.set(src.id, Date.now() + 30_000)
+          if (Date.now() - lastSaveError.current > 60_000) {
+            lastSaveError.current = Date.now()
+            toast(`Событие о ракурсе не сохранено: ${e.message}. Повторим через 30 с.`, { error: true })
+          }
+        })
+    }
+  })
+
   /* an episode ends when the machine is back (or the wrong one has left) */
   useEffect(() => {
     if (!stage || !ev.covered) return
@@ -539,6 +622,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const sendDecision = async (id: string, status: EventStatus) => {
     const res = await api.setIncidentStatus(id, status)
     setEvents((l) => l.map((e) => (e.id === id ? { ...toEvent(res, api.mediaUrl), decidedAt: Date.now() } : e)))
+    return res
   }
   const decideSoon = (id: string, status: EventStatus) => {
     const before = events.find((e) => e.id === id)
@@ -565,8 +649,11 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const decideNow = async (id: string, status: EventStatus) => {
     const before = events.find((e) => e.id === id)
     if (!before || before.sample) return
-    await sendDecision(id, status)
-    toast(status === 'resolved' ? `Проверка исправления запрошена · ${before.code}` : `${STATUS_WORD[status]} · ${before.code}`)
+    const res = await sendDecision(id, status)
+    // a camera view is rechecked by the server at once
+    if (before.kind === 'view' && status === 'resolved')
+      toast(res.status === 'resolved' ? `Камера на месте: сервер сверил кадры с утверждённым ракурсом · ${before.code}` : `Камера всё ещё смотрит не туда · ${before.code}`, { error: res.status !== 'resolved' })
+    else toast(status === 'resolved' ? `Проверка исправления запрошена · ${before.code}` : `${STATUS_WORD[status]} · ${before.code}`)
   }
   // decisions still waiting for their undo leave with the page, or before signing out
   const flushSending = () => {
@@ -665,6 +752,55 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     if (!p) return null
     return toProfile(p, settings).rules[code].lvl
   }
+
+  /* camera views: proposals and moves go to the administrator; an administrator decides at once */
+  const applyView = (st: api.CameraViewState) => {
+    const next = views.some((x) => x.camera_id === st.camera_id) ? views.map((x) => (x.camera_id === st.camera_id ? st : x)) : [...views, st]
+    setViews(next)
+    engine.setViews(next)
+  }
+  const reloadEvents = () => {
+    if (!project) return
+    const id = project.id
+    api.incidents(id).then((inc) => id === project.id && setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old))), () => undefined)
+  }
+  const viewActions: ViewActions | null = project
+    ? {
+        states: views,
+        user,
+        submit: async (cameraId, note) => {
+          const snap = obs.sources.find((s) => s.id === cameraId)?.snapshot
+          if (!snap) throw new Error('Нет текущего кадра с камеры: дождитесь, пока она пришлёт кадр')
+          const st = await api.submitView(project.id, cameraId, snap, note)
+          applyView(st)
+          if (user.role === 'admin') {
+            viewSent.current.delete(cameraId)
+            reloadEvents()
+            toast(`Ракурс «${st.camera_name}» утверждён`)
+          } else toast(`Ракурс «${st.camera_name}» отправлен администратору на утверждение`)
+        },
+        approve: async (cameraId) => {
+          const st = await api.approveView(project.id, cameraId)
+          applyView(st)
+          viewSent.current.delete(cameraId)
+          reloadEvents()
+          toast(`Новый ракурс «${st.camera_name}» утверждён`)
+        },
+        reject: async (cameraId, note) => applyView(await api.rejectView(project.id, cameraId, note)),
+        requestMove: async (cameraId, until, reason) => {
+          const st = await api.requestMove(project.id, cameraId, until, reason)
+          applyView(st)
+          toast(st.move?.status === 'approved' ? `Перенос «${st.camera_name}» согласован` : `Запрос на перенос «${st.camera_name}» отправлен администратору`)
+        },
+        approveMove: async (cameraId) => {
+          const st = await api.approveMove(project.id, cameraId)
+          applyView(st)
+          toast(`Перенос «${st.camera_name}» согласован`)
+        },
+        rejectMove: async (cameraId, note) => applyView(await api.rejectMove(project.id, cameraId, note)),
+        cancelMove: async (cameraId) => applyView(await api.cancelMove(project.id, cameraId)),
+      }
+    : null
 
   /* sources */
   const addCamera = async (name: string, url: string, zoneId?: string | null, code?: string) => {
@@ -997,6 +1133,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           admins={admins}
           onClose={() => setCaseOpen(null)}
           onDecide={(status) => decideNow(caseEvent.id, status)}
+          view={caseEvent.kind === 'view' && caseEvent.cameraId && viewActions ? { actions: viewActions, cameraId: caseEvent.cameraId } : undefined}
           onRule={(code) => {
             const sid = caseStage?.id
             setCaseOpen(null)
@@ -1039,6 +1176,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           onCheck={api.probeCamera}
           onRecording={openRecording}
           onClose={() => setSheet(null)}
+          views={viewActions}
           user={user}
           admins={admins}
           weather={weather}

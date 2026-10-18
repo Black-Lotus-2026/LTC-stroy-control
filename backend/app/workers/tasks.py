@@ -58,3 +58,12 @@ def deliver_alert_emails_task() -> dict[str, int]:
 
     with session_scope() as db:
         return deliver_pending_emails(db)
+
+
+@shared_task(name="cameras.expire_moves")
+def expire_camera_moves_task() -> dict[str, int]:
+    """Согласованный перенос камеры истёк без нового ракурса — событие ответственному."""
+    from app.services.camera_view import expire_moves
+
+    with session_scope() as db:
+        return {"expired": expire_moves(db)}
