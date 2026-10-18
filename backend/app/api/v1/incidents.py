@@ -33,7 +33,7 @@ from app.schemas.stroy_control import (
     IncidentStatusUpdateRequest,
 )
 from app.storage import get_storage
-from app.services.alert_service import OPEN_STATUSES, assign_initial_alert, request_verification
+from app.services.alert_service import STREAM_LOOP, OPEN_STATUSES, assign_initial_alert, request_verification
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,7 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
         code=inc.code,
         project_id=inc.project_id,
         zone_id=inc.zone_id,
+        camera_id=inc.camera_id,
         first_seen_at=inc.first_seen_at,
         confidence=inc.confidence,
         stage_id=inc.schedule_task_id,
@@ -222,7 +223,15 @@ def create_incident(
                 raise HTTPException(422, "Камера или этап относятся к другой зоне")
     if req.model_status != "valid" and req.discrepancy_type in ("MISSING_MANDATORY", "MISSING_RECOMMENDED", "UNCHARACTERISTIC_PRESENT"):
         raise HTTPException(422, "Модель недоступна: отсутствие техники не подтверждено")
-    dedup_key = f"{req.project_id}:{req.zone_id}:{req.stage_id}:{req.machinery_type}:{req.discrepancy_type}"
+    # a looping feed belongs to its camera: two cameras on recordings are two events
+    loop = req.discrepancy_type == STREAM_LOOP
+    if loop and not req.camera_id:
+        raise HTTPException(422, "Событие о повторе видео относится к камере объекта")
+    dedup_key = (
+        f"{req.project_id}:{req.camera_id}:{req.discrepancy_type}"
+        if loop
+        else f"{req.project_id}:{req.zone_id}:{req.stage_id}:{req.machinery_type}:{req.discrepancy_type}"
+    )
     previous = db.scalars(select(Incident).where(
         Incident.project_id == req.project_id, Incident.dedup_key == dedup_key,
         Incident.status.in_([IncidentStatus.PENDING, IncidentStatus.CONFIRMED, IncidentStatus.IN_PROGRESS]),
@@ -313,7 +322,11 @@ def create_incident(
         zone_id=req.zone_id,
         camera_id=req.camera_id,
         category=(IncidentCategory.CAMERA if req.discrepancy_type.startswith("STREAM_") else IncidentCategory.EQUIPMENT),
-        type=(IncidentType.CAMERA_OFFLINE if req.discrepancy_type.startswith("STREAM_") else inc_type),
+        type=(
+            IncidentType.CAMERA_VISIBILITY if loop
+            else IncidentType.CAMERA_OFFLINE if req.discrepancy_type.startswith("STREAM_")
+            else inc_type
+        ),
         title=req.title,
         description=req.description,
         discrepancy_type=req.discrepancy_type,
@@ -414,7 +427,33 @@ def update_incident_status(
         return _incident_to_response(incident)
     if new_status == IncidentStatus.FALSE_POSITIVE and current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Отклонить нарушение может администратор")
-    if new_status == IncidentStatus.RESOLVED:
+    if new_status == IncidentStatus.RESOLVED and incident.discrepancy_type == STREAM_LOOP:
+        # nobody can rule out a loop in a minute: the administrator who saw the live picture closes it
+        if current_user.role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Повтор видео снимает администратор, убедившись, что камера показывает площадку вживую",
+            )
+        now = datetime.now(UTC)
+        incident.status = IncidentStatus.RESOLVED
+        incident.resolved_at = now
+        incident.verification_requested_at = None
+        incident.verification_details = {
+            **(incident.verification_details or {}),
+            "resolution": "admin_confirmed_live",
+            "resolved_by": current_user.name or current_user.username,
+            "checked_at": now.isoformat(),
+        }
+        db.add(IncidentEvent(
+            incident_id=incident.id, event_type=IncidentEventType.COMMENTED, user_id=current_user.id,
+            comment="Администратор убедился, что камера показывает площадку вживую",
+        ))
+        db.add(IncidentEvent(
+            incident_id=incident.id, event_type=IncidentEventType.STATUS_CHANGED, user_id=current_user.id,
+            old_status=old_status, new_status=IncidentStatus.RESOLVED,
+            comment=f"Видео живое: {old_status.value} -> resolved",
+        ))
+    elif new_status == IncidentStatus.RESOLVED:
         try:
             request_verification(db, incident, current_user)
         except ValueError as exc:

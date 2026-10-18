@@ -8,6 +8,9 @@
  * - detections count only when the model answered model_ready=true;
  * - "coverage" is the time we really analysed frames; absence is never inferred outside it.
  *
+ * A camera whose frames repeat a recording (lib/loop.ts) is "looped": its frames stop counting
+ * for the site until the repetition ends.
+ *
  * Analysis runs in this browser tab. The UI says so; continuous server-side collection is a
  * separate backend task.
  *
@@ -18,6 +21,7 @@
 import * as api from './api'
 import type { CameraItem } from './api'
 import { CODES, toCode, type Code } from './lib/machinery'
+import { LOOP_H, LOOP_W, LoopDetector, loopGray } from './lib/loop'
 import type { Det, Observation, SourceView } from './model'
 
 const CAPTURE_EVERY = 2000
@@ -75,10 +79,25 @@ export class Engine {
   private statusTimer = 0
   private emitPending = 0
   private cameras: CameraItem[] = []
+  private loops = new Map<string, LoopDetector>()
+  /** small copies of past frames: the evidence of what a looped camera repeats */
+  private thumb = document.createElement('canvas')
 
   constructor() {
-    this.tiny.width = 96
-    this.tiny.height = 54
+    this.tiny.width = LOOP_W
+    this.tiny.height = LOOP_H
+    this.thumb.width = 320
+    this.thumb.height = 180
+  }
+
+  /** A camera frame against the last half hour of the same camera: does it replay a recording? */
+  private watchLoop(rt: Rt, el: CanvasImageSource, px: Uint8ClampedArray, at: number) {
+    let det = this.loops.get(rt.view.id)
+    if (!det) this.loops.set(rt.view.id, (det = new LoopDetector()))
+    const t = this.thumb.getContext('2d')!
+    t.drawImage(el, 0, 0, 320, 180)
+    const s = det.push(at, loopGray(px), this.thumb.toDataURL('image/jpeg', 0.6))
+    rt.view.loop = s.looped ? { looped: true, period: s.period, since: s.since, thenAt: s.then?.at, thenSnap: s.then?.snap, closeness: s.closeness } : undefined
   }
 
   /* lifecycle (idempotent, StrictMode-safe) */
@@ -107,6 +126,7 @@ export class Engine {
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.cameras = []
+    this.loops.clear()
     this.clearSession()
     this.emit()
   }
@@ -182,6 +202,7 @@ export class Engine {
     if (rt.el instanceof HTMLImageElement) rt.el.removeAttribute('src')
     rt.el?.remove()
     this.rts.delete(id)
+    this.loops.delete(id)
   }
   private setStatus(rt: Rt, status: SourceView['status'], message?: string) {
     if (rt.view.status !== status) rt.view.since = Date.now()
@@ -350,8 +371,8 @@ export class Engine {
     // a frozen stream keeps returning the same picture; that is not a live camera
     // fine enough that an on-screen camera clock changes it; a truly frozen stream does not
     const tctx = this.tiny.getContext('2d', { willReadFrequently: true })!
-    tctx.drawImage(el, 0, 0, 96, 54)
-    const px = tctx.getImageData(0, 0, 96, 54).data
+    tctx.drawImage(el, 0, 0, LOOP_W, LOOP_H)
+    const px = tctx.getImageData(0, 0, LOOP_W, LOOP_H).data
     let hash = 0
     for (let i = 0; i < px.length; i += 4) hash = (Math.imul(hash, 31) + px[i] + px[i + 1] * 3 + px[i + 2] * 7) >>> 0
     const playing = !isVideo || !el.paused
@@ -367,6 +388,14 @@ export class Engine {
     rt.fails = 0
     // the visible picture is the analysed frame itself
     if (source && rt.el instanceof HTMLImageElement) rt.el.src = snapshot
+    if (!isVideo) this.watchLoop(rt, el, px, at)
+    // a camera that replays a recording says nothing about the site
+    if (rt.view.loop?.looped) {
+      rt.view.dets = []
+      rt.lastAnalyzed = Date.now()
+      this.emit()
+      return
+    }
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {

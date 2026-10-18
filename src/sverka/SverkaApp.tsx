@@ -3,7 +3,7 @@ import * as api from './api'
 import type { AdminRecipient, ApiAlert, ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
@@ -146,6 +146,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   // per camera: was it live in this session, and the loss we are writing (resolves true once it is in the journal)
   const signal = useRef(new Map<string, { live: boolean; lost?: { at: number; written: Promise<boolean> } }>())
   const created = useRef(new Map<string, string | number>())
+  // camera id → the open loop event, "pending" while it is being written, or when to try again
+  const loopSent = useRef(new Map<string, string | number>())
   const lastSaveError = useRef(0)
 
   // the server gives a non-admin only the objects they own (an object without an owner is the administrator's)
@@ -190,6 +192,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     meta.current.clear()
     created.current.clear()
     signal.current.clear()
+    loopSent.current.clear()
     setLoaded(false)
     setSelected(null)
     setCaseOpen(null)
@@ -514,6 +517,65 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     }
   })
 
+  /* a camera that replays a recording: one event per camera, with the frame now and the same frame a period ago */
+  useEffect(() => {
+    if (!project || !loaded) return
+    for (const src of obs.sources) {
+      const l = src.loop
+      if (src.kind !== 'camera') continue
+      if (!l?.looped) {
+        if (typeof loopSent.current.get(src.id) === 'string' && loopSent.current.get(src.id) !== 'pending') loopSent.current.delete(src.id)
+        continue
+      }
+      const sent = loopSent.current.get(src.id)
+      if (typeof sent === 'string' || (typeof sent === 'number' && Date.now() < sent) || !src.snapshot) continue
+      const open = events.find((e) => e.kind === 'loop' && e.cameraId === src.id && isOpen(e))
+      if (open) {
+        loopSent.current.set(src.id, open.id)
+        continue
+      }
+      const at = l.since ?? obs.t
+      const period = l.period ? durShort(l.period) : 'несколько минут'
+      loopSent.current.set(src.id, 'pending')
+      api
+        .createIncident({
+          project_id: project.id,
+          stage_id: stage?.id ?? null,
+          stage_name: stage?.name ?? null,
+          zone_id: zoneIdOf(src.id),
+          zone_name: zoneOf(src.id),
+          camera_id: src.id,
+          camera_name: src.name,
+          captured_at: new Date(at).toISOString(),
+          observation_key: `${src.id}|LOOP|${Math.round(at / 1000)}`,
+          severity: 'ERROR',
+          discrepancy_type: 'STREAM_LOOP',
+          title: `Камера повторяет запись: ${src.name}`,
+          description: [
+            'Правило: живая площадка не повторяется кадр в кадр; если весь кадр возвращается через одинаковое время, камера показывает запись по кругу. Снимает событие администратор, убедившись, что видео живое.',
+            `Наблюдение: с ${hhmmss(at)} кадры камеры «${src.name}» повторяются с периодом около ${period}${l.thenAt ? `; кадр ${hhmmss(obs.t)} совпадает с кадром ${hhmmss(l.thenAt)}` : ''}, отличие на уровне шума сжатия (${Math.round((l.closeness ?? 0) * 100)} % от движения в кадре).`,
+            'Качество данных: пока повтор идёт, кадры этой камеры не учитываются в сверке техники.',
+          ].join('\n'),
+          album_snapshots: [
+            { camera_name: `${src.name} · сейчас, ${hhmmss(obs.t)}`, snapshot_base64: src.snapshot, is_primary: true },
+            ...(l.thenSnap ? [{ camera_name: `${src.name} · тот же кадр${l.thenAt ? `, ${hhmmss(l.thenAt)}` : ''}`, snapshot_base64: l.thenSnap }] : []),
+          ],
+        })
+        .then((res) => {
+          loopSent.current.set(src.id, res.id)
+          setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
+          toast(`Камера «${src.name}» повторяет запись · ${res.code}`, { error: true })
+        })
+        .catch((e: Error) => {
+          loopSent.current.set(src.id, Date.now() + 30_000)
+          if (Date.now() - lastSaveError.current > 60_000) {
+            lastSaveError.current = Date.now()
+            toast(`Событие о повторе видео не сохранено: ${e.message}. Повторим через 30 с.`, { error: true })
+          }
+        })
+    }
+  })
+
   /* an episode ends when the machine is back (or the wrong one has left) */
   useEffect(() => {
     if (!stage || !ev.covered) return
@@ -566,7 +628,9 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     const before = events.find((e) => e.id === id)
     if (!before || before.sample) return
     await sendDecision(id, status)
-    toast(status === 'resolved' ? `Проверка исправления запрошена · ${before.code}` : `${STATUS_WORD[status]} · ${before.code}`)
+    // a loop is closed by the administrator at once, without a recheck
+    if (before.kind === 'loop' && status === 'resolved') toast(`Видео живое: событие закрыто · ${before.code}`)
+    else toast(status === 'resolved' ? `Проверка исправления запрошена · ${before.code}` : `${STATUS_WORD[status]} · ${before.code}`)
   }
   // decisions still waiting for their undo leave with the page, or before signing out
   const flushSending = () => {

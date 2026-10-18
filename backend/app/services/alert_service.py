@@ -26,6 +26,9 @@ from app.services.rule_engine import to_russian_machinery_name
 
 logger = logging.getLogger(__name__)
 OPEN_STATUSES = (IncidentStatus.PENDING, IncidentStatus.CONFIRMED, IncidentStatus.IN_PROGRESS)
+# A camera feeding a recording in a loop. The browser finds it over several passes of the
+# recording; a recheck of a minute cannot rule it out, so the server never closes it by itself.
+STREAM_LOOP = "STREAM_LOOP"
 
 
 @dataclass
@@ -179,6 +182,8 @@ def _detector() -> MachineryDetector:
 
 def verify_incident(db: Session, incident: Incident) -> VerificationResult:
     """Recheck all configured cameras over the normal observation window."""
+    if incident.discrepancy_type == STREAM_LOOP:
+        return VerificationResult("unavailable", {"reason": "loop_needs_admin", "checked_at": datetime.now(UTC).isoformat()})
     cameras = list(
         db.scalars(
             select(Camera).where(

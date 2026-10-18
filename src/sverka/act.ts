@@ -58,7 +58,7 @@ export function periodText(from: number, to: number) {
   return a === b ? `${a}, ${hhmm(from)}–${hhmm(to)}` : `${a} ${hhmm(from)} – ${b} ${hhmm(to)}`
 }
 
-const KIND_WORD = { missing: 'Нет обязательной техники', oop: 'Техника не по этапу', stream: 'Событие видеопотока', other: 'Событие' }
+const KIND_WORD = { missing: 'Нет обязательной техники', oop: 'Техника не по этапу', stream: 'Событие видеопотока', loop: 'Камера повторяет запись', other: 'Событие' }
 const kindWord = (e: UiEvent) => (e.type === 'MISSING_RECOMMENDED' ? 'Нет рекомендуемой техники' : KIND_WORD[e.kind])
 
 export function buildAct(x: ActInput) {

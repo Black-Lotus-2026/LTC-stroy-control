@@ -227,6 +227,7 @@ export interface ApiIncident {
   stage_name?: string | null
   zone_name?: string | null
   camera_name?: string | null
+  camera_id?: string | null
   title?: string | null
   description?: string | null
   severity: 'ERROR' | 'WARNING' | 'NEUTRAL'
@@ -249,7 +250,16 @@ export interface ApiIncident {
   verification_status?: string
   last_checked_at?: string | null
   escalated_at?: string | null
-  verification_details?: { working_cameras?: number; configured_cameras?: number; observed_machinery?: string[]; checked_at?: string; reason?: string }
+  verification_details?: {
+    working_cameras?: number
+    configured_cameras?: number
+    observed_machinery?: string[]
+    checked_at?: string
+    reason?: string
+    /** how a loop event closed: an administrator saw the live picture */
+    resolution?: 'admin_confirmed_live'
+    resolved_by?: string
+  }
 }
 export interface IncidentCreate {
   project_id: string
@@ -265,7 +275,7 @@ export interface IncidentCreate {
   observation_key?: string
   model_status?: 'valid' | 'unavailable' | 'failed'
   severity: 'ERROR' | 'WARNING'
-  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE'
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE' | 'STREAM_LOOP'
   machinery_type?: string | null
   stage_probability?: number
   observed_count?: number
