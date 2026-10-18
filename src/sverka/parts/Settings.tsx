@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AdminRecipient, AlertSettings, CameraItem, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
-import type { NumKey, Observation, Settings as S } from '../model'
+import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
+import { mediaUrl } from '../api'
+import type { NumKey, Observation, Settings as S, SourceView } from '../model'
 import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
-import { clock, durShort, hhmmss, plural, toLocalInput } from '../lib/format'
+import { atTime, clock, durShort, hhmmss, plural, toLocalInput } from '../lib/format'
+import { PROBLEM_WORD, turnWords } from '../lib/view'
 import { Spring, clamp } from '../lib/spring'
 import { CloseIcon } from './common'
 
@@ -28,6 +30,19 @@ export interface ObjectActions {
 }
 export interface ZoneDraft { name: string; code: string; description: string }
 
+/** Camera views on the server: the administrator approves, the others propose and ask. */
+export interface ViewActions {
+  states: CameraViewState[]
+  user: UserProfile
+  submit: (cameraId: string, note?: string) => Promise<void>
+  approve: (cameraId: string) => Promise<void>
+  reject: (cameraId: string, note?: string) => Promise<void>
+  requestMove: (cameraId: string, untilIso: string, reason: string) => Promise<void>
+  approveMove: (cameraId: string) => Promise<void>
+  rejectMove: (cameraId: string, note?: string) => Promise<void>
+  cancelMove: (cameraId: string) => Promise<void>
+}
+
 export function SettingsSheet({
   tab: initialTab,
   settings,
@@ -46,6 +61,7 @@ export function SettingsSheet({
   tasks,
   weather,
   objectActions,
+  views,
 }: {
   tab: SheetTab
   settings: S
@@ -65,6 +81,7 @@ export function SettingsSheet({
   /** the forecast, to say which place the address was found as */
   weather: Weather | null
   objectActions: ObjectActions
+  views?: ViewActions | null
 }) {
   const [tab, setTab] = useState<SheetTab>(initialTab)
   const el = useRef<HTMLElement>(null)
@@ -197,7 +214,7 @@ export function SettingsSheet({
               </div>
             </>
           )}
-          {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} />}
+          {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} />}
           {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
           {tab === 'shift' && (
@@ -260,7 +277,7 @@ const STATUS_LINE: Record<string, string> = {
   idle: 'Пауза: открыта запись',
 }
 
-function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null, code?: string) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null, code?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void }) {
+function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording, views }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null, code?: string) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null, code?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void; views: ViewActions | null }) {
   const [form, setForm] = useState<null | 'camera' | 'recording'>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
@@ -297,7 +314,8 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
             </div>
           )
         return (
-          <div className="src-row" key={c.id}>
+          <div className="src-item" key={c.id}>
+          <div className="src-row">
             {v?.snapshot ? <img src={v.snapshot} alt="" /> : <span className="t-snap-none" style={{ position: 'static', width: 96, aspectRatio: '16/9' }}>нет кадра</span>}
             <div>
               <b>
@@ -349,6 +367,8 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
                 </>
               )}
             </div>
+          </div>
+          {views && obs.mode === 'live' && <ViewBlock camera={c} state={views.states.find((x) => x.camera_id === c.id)} live={v} a={views} />}
           </div>
         )
       })}
@@ -896,5 +916,210 @@ function TasksPane({ project, user, admins, a }: { project: ProjectItem; user: U
         <p className="hint">Задачи всегда видны в шапке. Письма уходят, только если на сервере настроена почта.</p>
       </section>
     </>
+  )
+}
+
+const VIEW_EVENT: Record<string, string> = {
+  reference_set: 'Ракурс утверждён',
+  reference_proposed: 'Предложен новый ракурс',
+  reference_rejected: 'Предложенный ракурс отклонён',
+  move_requested: 'Запрошен перенос',
+  move_approved: 'Перенос согласован',
+  move_rejected: 'Перенос отклонён',
+  move_cancelled: 'Перенос отменён',
+  move_completed: 'Перенос завершён: новый ракурс утверждён',
+  move_expired: 'Срок переноса истёк без нового ракурса',
+}
+const pct = (m?: number) => `${Math.round(Math.max(0, m ?? 0) * 100)} %`
+const ts = (v?: string | null) => (v ? new Date(v).getTime() : null)
+
+/** The camera's approved view, what it matches now, and who may change it: the administrator decides. */
+function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: CameraViewState; live?: SourceView; a: ViewActions }) {
+  const admin = a.user.role === 'admin'
+  const viewer = a.user.role === 'viewer'
+  const [form, setForm] = useState<null | 'fix' | 'move'>(null)
+  const [note, setNote] = useState('')
+  const [until, setUntil] = useState(() => toLocalInput(new Date(Date.now() + 4 * 3600_000)))
+  const [busy, setBusy] = useState<{ s: 'saving' | 'error'; msg?: string } | null>(null)
+  const [hist, setHist] = useState(false)
+  const run = async (f: () => Promise<void>) => {
+    setBusy({ s: 'saving' })
+    try {
+      await f()
+      setForm(null)
+      setNote('')
+      setBusy(null)
+    } catch (e) {
+      setBusy({ s: 'error', msg: e instanceof Error ? e.message : 'Не удалось сохранить' })
+    }
+  }
+  const ref = state?.reference
+  const prop = state?.proposal
+  const move = state?.move
+  const check = live?.view
+  const mine = (id?: string | null) => !!id && id === a.user.id
+  const now = Date.now()
+  const line = !ref
+    ? { cls: '', t: 'Ракурс не утверждён: камера не сверяется с эталоном.' }
+    : check?.state === 'move'
+      ? { cls: '', t: `Перенос согласован до ${atTime(check.moveUntil ?? now)}: сверка ракурса на паузе.` }
+      : check?.state === 'changed'
+        ? { cls: 'bad', t: `Ракурс изменён: ${PROBLEM_WORD[check.problem ?? 'different']}${check.problem === 'turned' && turnWords(check) ? ` ${turnWords(check)}` : ''} · совпадение ${pct(check.match)}` }
+        : check?.state === 'ok'
+          ? { cls: 'ok', t: `Совпадает с утверждённым ракурсом · ${pct(check.match)}` }
+          : { cls: '', t: live?.status === 'live' ? 'Сверяем первые кадры с утверждённым ракурсом…' : 'Сверка начнётся, когда камера пришлёт кадр.' }
+  return (
+    <div className="src-view">
+      <div className="sv-head">
+        <span className="kicker">Ракурс камеры</span>
+        <small className={line.cls}>{line.t}</small>
+      </div>
+      <div className="sv-shots">
+        {ref ? (
+          <figure>
+            <img src={mediaUrl(ref.url)} alt={`Утверждённый ракурс: ${camera.name}`} />
+            <figcaption>
+              Утверждён {atTime(ts(ref.at) ?? now)}
+              {ref.by ? ` · ${ref.by}` : ''}
+            </figcaption>
+          </figure>
+        ) : (
+          <figure className="none">
+            <span>эталона нет</span>
+            <figcaption>{admin ? 'Утвердите ракурс, как должна висеть камера' : 'Ракурс утверждает администратор'}</figcaption>
+          </figure>
+        )}
+        {prop && (
+          <figure className="prop">
+            <img src={mediaUrl(prop.url)} alt={`Предложенный ракурс: ${camera.name}`} />
+            <figcaption>
+              Предложен {atTime(ts(prop.at) ?? now)}
+              {prop.by ? ` · ${prop.by}` : ''}
+              {prop.note ? ` · «${prop.note}»` : ''}
+            </figcaption>
+          </figure>
+        )}
+      </div>
+      {prop && (
+        <div className="sv-ask">
+          <span>Новый ракурс ждёт утверждения{admin ? '' : ' администратором'}.</span>
+          {admin && (
+            <span className="row-actions">
+              <button type="button" className="btn small primary" disabled={busy?.s === 'saving'} onClick={() => run(() => a.approve(camera.id))}>
+                Утвердить
+              </button>
+              <button type="button" className="btn small ghost" disabled={busy?.s === 'saving'} onClick={() => run(() => a.reject(camera.id))}>
+                Отклонить
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+      {move && (
+        <div className="sv-ask" data-move={move.status}>
+          <span>
+            {move.status === 'approved' ? 'Перенос согласован' : 'Запрошен перенос'} до <b>{atTime(ts(move.until) ?? now)}</b>: {move.reason}
+            <span className="dim">
+              {move.by ? ` · попросил ${move.by}` : ''}
+              {move.status === 'approved' && move.approved_by ? ` · согласовал ${move.approved_by}` : ''}
+            </span>
+          </span>
+          <span className="row-actions">
+            {admin && move.status === 'requested' && (
+              <>
+                <button type="button" className="btn small primary" disabled={busy?.s === 'saving'} onClick={() => run(() => a.approveMove(camera.id))}>
+                  Согласовать
+                </button>
+                <button type="button" className="btn small ghost" disabled={busy?.s === 'saving'} onClick={() => run(() => a.rejectMove(camera.id))}>
+                  Отклонить
+                </button>
+              </>
+            )}
+            {(admin || mine(move.by_id)) && (
+              <button type="button" className="btn small ghost" disabled={busy?.s === 'saving'} onClick={() => run(() => a.cancelMove(camera.id))}>
+                Отменить перенос
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+      {form === 'fix' ? (
+        <div className="sv-form">
+          <p className="hint">
+            {admin
+              ? 'Текущий кадр станет утверждённым ракурсом. Открытые события о смещении этой камеры закроются как согласованные.'
+              : 'Текущий кадр уйдёт администратору. Пока он не утвердит, камера сверяется с прежним ракурсом.'}
+          </p>
+          {live?.snapshot && <img className="sv-now" src={live.snapshot} alt="Текущий кадр" />}
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={admin ? 'Комментарий, необязательно' : 'Почему ракурс изменился'} maxLength={500} />
+          <div className="form-actions">
+            <button type="button" className="btn small primary" disabled={busy?.s === 'saving' || !live?.snapshot || (!admin && note.trim().length < 3)} onClick={() => run(() => a.submit(camera.id, note.trim() || undefined))}>
+              {admin ? 'Утвердить этот ракурс' : 'Отправить на утверждение'}
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setForm(null)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      ) : form === 'move' ? (
+        <div className="sv-form">
+          <p className="hint">{admin ? 'Пока перенос согласован, смещение камеры не считается нарушением, а её кадры не сверяются. После переноса утвердите новый ракурс.' : 'Запрос уйдёт администратору. После переноса предложите новый ракурс.'}</p>
+          <div className="form-grid two-col">
+            <label>
+              До
+              <input className="input" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
+            </label>
+            <label>
+              Причина
+              <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Кран переставили, камера переезжает на мачту Б" maxLength={500} />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button type="button" className="btn small primary" disabled={busy?.s === 'saving' || note.trim().length < 3 || !until} onClick={() => run(() => a.requestMove(camera.id, new Date(until).toISOString(), note.trim()))}>
+              {admin ? 'Согласовать перенос' : 'Попросить перенос'}
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setForm(null)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      ) : (
+        !viewer && (
+          <div className="form-actions">
+            <button type="button" className="btn small" disabled={!live?.snapshot} onClick={() => { setNote(''); setForm('fix') }} title={live?.snapshot ? undefined : 'Нет текущего кадра'}>
+              {admin ? (ref ? 'Утвердить текущий ракурс' : 'Утвердить ракурс по текущему кадру') : 'Предложить текущий ракурс'}
+            </button>
+            {!move && ref && (
+              <button type="button" className="btn small ghost" onClick={() => { setNote(''); setForm('move') }}>
+                {admin ? 'Согласовать перенос' : 'Попросить перенос'}
+              </button>
+            )}
+          </div>
+        )
+      )}
+      {busy?.s === 'error' && <p className="hint bad">{busy.msg}</p>}
+      {!!state?.history.length && (
+        <div className="sv-hist">
+          <button type="button" className="link-plain" onClick={() => setHist(!hist)} aria-expanded={hist}>
+            История ракурса · {state.history.length}
+          </button>
+          {hist && (
+            <ol>
+              {state.history.map((h, i) => (
+                <li key={i}>
+                  <time className="mono">{atTime(new Date(h.at).getTime())}</time>
+                  <span>
+                    {VIEW_EVENT[h.kind] ?? h.kind}
+                    {h.until ? ` до ${atTime(new Date(h.until).getTime())}` : ''}
+                    {h.note ? ` · «${h.note}»` : ''}
+                    {h.by ? <span className="dim"> · {h.by}</span> : ''}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

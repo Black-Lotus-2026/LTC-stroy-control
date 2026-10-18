@@ -71,4 +71,8 @@ celery_app.conf.beat_schedule = {
         "task": "alerts.deliver_emails",
         "schedule": crontab(minute="*"),
     },
+    "expire-camera-moves": {
+        "task": "cameras.expire_moves",
+        "schedule": crontab(minute="*"),
+    },
 }

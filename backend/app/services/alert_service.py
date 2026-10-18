@@ -184,6 +184,11 @@ def verify_incident(db: Session, incident: Incident) -> VerificationResult:
     """Recheck all configured cameras over the normal observation window."""
     if incident.discrepancy_type == STREAM_LOOP:
         return VerificationResult("unavailable", {"reason": "loop_needs_admin", "checked_at": datetime.now(UTC).isoformat()})
+    if (incident.discrepancy_type or "").startswith("VIEW_"):
+        # a camera view is checked against its approved reference, not by machinery
+        from app.services.camera_view import verify_view_incident
+
+        return verify_view_incident(db, incident)
     cameras = list(
         db.scalars(
             select(Camera).where(

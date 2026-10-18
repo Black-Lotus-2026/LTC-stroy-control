@@ -10,6 +10,9 @@
  *
  * A camera whose frames repeat a recording (lib/loop.ts) is "looped": its frames stop counting
  * for the site until the repetition ends.
+ * Camera view: every frame of a camera with an approved view is compared with it (lib/view.ts).
+ * A camera that looks away for VIEW_BAD_FRAMES frames in a row is "changed", and its frames stop
+ * counting for the site until it matches again; an agreed move pauses the comparison.
  *
  * Analysis runs in this browser tab. The UI says so; continuous server-side collection is a
  * separate backend task.
@@ -19,10 +22,11 @@
  * screen and event says that recognition is a demo.
  */
 import * as api from './api'
-import type { CameraItem } from './api'
+import type { CameraItem, CameraViewState } from './api'
 import { CODES, toCode, type Code } from './lib/machinery'
 import { LOOP_H, LOOP_W, LoopDetector, loopGray } from './lib/loop'
-import type { Det, Observation, SourceView } from './model'
+import { SHARP_H, SHARP_W, VIEW_H, VIEW_W, compareViews, judgeView, viewFeatures, type ViewFeatures, type ViewMatch, type ViewProblem } from './lib/view'
+import { viewBlocked, type Det, type Observation, type SourceView, type ViewCheck } from './model'
 
 const CAPTURE_EVERY = 2000
 const OFFLINE_AFTER_FAILS = 3
@@ -30,6 +34,8 @@ const STALE_AFTER_SAME = 15 // identical frames in a row (~30 s)
 const COVER_GAP = 10_000 // frames closer than this (at ×1) belong to one continuous watch
 const RETRY_OFFLINE = 10_000
 const MAX_DETS = 20_000
+const VIEW_BAD_FRAMES = 8 // ~16 s of a different picture: a truck that stops in front of the camera drives on sooner
+const VIEW_GOOD_FRAMES = 3
 
 interface Rt {
   view: SourceView
@@ -43,6 +49,28 @@ interface Rt {
   retryAt: number
 }
 interface Sight { at: number; src: string; c: number }
+/** What the server says about a camera's view, and the reference prepared for comparison. */
+interface ViewRef {
+  url: string | null
+  at?: number
+  by?: string | null
+  ref?: ViewFeatures
+  failed?: boolean
+  moveUntil?: number
+  moveBy?: string | null
+}
+interface ViewTrack {
+  state: ViewCheck['state']
+  since?: number
+  bad: number
+  good: number
+  firstBad?: number
+  problem?: ViewProblem
+  last?: ViewMatch
+  before?: string
+  beforeAt?: number
+  url?: string | null
+}
 
 /* Demo scene: where machines stand on the project's demo frames (src/assets/construction-camera.png
    and its crops). Camera 1 is the overview, 2 the crane, 3 the west side of the pit. */
@@ -82,12 +110,22 @@ export class Engine {
   private loops = new Map<string, LoopDetector>()
   /** small copies of past frames: the evidence of what a looped camera repeats */
   private thumb = document.createElement('canvas')
+  private viewRefs = new Map<string, ViewRef>()
+  private viewTracks = new Map<string, ViewTrack>()
+  private vBig = document.createElement('canvas')
+  private vSmall = document.createElement('canvas')
+  viewOk = 0.6
+  viewBad = 0.45
 
   constructor() {
     this.tiny.width = LOOP_W
     this.tiny.height = LOOP_H
     this.thumb.width = 320
     this.thumb.height = 180
+    this.vBig.width = SHARP_W
+    this.vBig.height = SHARP_H
+    this.vSmall.width = VIEW_W
+    this.vSmall.height = VIEW_H
   }
 
   /** A camera frame against the last half hour of the same camera: does it replay a recording? */
@@ -98,6 +136,117 @@ export class Engine {
     t.drawImage(el, 0, 0, 320, 180)
     const s = det.push(at, loopGray(px), this.thumb.toDataURL('image/jpeg', 0.6))
     rt.view.loop = s.looped ? { looped: true, period: s.period, since: s.since, thenAt: s.then?.at, thenSnap: s.then?.snap, closeness: s.closeness } : undefined
+  }
+
+  /* camera views: the approved reference of each camera and agreed moves, as the server has them */
+  setViews(states: CameraViewState[]) {
+    const seen = new Set<string>()
+    for (const st of states) {
+      seen.add(st.camera_id)
+      const old = this.viewRefs.get(st.camera_id)
+      const url = st.reference?.url ?? null
+      const move = st.move?.status === 'approved' ? st.move : null
+      const next: ViewRef = {
+        url,
+        at: st.reference?.at ? new Date(st.reference.at).getTime() : undefined,
+        by: st.reference?.by,
+        ref: old && old.url === url ? old.ref : undefined,
+        failed: old && old.url === url ? old.failed : false,
+        moveUntil: move ? new Date(move.until).getTime() : undefined,
+        moveBy: move ? move.approved_by || move.by : undefined,
+      }
+      this.viewRefs.set(st.camera_id, next)
+      if (url && !next.ref && !next.failed && (!old || old.url !== url)) this.loadRef(st.camera_id, url)
+      if (old?.url !== url) this.viewTracks.delete(st.camera_id)
+      if (st.match_ok) this.viewOk = st.match_ok
+      if (st.match_bad) this.viewBad = st.match_bad
+    }
+    for (const id of [...this.viewRefs.keys()]) if (!seen.has(id)) this.viewRefs.delete(id)
+    for (const rt of this.rts.values()) this.showView(rt)
+    this.emit()
+  }
+  private async loadRef(id: string, url: string) {
+    try {
+      const bmp = await api.viewImage(url)
+      const r = this.viewRefs.get(id)
+      if (!r || r.url !== url) return
+      r.ref = this.featuresOf(bmp, bmp.width, bmp.height)
+      bmp.close()
+    } catch {
+      const r = this.viewRefs.get(id)
+      if (r && r.url === url) r.failed = true
+    }
+    const rt = this.rts.get(id)
+    if (rt) this.showView(rt)
+    this.emit()
+  }
+  private featuresOf(el: CanvasImageSource, w: number, h: number) {
+    const big = this.vBig.getContext('2d', { willReadFrequently: true })!
+    big.imageSmoothingQuality = 'high'
+    big.drawImage(el, 0, 0, w, h, 0, 0, SHARP_W, SHARP_H)
+    const small = this.vSmall.getContext('2d', { willReadFrequently: true })!
+    small.imageSmoothingQuality = 'high'
+    small.drawImage(this.vBig, 0, 0, VIEW_W, VIEW_H)
+    return viewFeatures(small.getImageData(0, 0, VIEW_W, VIEW_H).data, big.getImageData(0, 0, SHARP_W, SHARP_H).data)
+  }
+  /** One frame of a camera against its approved view. */
+  private judgeFrame(rt: Rt, el: CanvasImageSource, w: number, h: number, snapshot: string, at: number) {
+    const id = rt.view.id
+    const r = this.viewRefs.get(id)
+    let tr = this.viewTracks.get(id)
+    if (!tr || tr.url !== r?.url) this.viewTracks.set(id, (tr = { state: 'none', bad: 0, good: 0, url: r?.url }))
+    if (!r?.url || !r.ref || (r.moveUntil != null && r.moveUntil > Date.now())) return
+    const cur = this.featuresOf(el, w, h)
+    const m = compareViews(r.ref, cur)
+    const j = judgeView(r.ref, cur, m, this.viewOk, this.viewBad)
+    tr.last = m
+    if (j.verdict === 'ok') {
+      tr.good++
+      tr.bad = 0
+      tr.firstBad = undefined
+      tr.before = snapshot
+      tr.beforeAt = at
+      if (tr.state !== 'ok' && (tr.state !== 'changed' || tr.good >= VIEW_GOOD_FRAMES)) {
+        tr.state = 'ok'
+        tr.since = at
+      }
+    } else if (j.verdict === 'bad') {
+      tr.bad++
+      tr.good = 0
+      tr.firstBad ??= at
+      tr.problem = j.problem
+      if (tr.state !== 'changed' && tr.bad >= VIEW_BAD_FRAMES) {
+        tr.state = 'changed'
+        tr.since = tr.firstBad
+      }
+    } else if (tr.state === 'none') tr.state = 'pending'
+  }
+  private showView(rt: Rt) {
+    if (rt.view.kind !== 'camera') return
+    const r = this.viewRefs.get(rt.view.id)
+    const tr = this.viewTracks.get(rt.view.id)
+    if (!r) {
+      rt.view.view = undefined
+      return
+    }
+    const moving = r.moveUntil != null && r.moveUntil > Date.now()
+    const state: ViewCheck['state'] = !r.url ? 'none' : moving ? 'move' : !r.ref || !tr || tr.state === 'none' ? 'pending' : tr.state
+    const shifted = tr?.last && tr.last.best >= 0.7 ? tr.last : undefined
+    rt.view.view = {
+      state,
+      refUrl: r.url ?? undefined,
+      refAt: r.at,
+      refBy: r.by,
+      problem: state === 'changed' ? tr?.problem : undefined,
+      match: !moving ? tr?.last?.match : undefined,
+      dx: shifted?.dx,
+      dy: shifted?.dy,
+      since: state === 'ok' || state === 'changed' ? tr?.since : undefined,
+      before: tr?.before,
+      beforeAt: tr?.beforeAt,
+      moveUntil: moving ? r.moveUntil : undefined,
+      moveBy: moving ? r.moveBy : undefined,
+    }
   }
 
   /* lifecycle (idempotent, StrictMode-safe) */
@@ -127,6 +276,8 @@ export class Engine {
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.cameras = []
     this.loops.clear()
+    this.viewRefs.clear()
+    this.viewTracks.clear()
     this.clearSession()
     this.emit()
   }
@@ -195,6 +346,7 @@ export class Engine {
       this.pool?.appendChild(img)
     }
     this.rts.set(c.id, rt)
+    this.showView(rt)
   }
   private removeSource(id: string) {
     const rt = this.rts.get(id)
@@ -388,9 +540,13 @@ export class Engine {
     rt.fails = 0
     // the visible picture is the analysed frame itself
     if (source && rt.el instanceof HTMLImageElement) rt.el.src = snapshot
-    if (!isVideo) this.watchLoop(rt, el, px, at)
-    // a camera that replays a recording says nothing about the site
-    if (rt.view.loop?.looped) {
+    if (!isVideo) {
+      this.watchLoop(rt, el, px, at)
+      this.judgeFrame(rt, el, w0, h0, snapshot, at)
+      this.showView(rt)
+    }
+    // a camera that replays a recording, looks away or is being moved says nothing about the site
+    if (rt.view.loop?.looped || viewBlocked(rt.view)) {
       rt.view.dets = []
       rt.lastAnalyzed = Date.now()
       this.emit()
