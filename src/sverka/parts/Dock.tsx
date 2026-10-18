@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { Weather } from '../api'
 import type { Observation, Profile, Stage, UiEvent } from '../model'
 import { LV, LV_ORDER, stageAt } from '../model'
 import { CODES, MACH, Sil, type Code } from '../lib/machinery'
 import { DAY_MS, MONTHS_S, addDays, dayStart, fmtDay, hhmm, plural } from '../lib/format'
 import { Spring, VelocityTracker, capture, clamp, easeOut, lerp, project, rubber } from '../lib/spring'
 import { Chevron } from './common'
+import { WeekWeather, stageAlerts, whenWord } from './Weather'
 
 const DEMAND: Code[] = ['excavator', 'dump_truck', 'bulldozer', 'tower_crane', 'concrete_mixer', 'concrete_pump', 'truck_crane', 'loader', 'roller', 'grader']
 
@@ -26,6 +28,7 @@ export function Dock({
   open,
   setOpen,
   shift,
+  weather,
 }: {
   stages: Stage[]
   current: Stage | null
@@ -44,6 +47,8 @@ export function Dock({
   open: boolean
   setOpen: (o: boolean) => void
   shift: { from: number; to: number }
+  /** the object's forecast, when the server has one */
+  weather: Weather | null
 }) {
   const dock = useRef<HTMLElement>(null)
   const body = useRef<HTMLDivElement>(null)
@@ -422,6 +427,10 @@ export function Dock({
     }
   }
   const prof = selStage ? profiles.get(selStage.id) : undefined
+  // the folded plan mentions the weather only when it touches today's or tomorrow's work
+  const today = dayStart(Date.now())
+  const soon = stageAlerts(weather, current, current ? profiles.get(current.id) ?? null : null, today).find((a) => a.touches && a.at <= today + DAY_MS)
+  const weekAhead = !!weather && !!selStage && selStage.end >= today && selStage.start <= today + 6 * DAY_MS
 
   return (
     <section className="dock" ref={dock} aria-label="План и время">
@@ -436,10 +445,17 @@ export function Dock({
                 {current ? `Этап ${current.n} из ${stages.length} · день ${Math.round((dayStart(t) - current.start) / DAY_MS) + 1}/${current.days}` : `Вне плана · ${fmtDay(t)}`}
               </span>
               <strong title={current?.name}>{current?.name || 'Нет этапа на эту дату'}</strong>
-              <button type="button" onClick={() => setOpen(!open)} aria-controls="planFull">
-                <Chevron up />
-                <span>План работ</span>
-              </button>
+              <span className="dock-lead-row">
+                <button type="button" onClick={() => setOpen(!open)} aria-controls="planFull">
+                  <Chevron up />
+                  <span>План работ</span>
+                </button>
+                {soon && (
+                  <span className="wx-soon" title={`${whenWord(soon.at, today)}: ${soon.text}`}>
+                    {whenWord(soon.at, today)} {soon.first}
+                  </span>
+                )}
+              </span>
             </>
           ) : (
             <>
@@ -616,6 +632,7 @@ export function Dock({
                     }
                   }}
                 />
+                {weekAhead && <WeekWeather weather={weather!} stage={selStage} prof={prof ?? null} t={t} />}
                 {prof?.edited && (
                   <div className="req-reset">
                     <span>

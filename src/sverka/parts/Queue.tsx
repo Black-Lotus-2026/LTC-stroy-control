@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import type { Episode, Profile, UiEvent } from '../model'
-import { STATUS_WORD, liveTitle, sevNow } from '../model'
-import { hhmm } from '../lib/format'
+import type { Episode, Profile, Rights, UiEvent } from '../model'
+import { STATUS_WORD, inWork, isOpen, liveTitle, overdue, sevNow } from '../model'
+import { atTime, durShort, hhmm } from '../lib/format'
 import { Spring, VelocityTracker, capture, clamp, lerp, project, reducedMotion } from '../lib/spring'
 import { Roll } from './common'
 
@@ -12,6 +12,7 @@ export function Queue({
   episodes,
   t,
   prof,
+  rightsOf,
   onOpen,
   onDecide,
   onJournal,
@@ -20,15 +21,21 @@ export function Queue({
   episodes: Map<string, Episode>
   t: number
   prof: Profile | null
+  rightsOf: (e: UiEvent) => Rights
   onOpen: (id: string, el: HTMLElement) => void
   onDecide: (id: string, status: 'confirmed' | 'false_positive', dir: 1 | -1) => void
   onJournal: (el: HTMLElement) => void
 }) {
+  const now = Date.now()
   const pending = events
     .filter((e) => e.status === 'pending' && e.kind !== 'stream')
     .sort((a, b) => (sevNow(b, episodes.get(b.id), t, prof) === 'err' ? 1 : 0) - (sevNow(a, episodes.get(a.id), t, prof) === 'err' ? 1 : 0) || b.createdAt - a.createdAt)
-  const done = events.filter((e) => e.status !== 'pending').sort((a, b) => (b.decidedAt ?? b.createdAt) - (a.decidedAt ?? a.createdAt))
-  const [doneOpen, setDoneOpen] = useState(false)
+  // decided but not fixed: the nearest deadline first
+  const work = events.filter(inWork).sort((a, b) => (a.deadline ?? Infinity) - (b.deadline ?? Infinity) || b.createdAt - a.createdAt)
+  const late = work.filter((e) => overdue(e, now)).length
+  const closed = events.filter((e) => !isOpen(e) && !e.sample && e.kind !== 'stream').sort((a, b) => (b.decidedAt ?? b.createdAt) - (a.decidedAt ?? a.createdAt))
+  const [fold, setFold] = useState<'work' | 'closed' | null>(null)
+  const first = pending[0] ? rightsOf(pending[0]) : null
   const list = useRef<HTMLDivElement>(null)
   const rects = useRef(new Map<string, DOMRect>())
   const known = useRef<Set<string> | null>(null)
@@ -82,41 +89,75 @@ export function Queue({
         </button>
       </div>
       <div className="q-list" ref={list}>
-        {!pending.length && <div className="q-empty">Новых отклонений нет.{done.length ? ' Решённые — ниже.' : ''}</div>}
+        {!pending.length && <div className="q-empty">Новых отклонений нет.{work.length || closed.length ? ' Решённые — ниже.' : ''}</div>}
         {pending.map((e) => (
-          <QItem key={e.id} e={e} ep={episodes.get(e.id)} t={t} prof={prof} onOpen={onOpen} onDecide={onDecide} />
+          <QItem key={e.id} e={e} ep={episodes.get(e.id)} t={t} now={now} prof={prof} can={rightsOf(e)} onOpen={onOpen} onDecide={onDecide} />
         ))}
       </div>
-      {done.length > 0 && (
+      {work.length > 0 && (
         <div className="q-done">
-          <button type="button" aria-expanded={doneOpen} onClick={() => setDoneOpen(!doneOpen)}>
-            <span>Решено · {done.length}</span>
-            <span>{doneOpen ? 'Скрыть' : 'Показать'}</span>
+          <button type="button" aria-expanded={fold === 'work'} onClick={() => setFold(fold === 'work' ? null : 'work')}>
+            <span>
+              В работе · {work.length}
+              {late > 0 && <em className="late"> · {late} {late === 1 ? 'просрочено' : 'просрочены'}</em>}
+            </span>
+            <span>{fold === 'work' ? 'Скрыть' : 'Показать'}</span>
           </button>
-          {doneOpen && (
+          {fold === 'work' && (
             <ul>
-              {done.slice(0, 30).map((e) => (
-                <li key={e.id}>
-                  <span className="mono">{hhmm(e.at)}</span>
-                  <span>
-                    <button type="button" className="link-plain" onClick={(ev) => onOpen(e.id, ev.currentTarget)}>
-                      <b>{e.title}</b>
-                    </button>
-                    <br />
-                    {STATUS_WORD[e.status]}
-                  </span>
-                </li>
+              {work.slice(0, 30).map((e) => (
+                <DoneRow key={e.id} e={e} onOpen={onOpen} line={workLine(e, now)} late={overdue(e, now)} />
               ))}
             </ul>
           )}
         </div>
       )}
-      {pending.length > 0 && <div className="q-hint">Смахните карточку вправо, чтобы подтвердить, влево, если ложное</div>}
+      {closed.length > 0 && (
+        <div className="q-done">
+          <button type="button" aria-expanded={fold === 'closed'} onClick={() => setFold(fold === 'closed' ? null : 'closed')}>
+            <span>Закрыто · {closed.length}</span>
+            <span>{fold === 'closed' ? 'Скрыть' : 'Показать'}</span>
+          </button>
+          {fold === 'closed' && (
+            <ul>
+              {closed.slice(0, 30).map((e) => (
+                <DoneRow key={e.id} e={e} onOpen={onOpen} line={e.status === 'resolved' && e.check === 'passed' ? 'Устранено · подтвердили камеры' : STATUS_WORD[e.status]} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {first && <div className="q-hint">{!first.act ? first.reason : first.dismiss ? 'Смахните карточку вправо, чтобы подтвердить, влево, если ложное' : 'Смахните карточку вправо, чтобы подтвердить. Ложное отмечает администратор'}</div>}
     </section>
   )
 }
 
-function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode; t: number; prof: Profile | null; onOpen: (id: string, el: HTMLElement) => void; onDecide: (id: string, s: 'confirmed' | 'false_positive', dir: 1 | -1) => void }) {
+/** One line on where a task stands: the recheck, the deadline, the escalation. */
+function workLine(e: UiEvent, now: number) {
+  const word = STATUS_WORD[e.status]
+  if (e.check === 'requested') return `${word} · проверка исправления запрошена`
+  if (e.escalatedAt) return `${word} · у руководителя с ${atTime(e.escalatedAt, now)}`
+  if (e.deadline == null) return word
+  return e.deadline <= now ? `${word} · срок истёк ${durShort(now - e.deadline)} назад` : `${word} · исправить до ${atTime(e.deadline, now)}`
+}
+
+function DoneRow({ e, line, late = false, onOpen }: { e: UiEvent; line: string; late?: boolean; onOpen: (id: string, el: HTMLElement) => void }) {
+  return (
+    <li>
+      <span className="mono">{hhmm(e.at)}</span>
+      <span>
+        <button type="button" className="link-plain" onClick={(ev) => onOpen(e.id, ev.currentTarget)}>
+          <b>{e.title}</b>
+        </button>
+        <br />
+        <span className={late ? 'late' : undefined}>{line}</span>
+        {e.assignee && <span className="who"> · {e.assignee}</span>}
+      </span>
+    </li>
+  )
+}
+
+function QItem({ e, ep, t, now, prof, can, onOpen, onDecide }: { e: UiEvent; ep?: Episode; t: number; now: number; prof: Profile | null; can: Rights; onOpen: (id: string, el: HTMLElement) => void; onDecide: (id: string, s: 'confirmed' | 'false_positive', dir: 1 | -1) => void }) {
   const item = useRef<HTMLDivElement>(null)
   const card = useRef<HTMLButtonElement>(null)
   const under = useRef<HTMLDivElement>(null)
@@ -166,7 +207,10 @@ function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode;
       if (s.lock === 'x') capture(card.current!, s.id)
     }
     if (s.lock !== 'x') return
-    x.current!.set(s.base + dx)
+    // a direction the user may not take only gives a little, like a locked door
+    const v = s.base + dx
+    const shut = (v > 0 && !can.act) || (v < 0 && !can.dismiss)
+    x.current!.set(shut ? Math.sign(v) * Math.min(56, Math.abs(v) * 0.22) : v)
   }
   const up = () => {
     const s = st.current
@@ -177,16 +221,16 @@ function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode;
     const v = vt.current.get().x
     const w = item.current!.clientWidth
     const proj = x.current!.x + project(v, 0.99)
-    if (proj > w * 0.45) x.current!.to(w + 40, { velocity: v, damping: 1, onRest: () => onDecide(e.id, 'confirmed', 1) })
-    else if (proj < -w * 0.45) x.current!.to(-w - 40, { velocity: v, damping: 1, onRest: () => onDecide(e.id, 'false_positive', -1) })
+    if (proj > w * 0.45 && can.act) x.current!.to(w + 40, { velocity: v, damping: 1, onRest: () => onDecide(e.id, 'confirmed', 1) })
+    else if (proj < -w * 0.45 && can.dismiss) x.current!.to(-w - 40, { velocity: v, damping: 1, onRest: () => onDecide(e.id, 'false_positive', -1) })
     else x.current!.to(0, { velocity: v, damping: 0.75 })
   }
   const thumb = e.album.find((a) => a.primary)?.url || e.album[0]?.url
   return (
     <div className="q-item" ref={item} data-id={e.id} data-mach={e.mach || undefined}>
       <div className="q-under" ref={under} aria-hidden="true">
-        <span className="u-confirm">Подтвердить</span>
-        <span className="u-false">Ложное</span>
+        <span className="u-confirm">{can.act ? 'Подтвердить' : 'Решает ответственный'}</span>
+        <span className="u-false">{can.dismiss ? 'Ложное' : 'Ложное отмечает администратор'}</span>
       </div>
       <button
         type="button"
@@ -210,6 +254,7 @@ function QItem({ e, ep, t, prof, onOpen, onDecide }: { e: UiEvent; ep?: Episode;
           </span>
           <span className="q-sub">
             {[e.sample ? 'пример с сервера' : e.demo ? 'демо' : null, e.zone, SEV_WORD[sev], ep ? (ep.to ? 'завершилось' : 'продолжается') : e.stageName].filter(Boolean).join(' · ')}
+            {e.deadline != null && (e.deadline <= now ? <span className="late"> · срок истёк</span> : ` · до ${atTime(e.deadline, now)}`)}
           </span>
         </span>
         <span className="q-thumb">{thumb ? <img alt="" src={thumb} /> : null}</span>

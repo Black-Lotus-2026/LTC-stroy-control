@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { Episode, EventStatus, Observation, Profile, Stage, UiEvent } from '../model'
-import { LV, STATUS_WORD, consequence, liveTitle, parseDescription, sevNow, stageDay, toneOf } from '../model'
+import * as api from '../api'
+import type { AdminRecipient, ApiIncidentEvent, InactionCurve, UserProfile } from '../api'
+import type { Episode, EventStatus, Observation, Profile, Rights, Stage, UiEvent } from '../model'
+import { LV, STATUS_WORD, consequence, isOpen, liveTitle, parseDescription, sevNow, stageDay, toneOf } from '../model'
 import { MACH, type Code } from '../lib/machinery'
-import { durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
+import { atTime, durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
 import { CloseIcon, SevIcon } from './common'
 import { Lightbox } from './Lightbox'
+import { CostMissing, CostOfInaction } from './Cost'
 
 const SEV_WORD = { warn: 'Предупреждение', err: 'Отклонение', info: 'Сведения' }
 
@@ -16,6 +19,9 @@ export function CaseFile({
   prof,
   obs,
   origin,
+  rights,
+  user,
+  admins,
   onClose,
   onDecide,
   onRule,
@@ -27,6 +33,9 @@ export function CaseFile({
   prof: Profile | null
   obs: Observation
   origin: DOMRect | null
+  rights: Rights
+  user: UserProfile
+  admins: AdminRecipient[]
   onClose: () => void
   onDecide: (status: EventStatus) => Promise<void>
   onRule: (code: Code) => void
@@ -43,6 +52,28 @@ export function CaseFile({
   const [redo, setRedo] = useState(false)
   const rect = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
   const springRef = useRef<Spring | null>(null)
+  // what happened to the event on the server: decisions, the task, rechecks, escalation
+  const [hist, setHist] = useState<ApiIncidentEvent[] | string | null>(null)
+  const [histOpen, setHistOpen] = useState(false)
+  useEffect(() => {
+    if (ev.sample) return
+    let alive = true
+    api.incidentEvents(ev.id).then(
+      (h) => alive && setHist(h),
+      (e: Error) => alive && setHist(e.message),
+    )
+    return () => {
+      alive = false
+    }
+  }, [ev.id, ev.sample, ev.status, ev.check, ev.escalatedAt])
+  // the scenario estimate of inaction exists only for events about machinery
+  const [cost, setCost] = useState<InactionCurve | string | null>(null)
+  useEffect(() => {
+    if (ev.sample || (ev.kind !== 'missing' && ev.kind !== 'oop')) return
+    const ctl = new AbortController()
+    api.inactionCost(ev.id, ctl.signal).then(setCost, (e: Error) => !ctl.signal.aborted && setCost(e.message))
+    return () => ctl.abort()
+  }, [ev.id, ev.sample, ev.kind])
 
   const computeRect = () => {
     if (matchMedia('(max-width: 860px)').matches) return { left: 0, top: 0, width: innerWidth, height: innerHeight }
@@ -96,9 +127,9 @@ export function CaseFile({
         e.preventDefault()
         close()
       }
-      if ((ev.status !== 'pending' && !redo) || ev.sample || ev.kind === 'stream') return
-      const m: Record<string, EventStatus> = { '1': 'confirmed', '2': 'false_positive', '3': 'in_progress' }
-      if (m[e.key]) decide(m[e.key])
+      if ((ev.status !== 'pending' && !redo) || ev.sample || ev.kind === 'stream' || !rights.act || !isOpen(ev)) return
+      const m: Record<string, EventStatus> = { '1': 'confirmed', '3': 'in_progress', ...(rights.dismiss ? { '2': 'false_positive' as const } : {}) }
+      if (m[e.key] && m[e.key] !== ev.status) decide(m[e.key])
       if (e.key === 'Tab') {
         const f = Array.from(el.current!.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, a[href], [tabindex="0"]'))
         const i = f.indexOf(document.activeElement as HTMLElement)
@@ -134,7 +165,7 @@ export function CaseFile({
   const desc = parseDescription(ev.description)
   const day = stage ? stageDay(stage, ev.at) : 0
   const live = obs.sources.filter((s) => s.status === 'live').length
-  const steps: { tone: string; h: string; p: React.ReactNode; src?: React.ReactNode }[] = []
+  const steps: { tone: string; h: string; p: React.ReactNode; src?: React.ReactNode; extra?: React.ReactNode }[] = []
   steps.push({
     tone: 'plan',
     h: 'План',
@@ -196,9 +227,11 @@ export function CaseFile({
         : ev.kind === 'missing' && !rec && r && ep && !ep.to && sev !== 'err'
         ? `${SEV_WORD[sev]}. Станет отклонением через ${durShort(Math.max(0, r.errAfter * 1000 - (obs.t - ep.from)))}, если ${MACH[ev.mach!].lower} не появится.`
         : `${SEV_WORD[sev]}.${ev.status !== 'pending' ? ` Решение: ${STATUS_WORD[ev.status].toLowerCase()}.` : ''}`,
+    extra: cost == null ? undefined : typeof cost === 'string' ? <p className="cost-none">Цена бездействия недоступна: {cost}.</p> : cost.status === 'unavailable' ? <CostMissing curve={cost} /> : <CostOfInaction curve={cost} />,
   })
 
   const photo = ev.album[shot]
+  const decidedAt = ev.decidedAt ?? lastDecision(hist)
   return (
     <>
       <div className="scrim" data-on="true" ref={scrim} onClick={close} style={{ opacity: 0 }} />
@@ -269,6 +302,7 @@ export function CaseFile({
                       : 'Пока кадров нет, по зоне этой камеры вывод об отсутствии техники не делается.'
                     : ev.description}
             </p>
+            <TaskLine ev={ev} />
           </div>
           <div>
             <span className="kicker">Как система пришла к выводу</span>
@@ -279,12 +313,14 @@ export function CaseFile({
                   <div>
                     <h4>{s.h}</h4>
                     <p>{s.p}</p>
+                    {s.extra}
                     {s.src && <div className="src">{s.src}</div>}
                   </div>
                 </div>
               ))}
             </div>
           </div>
+          <History hist={hist} open={histOpen} onToggle={() => setHistOpen(!histOpen)} ev={ev} user={user} admins={admins} />
           <div className="decide">
             {ev.sample ? (
               <div className="decided">
@@ -296,20 +332,34 @@ export function CaseFile({
               <div className="decided">
                 <span>
                   <b>Видеопоток.</b> Запись о сигнале камеры попадает в журнал и акт, решение по ней не принимается.
+                  {ev.check === 'passed' ? ' Проверка камер подтвердила, что кадры снова приходят.' : ''}
                 </span>
+              </div>
+            ) : !isOpen(ev) ? (
+              <div className="decided">
+                <span>
+                  Решение: <b>{ev.status === 'resolved' && ev.check === 'passed' ? 'Устранено, подтвердили камеры' : STATUS_WORD[ev.status]}</b>
+                  {decidedAt ? ` · ${atTime(decidedAt)}` : ''}
+                </span>
+                <span className="hint">Событие закрыто. Если нарушение повторится, система создаст новое.</span>
+              </div>
+            ) : !rights.act ? (
+              <div className="decided">
+                <span>{ev.status === 'pending' ? <b>Ждёт решения</b> : <>Решение: <b>{STATUS_WORD[ev.status]}</b></>}</span>
+                <CheckState ev={ev} />
+                <span className="hint">{rights.reason}</span>
               </div>
             ) : ev.status !== 'pending' && !redo ? (
               <div className="decided">
                 <span>
                   Решение: <b>{STATUS_WORD[ev.status]}</b>
-                  {ev.decidedAt ? ` · ${hhmm(ev.decidedAt)}` : ''}
+                  {decidedAt ? ` · ${atTime(decidedAt)}` : ''}
                 </span>
+                <CheckState ev={ev} />
                 <div className="decide-row">
-                  {(ev.status === 'confirmed' || ev.status === 'in_progress') && (
-                    <button type="button" className="btn" onClick={() => decide('resolved')} disabled={save.s === 'saving'}>
-                      Отметить устранённым
-                    </button>
-                  )}
+                  <button type="button" className="btn primary" onClick={() => decide('resolved')} disabled={save.s === 'saving' || ev.check === 'requested'}>
+                    {ev.check === 'requested' ? 'Проверка запрошена' : ev.check === 'failed' || ev.check === 'unavailable' ? 'Проверить ещё раз' : 'Исправлено — проверить камерами'}
+                  </button>
                   <button type="button" className="btn ghost" onClick={() => setRedo(true)} disabled={save.s === 'saving'}>
                     Изменить решение
                   </button>
@@ -336,20 +386,18 @@ export function CaseFile({
                       ['confirmed', 'Подтвердить', '1'],
                       ['false_positive', 'Ложное', '2'],
                       ['in_progress', 'В работу', '3'],
-                      ['resolved', 'Устранено', ''],
-                      ['pending', 'Вернуть в ожидание', ''],
                     ] as const
                   )
-                    .filter(([v]) => v !== ev.status)
+                    .filter(([v]) => v !== ev.status && (v !== 'false_positive' || rights.dismiss))
                     .map(([v, l, k]) => (
-                      <button key={v} type="button" className={`btn${v === 'pending' ? ' ghost' : ''}`} onClick={() => decide(v)} disabled={save.s === 'saving'}>
+                      <button key={v} type="button" className="btn" onClick={() => decide(v)} disabled={save.s === 'saving'}>
                         {l}
-                        {k && <kbd>{k}</kbd>}
+                        <kbd>{k}</kbd>
                       </button>
                     ))}
                 </div>
                 <div className="save-state" data-s={save.s === 'idle' ? undefined : save.s}>
-                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : 'Смена решения запишется в историю события на сервере.'}
+                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : `Смена решения запишется в историю события.${rights.dismiss ? '' : ' Ложное срабатывание отмечает администратор.'}`}
                 </div>
               </>
             ) : (
@@ -358,15 +406,17 @@ export function CaseFile({
                   <button type="button" className="btn primary" onClick={() => decide('confirmed')} disabled={save.s === 'saving'}>
                     Подтвердить <kbd>1</kbd>
                   </button>
-                  <button type="button" className="btn" onClick={() => decide('false_positive')} disabled={save.s === 'saving'}>
-                    Ложное <kbd>2</kbd>
-                  </button>
+                  {rights.dismiss && (
+                    <button type="button" className="btn" onClick={() => decide('false_positive')} disabled={save.s === 'saving'}>
+                      Ложное <kbd>2</kbd>
+                    </button>
+                  )}
                   <button type="button" className="btn ghost" onClick={() => decide('in_progress')} disabled={save.s === 'saving'}>
                     В работу <kbd>3</kbd>
                   </button>
                 </div>
                 <div className="save-state" data-s={save.s === 'idle' ? undefined : save.s}>
-                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : 'Решение сохранится в журнале события.'}
+                  {save.s === 'saving' ? 'Сохраняем…' : save.s === 'saved' ? 'Сохранено в журнале' : save.s === 'error' ? `${save.msg}. Попробуйте ещё раз.` : `Решение сохранится в журнале события.${rights.dismiss ? '' : ' Ложное срабатывание отмечает администратор.'}`}
                 </div>
               </>
             )}
@@ -384,5 +434,120 @@ export function CaseFile({
         />
       )}
     </>
+  )
+}
+
+/** Who answers for the event and by when; after the deadline, who it went to. */
+function TaskLine({ ev }: { ev: UiEvent }) {
+  if (!ev.assignee && ev.deadline == null) return null
+  const now = Date.now()
+  const open = isOpen(ev)
+  const late = open && ev.deadline != null && ev.deadline <= now
+  return (
+    <p className="task-line" data-late={late || undefined}>
+      {ev.assignee && (
+        <span>
+          Ответственный: <b>{ev.assignee}</b>
+        </span>
+      )}
+      {open && ev.deadline != null && <span className="when">{late ? `срок истёк ${durShort(now - ev.deadline)} назад` : `исправить до ${atTime(ev.deadline, now)} · осталось ${durShort(ev.deadline - now)}`}</span>}
+      {ev.escalatedAt && <span>у руководителя с {atTime(ev.escalatedAt, now)}</span>}
+    </p>
+  )
+}
+
+const REASON: Record<string, string> = {
+  detector_not_ready: 'распознавание на сервере недоступно, исправление по камерам не подтвердить',
+  no_live_cameras: 'у объекта нет камер с адресом потока',
+  verification_error: 'проверка завершилась ошибкой на сервере',
+}
+/** The server's recheck of a reported fix, as it stands. */
+function CheckState({ ev }: { ev: UiEvent }) {
+  const d = ev.checkDetails
+  const when = ev.checkedAt ? ` в ${atTime(ev.checkedAt)}` : ''
+  const cams = d.configured ? `кадры дали ${d.working ?? 0} из ${d.configured} камер` : null
+  if (ev.check === 'requested')
+    return (
+      <p className="check" data-s="requested">
+        Проверка исправления запрошена. Сервер сверит кадры камер и закроет событие, если нарушение не подтвердится.
+      </p>
+    )
+  if (ev.check === 'failed')
+    return (
+      <p className="check" data-s="failed">
+        Проверка{when}: нарушение сохраняется{cams ? `, ${cams}` : ''}
+        {d.seen?.length ? `; замечены: ${d.seen.join(', ').toLowerCase()}` : ''}.
+      </p>
+    )
+  if (ev.check === 'unavailable')
+    return (
+      <p className="check" data-s="unavailable">
+        Проверка{when} не дала ответа: {(d.reason && REASON[d.reason]) || (cams ? `${cams}, этого недостаточно` : 'данных с камер недостаточно')}.
+      </p>
+    )
+  return null
+}
+
+const EV_WORD: Record<string, string> = {
+  detected: 'Событие зафиксировано',
+  updated: 'Новое наблюдение',
+  assigned: 'Назначен ответственный',
+  status_changed: 'Решение изменено',
+  rejected: 'Отклонено',
+  auto_resolved: 'Камеры подтвердили исправление, событие закрыто',
+  verification_failed: 'Повторная проверка: нарушение сохраняется',
+  verification_unavailable: 'Повторная проверка: данных с камер недостаточно',
+  escalated: 'Срок истёк, событие передано руководителю',
+}
+const WORD = STATUS_WORD as Record<string, string>
+function historyLine(h: ApiIncidentEvent) {
+  const c = h.comment || ''
+  if (h.event_type === 'status_changed') {
+    const m = c.match(/([a-z_]+)\s*->\s*([a-z_]+)/)
+    if (m) return `${WORD[m[1]] ?? m[1]} → ${WORD[m[2]] ?? m[2]}`
+  }
+  if (h.event_type === 'assigned') {
+    const m = c.match(/Ответственный:\s*([^;]+);\s*срок:\s*(\S+)/)
+    if (m) return `Ответственный: ${m[1].trim()} · исправить до ${atTime(new Date(m[2]).getTime())}`
+  }
+  if (h.event_type === 'commented') return c || 'Комментарий'
+  return EV_WORD[h.event_type] ?? (c || h.event_type)
+}
+/** The last time someone decided: the newest status change in the history. */
+function lastDecision(hist: ApiIncidentEvent[] | string | null) {
+  if (!Array.isArray(hist)) return null
+  const t = hist.filter((h) => h.event_type === 'status_changed').map((h) => new Date(h.created_at).getTime())
+  return t.length ? Math.max(...t) : null
+}
+
+function History({ hist, open, onToggle, ev, user, admins }: { hist: ApiIncidentEvent[] | string | null; open: boolean; onToggle: () => void; ev: UiEvent; user: UserProfile; admins: AdminRecipient[] }) {
+  if (ev.sample) return null
+  if (typeof hist === 'string') return <p className="hint">История события не загрузилась: {hist}</p>
+  const list = (hist || []).slice().sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  const who = (id: string | null) => (!id ? null : id === user.id ? 'вы' : id === ev.assigneeId ? ev.assignee : admins.find((a) => a.id === id)?.name ?? null)
+  return (
+    <div className="hist">
+      <button type="button" className="hist-toggle" aria-expanded={open} onClick={onToggle} disabled={!list.length}>
+        <span className="kicker">История события{list.length ? ` · ${list.length}` : ''}</span>
+        {list.length > 0 && <span>{open ? 'Скрыть' : 'Показать'}</span>}
+      </button>
+      {open && (
+        <ol>
+          {list.map((h) => {
+            // an assignment names its person in the line itself
+            const by = h.event_type === 'assigned' ? null : who(h.user_id)
+            return (
+              <li key={h.id}>
+                <time className="mono">{atTime(new Date(h.created_at).getTime())}</time>
+                <span>
+                  {historyLine(h)}
+                  {by && <span className="by"> · {by}</span>}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </div>
   )
 }

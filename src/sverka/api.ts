@@ -3,9 +3,13 @@
  * a failed request throws, and the screen shows what went wrong.
  */
 import { API_BASE_URL, API_PREFIX, getStoredToken, setStoredToken } from '../api/stroyControlApi'
-import type { CameraItem, ProjectItem, StageItem, UserProfile, ZoneItem } from '../api/stroyControlApi'
+import type { AdminRecipient, AlertNotificationItem, CameraItem, IncidentEventItem, ProjectAlertSettings, ProjectItem, StageItem, UserProfile, ZoneItem } from '../api/stroyControlApi'
+import type { CostBasis, InactionCurve, InactionPoint } from '../api/managementApi'
 
-export type { CameraItem, ProjectItem, StageItem, UserProfile, ZoneItem }
+export type { AdminRecipient, CameraItem, CostBasis, InactionCurve, InactionPoint, ProjectItem, StageItem, UserProfile, ZoneItem }
+export type ApiAlert = AlertNotificationItem
+export type ApiIncidentEvent = IncidentEventItem
+export type AlertSettings = ProjectAlertSettings
 
 export class ApiError extends Error {
   status: number
@@ -84,6 +88,8 @@ export async function me(): Promise<UserProfile | null> {
   }
 }
 export const logout = () => setStoredToken(null)
+export const setMyEmail = (email: string | null) => req<UserProfile>('/auth/me/email', json('PATCH', { email }), 'Не удалось сохранить email')
+export const admins = () => req<AdminRecipient[]>('/auth/admins')
 
 /* projects, zones, cameras */
 export const projects = () => req<ProjectItem[]>('/projects')
@@ -92,6 +98,10 @@ export const createProject = (data: { name: string; address?: string; object_kin
 export const updateProject = (projectId: string, data: { name?: string; code?: string; address?: string; object_kind?: string }) =>
   req<ProjectItem>(`/projects/${projectId}`, json('PATCH', data), 'Не удалось сохранить объект')
 export const deleteProject = (projectId: string) => req<void>(`/projects/${projectId}`, { method: 'DELETE' }, 'Не удалось удалить объект')
+/** Who answers for the object's events, how long they have, and whom an overdue one goes to. */
+export const alertSettings = (projectId: string) => req<AlertSettings>(`/projects/${projectId}/alert-settings`)
+export const saveAlertSettings = (projectId: string, data: Omit<AlertSettings, 'project_id'>) =>
+  req<AlertSettings>(`/projects/${projectId}/alert-settings`, json('PUT', data), 'Не удалось сохранить сроки')
 export const zones = (projectId: string) => req<ZoneItem[]>(`/projects/${projectId}/zones`)
 export const createZone = (projectId: string, data: { name: string; code?: string; description?: string }) =>
   req<ZoneItem>(`/projects/${projectId}/zones`, json('POST', data), 'Не удалось создать зону')
@@ -227,13 +237,33 @@ export interface ApiIncident {
   snapshot_url?: string | null
   album_photos?: { url: string; camera_name?: string; is_primary?: boolean; captured_at?: string }[]
   created_at: string
+  zone_id?: string | null
+  /** when it was first observed (the filmed time for a recording) */
+  first_seen_at?: string | null
+  observed_count?: number
+  /** the task: who answers for it and by when */
+  assigned_user_id?: string | null
+  assignee_name?: string | null
+  sla_deadline?: string | null
+  /** pending → requested → passed | failed | unavailable: the server rechecks the cameras */
+  verification_status?: string
+  last_checked_at?: string | null
+  escalated_at?: string | null
+  verification_details?: { working_cameras?: number; configured_cameras?: number; observed_machinery?: string[]; checked_at?: string; reason?: string }
 }
 export interface IncidentCreate {
   project_id: string
   stage_id?: string | null
   stage_name?: string | null
+  zone_id?: string | null
   zone_name?: string | null
+  camera_id?: string | null
   camera_name?: string | null
+  /** the observed time; without it the server dates the event by when it got it */
+  captured_at?: string
+  /** the same key twice is one observation, so a retry does not count it again */
+  observation_key?: string
+  model_status?: 'valid' | 'unavailable' | 'failed'
   severity: 'ERROR' | 'WARNING'
   discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE'
   machinery_type?: string | null
@@ -243,10 +273,38 @@ export interface IncidentCreate {
   description: string
   album_snapshots?: { camera_name: string; snapshot_base64: string; is_primary?: boolean }[]
 }
-export const incidents = (projectId: string) => req<ApiIncident[]>(`/incidents?project_id=${projectId}&limit=1000`)
+/** The server gives at most 500 latest events of an object. */
+export const JOURNAL_LIMIT = 500
+export const incidents = (projectId: string) => req<ApiIncident[]>(`/incidents?project_id=${projectId}&limit=${JOURNAL_LIMIT}`)
 export const createIncident = (data: IncidentCreate) => req<ApiIncident>('/incidents', json('POST', data), 'Не удалось сохранить событие')
-export const setIncidentStatus = (id: string, status: string) =>
-  req<ApiIncident>(`/incidents/${id}/status`, json('PATCH', { status }), 'Не удалось сохранить решение')
+/** `resolved` does not close the event: it asks the server to recheck the cameras. `keepalive` lets a decision leave with the page. */
+export const setIncidentStatus = (id: string, status: string, keepalive = false) =>
+  req<ApiIncident>(`/incidents/${id}/status`, { ...json('PATCH', { status }), keepalive }, 'Не удалось сохранить решение')
+export const incidentEvents = (id: string) => req<ApiIncidentEvent[]>(`/incidents/${id}/events`, {}, 'История события не загрузилась')
+/** A scenario estimate for this event only; reading it calls no model and changes nothing. */
+export const inactionCost = (id: string, signal?: AbortSignal) => req<InactionCurve>(`/incidents/${id}/inaction-cost`, { signal }, 'Расчёт не загрузился')
+
+/* weather: a seven-day forecast for the object's address. Servers without it answer 404. */
+export interface WeatherDay {
+  forecast_date: string
+  fetched_at: string
+  weather_code: number | null
+  temperature_min_c: number | null
+  temperature_max_c: number | null
+  precipitation_mm: number | null
+  snowfall_cm: number | null
+  wind_gust_kmh: number | null
+  conditions: string[]
+  warnings: string[]
+}
+export interface Weather { project_id: string; timezone: string; location_configured: boolean; resolved_address: string | null; days: WeatherDay[] }
+export const weather = (projectId: string) => req<Weather>(`/projects/${projectId}/weather`, {}, 'Прогноз не загрузился')
+/** Asks the weather service again (and finds the address if it changed). */
+export const refreshWeather = (projectId: string) => req<Weather>(`/projects/${projectId}/weather/refresh`, { method: 'POST' }, 'Прогноз не обновился')
+
+/* tasks: the user's inbox of assignments, escalations and confirmed fixes */
+export const alerts = () => req<ApiAlert[]>('/alerts?limit=100')
+export const markAlertRead = (id: string) => req<ApiAlert>(`/alerts/${id}/read`, { method: 'PATCH' }, 'Не удалось отметить уведомление')
 export const resetProfile = (stageId: string) =>
   req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`, { method: 'DELETE' }, 'Не удалось сбросить профиль')
 export const incidentConfig = () => req<{ violation_evaluation_window_seconds: number }>('/incidents/config')

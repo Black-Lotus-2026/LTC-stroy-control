@@ -1,14 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CameraItem, ProjectItem, ZoneItem } from '../api'
+import type { AdminRecipient, AlertSettings, CameraItem, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import type { NumKey, Observation, Settings as S } from '../model'
 import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
-import { clock, durShort, hhmmss, toLocalInput } from '../lib/format'
+import { clock, durShort, hhmmss, plural, toLocalInput } from '../lib/format'
 import { Spring, clamp } from '../lib/spring'
 import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift' | 'object'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object'
+
+/** The server side of tasks: who answers for the object's events, the deadlines, the user's email. */
+export interface TaskActions {
+  load: () => Promise<AlertSettings>
+  save: (d: Omit<AlertSettings, 'project_id'>) => Promise<AlertSettings>
+  saveEmail: (email: string | null) => Promise<void>
+}
 
 export interface ObjectActions {
   counts: { stages: number; events: number }
@@ -34,6 +41,10 @@ export function SettingsSheet({
   onCheck,
   onRecording,
   onClose,
+  user,
+  admins,
+  tasks,
+  weather,
   objectActions,
 }: {
   tab: SheetTab
@@ -48,6 +59,11 @@ export function SettingsSheet({
   onCheck: Probe
   onRecording: (f: File, start: number) => void
   onClose: () => void
+  user: UserProfile
+  admins: AdminRecipient[]
+  tasks: TaskActions
+  /** the forecast, to say which place the address was found as */
+  weather: Weather | null
   objectActions: ObjectActions
 }) {
   const [tab, setTab] = useState<SheetTab>(initialTab)
@@ -109,7 +125,7 @@ export function SettingsSheet({
     if (n.errAfter <= n.warnAfter) n.errAfter = STEPS.errAfter.find((v) => v > n.warnAfter) ?? n.errAfter
     onSettings(n)
   }
-  const row = (p: { k: NumKey; title: string; desc: string; where?: string }) => <SetRow key={p.k} {...p} settings={settings} onStep={set} onSettings={onSettings} />
+  const row = (p: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean }) => <SetRow key={p.k} {...p} settings={settings} onStep={set} onSettings={onSettings} />
 
   return (
     <>
@@ -132,6 +148,7 @@ export function SettingsSheet({
               ['control', 'Контроль'],
               ['sources', 'Источники'],
               ['shift', 'Смена'],
+              ['tasks', 'Задачи'],
               ['object', 'Объект'],
             ] as const
           ).map(([k, v]) => (
@@ -144,7 +161,7 @@ export function SettingsSheet({
         <div className="sheet-body">
           {tab === 'control' && (
             <>
-              {row({ k: "window", title: "Окно сверки", desc: "Техника считается замеченной, если найдена хотя бы на одном кадре любого источника за это время.", where: "Сохраняется на сервере" })}
+              {row({ k: "window", title: "Окно сверки", desc: "Техника считается замеченной, если найдена хотя бы на одном кадре любого источника за это время.", ...(user.role === 'admin' ? { where: 'Сохраняется на сервере' } : { where: 'Общее для сервера, меняет администратор', locked: true }) })}
               {row({ k: "conf", title: "Порог уверенности распознавания", desc: "Рамки с меньшей уверенностью не учитываются и не показываются." })}
               {row({ k: "warnAfter", title: "Предупреждение, если обязательной техники нет", desc: "Общее значение. У отдельной техники на этапе можно задать своё в правиле." })}
               {row({ k: "errAfter", title: "Отклонение, если её нет", desc: "После этого времени предупреждение считается отклонением." })}
@@ -181,7 +198,8 @@ export function SettingsSheet({
             </>
           )}
           {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} />}
-          {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} a={objectActions} />}
+          {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} />}
+          {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
           {tab === 'shift' && (
             <>
               {row({ k: "shiftFrom", title: "Начало смены", desc: "Вне смены отсутствие техники не считается отклонением." })}
@@ -197,25 +215,29 @@ export function SettingsSheet({
 
 const fmtVal = (k: NumKey, v: number) => (k === 'conf' ? `${v}%` : k === 'window' ? `${v} с` : k === 'shiftFrom' || k === 'shiftTo' ? clock(v) : durShort(v * 1000))
 
-function SetRow({ k, title, desc, where, settings, onStep, onSettings }: { k: NumKey; title: string; desc: string; where?: string; settings: S; onStep: (k: NumKey, d: number) => void; onSettings: (s: S) => void }) {
+function SetRow({ k, title, desc, where, locked = false, settings, onStep, onSettings }: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean; settings: S; onStep: (k: NumKey, d: number) => void; onSettings: (s: S) => void }) {
   return (
     <div className="set-row">
       <div>
         <h4>{title}</h4>
         <p>{desc}</p>
       </div>
-      <div className="stepper">
-        <button type="button" aria-label={`${title}: меньше`} onClick={() => onStep(k, -1)}>
-          −
-        </button>
-        <output aria-live="polite">{fmtVal(k, settings[k])}</output>
-        <button type="button" aria-label={`${title}: больше`} onClick={() => onStep(k, 1)}>
-          +
-        </button>
-      </div>
+      {locked ? (
+        <output className="set-val">{fmtVal(k, settings[k])}</output>
+      ) : (
+        <div className="stepper">
+          <button type="button" aria-label={`${title}: меньше`} onClick={() => onStep(k, -1)}>
+            −
+          </button>
+          <output aria-live="polite">{fmtVal(k, settings[k])}</output>
+          <button type="button" aria-label={`${title}: больше`} onClick={() => onStep(k, 1)}>
+            +
+          </button>
+        </div>
+      )}
       <div className="def">
         По умолчанию: {fmtVal(k, DEFAULTS[k])}
-        {settings[k] !== DEFAULTS[k] && (
+        {settings[k] !== DEFAULTS[k] && !locked && (
           <>
             <span className="changed">изменено</span>
             <button type="button" onClick={() => onSettings({ ...settings, [k]: DEFAULTS[k] })}>
@@ -492,7 +514,7 @@ export function RecordingForm({ onSubmit, onCancel }: { onSubmit: (f: File, star
 }
 
 /* ── Object: its card, the zones of the site, and deleting it ─────────────── */
-function ObjectPane({ project, zones, cameras, a }: { project: ProjectItem; zones: ZoneItem[]; cameras: CameraItem[]; a: ObjectActions }) {
+function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectItem; zones: ZoneItem[]; cameras: CameraItem[]; weather: Weather | null; a: ObjectActions }) {
   const init = { name: project.name, code: project.code || '', address: project.address || '', object_kind: project.object_kind || KINDS[0] }
   const [f, setF] = useState(init)
   const [st, setSt] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
@@ -555,6 +577,7 @@ function ObjectPane({ project, zones, cameras, a }: { project: ProjectItem; zone
             {st.s === 'error' && <span className="err-line">{st.msg}</span>}
           </div>
         </form>
+        {weather && <p className="hint">{weather.resolved_address ? `Погода в плане — для места «${weather.resolved_address}».` : weather.location_configured ? 'Погода: место по этому адресу не найдено, прогноза нет.' : 'Укажите адрес, и в плане появится прогноз погоды на неделю.'}</p>}
         <p className="hint">Тип объекта пока только подписывает объект: сервер не учитывает его, когда сопоставляет этапы плана со справочником.</p>
       </section>
 
@@ -699,5 +722,179 @@ function ZoneForm({ initial, onSubmit, onCancel }: { initial?: ZoneDraft; onSubm
         </button>
       </div>
     </form>
+  )
+}
+
+/* ── Tasks: who answers for the object's events, by when, and where the copies go ─────────── */
+const ERR_STEPS = [15, 30, 60, 120, 240, 480, 1440, 2880, 4320, 10080]
+const WARN_STEPS = [60, 240, 480, 1440, 2880, 4320, 10080, 20160, 43200]
+const DEF_ERR = 120
+const DEF_WARN = 1440
+/** "45 мин", "2 ч", "1 день 4 ч" */
+function minutes(m: number) {
+  if (m < 60) return `${m} мин`
+  if (m < 1440) return durShort(m * 60_000)
+  const d = Math.floor(m / 1440)
+  const h = Math.round((m % 1440) / 60)
+  return `${d} ${plural(d, 'день', 'дня', 'дней')}${h ? ` ${h} ч` : ''}`
+}
+const editable = (r: Omit<AlertSettings, 'project_id'>) => ({ owner_username: r.owner_username ?? null, escalation_user_id: r.escalation_user_id ?? null, alert_error_deadline_minutes: r.alert_error_deadline_minutes, alert_warning_deadline_minutes: r.alert_warning_deadline_minutes })
+/** The next value on the scale, from wherever the server's value happens to be. */
+function stepFrom(steps: number[], v: number, d: number) {
+  if (d > 0) return steps.find((x) => x > v) ?? steps[steps.length - 1]
+  return [...steps].reverse().find((x) => x < v) ?? steps[0]
+}
+
+function TasksPane({ project, user, admins, a }: { project: ProjectItem; user: UserProfile; admins: AdminRecipient[]; a: TaskActions }) {
+  const admin = user.role === 'admin'
+  const fromProject = editable({ owner_username: project.owner_username ?? null, escalation_user_id: project.escalation_user_id ?? null, alert_error_deadline_minutes: project.alert_error_deadline_minutes ?? DEF_ERR, alert_warning_deadline_minutes: project.alert_warning_deadline_minutes ?? DEF_WARN })
+  const [base, setBase] = useState(fromProject)
+  const [f, setF] = useState(fromProject)
+  const [st, setSt] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
+  const [email, setEmail] = useState(user.email || '')
+  const [mail, setMail] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
+  // the object list may be older than the settings: read them once more from the server
+  useEffect(() => {
+    let alive = true
+    a.load().then(
+      (r) => {
+        if (!alive) return
+        setBase(editable(r))
+        setF(editable(r))
+      },
+      () => undefined,
+    )
+    return () => {
+      alive = false
+    }
+    // once per object
+  }, [project.id])
+  const dirty = (Object.keys(base) as (keyof typeof base)[]).some((k) => (f[k] ?? '') !== (base[k] ?? ''))
+  const chief = admins.find((x) => x.id === f.escalation_user_id)
+  const save = async () => {
+    setSt({ s: 'saving' })
+    try {
+      const d = editable(await a.save({ ...f, owner_username: f.owner_username?.trim() || null }))
+      setBase(d)
+      setF(d)
+      setSt({ s: 'saved' })
+    } catch (e) {
+      setSt({ s: 'error', msg: e instanceof Error ? e.message : 'Не удалось сохранить' })
+    }
+  }
+  const stepper = (k: 'alert_error_deadline_minutes' | 'alert_warning_deadline_minutes', steps: number[], title: string) => (
+    <div className="stepper">
+      <button type="button" aria-label={`${title}: меньше`} onClick={() => setF({ ...f, [k]: stepFrom(steps, f[k], -1) })}>
+        −
+      </button>
+      <output aria-live="polite">{minutes(f[k])}</output>
+      <button type="button" aria-label={`${title}: больше`} onClick={() => setF({ ...f, [k]: stepFrom(steps, f[k], 1) })}>
+        +
+      </button>
+    </div>
+  )
+  return (
+    <>
+      <section className="obj-sec">
+        <span className="kicker">Ответственность</span>
+        <p className="hint">Каждое событие становится задачей: ответственный получает её со сроком исправления. После срока сервер проверяет камеры и, если нарушение осталось, передаёт событие руководителю.</p>
+        <div className="set-row">
+          <div>
+            <h4>Ответственный за объект</h4>
+            <p>Получает задачи по событиям объекта. Без него задачи получает администратор.</p>
+          </div>
+          {admin ? (
+            <input className="input mono set-input" value={f.owner_username ?? ''} onChange={(e) => setF({ ...f, owner_username: e.target.value })} placeholder="логин" aria-label="Логин ответственного" />
+          ) : (
+            <output className="set-val">{f.owner_username || 'не назначен'}</output>
+          )}
+          {!admin && <div className="def">Назначает администратор</div>}
+        </div>
+        <div className="set-row">
+          <div>
+            <h4>Руководитель для эскалации</h4>
+            <p>Получает событие, если срок истёк, а нарушение осталось или проверить его по камерам не удалось.</p>
+          </div>
+          {admin ? (
+            <select className="select set-input" value={f.escalation_user_id ?? ''} onChange={(e) => setF({ ...f, escalation_user_id: e.target.value || null })} aria-label="Руководитель для эскалации">
+              <option value="">Первый администратор</option>
+              {admins.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name} ({x.username})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <output className="set-val">{chief ? chief.name : 'первый администратор'}</output>
+          )}
+          {!admin && <div className="def">Назначает администратор</div>}
+        </div>
+        <div className="set-row">
+          <div>
+            <h4>Срок для отклонения</h4>
+            <p>Сколько времени у ответственного, чтобы исправить отклонение.</p>
+          </div>
+          {stepper('alert_error_deadline_minutes', ERR_STEPS, 'Срок для отклонения')}
+          <div className="def">
+            По умолчанию: {minutes(DEF_ERR)}
+            <span>На сервере</span>
+          </div>
+        </div>
+        <div className="set-row">
+          <div>
+            <h4>Срок для предупреждения</h4>
+            <p>Предупреждения не так срочны, но тоже закрываются проверкой.</p>
+          </div>
+          {stepper('alert_warning_deadline_minutes', WARN_STEPS, 'Срок для предупреждения')}
+          <div className="def">
+            По умолчанию: {minutes(DEF_WARN)}
+            <span>На сервере</span>
+          </div>
+        </div>
+        <div className="form-actions">
+          <button type="button" className="btn small primary" disabled={!dirty || st.s === 'saving'} onClick={save}>
+            {st.s === 'saving' ? 'Сохраняем…' : 'Сохранить'}
+          </button>
+          {dirty && (
+            <button type="button" className="btn small ghost" onClick={() => { setF(base); setSt({ s: 'idle' }) }}>
+              Отменить правки
+            </button>
+          )}
+          {st.s === 'saved' && !dirty && <span className="save-state" data-s="saved">Сохранено</span>}
+          {st.s === 'error' && <span className="err-line">{st.msg}</span>}
+        </div>
+        <p className="hint">Срок назначается событию, когда оно создаётся: новые сроки действуют для новых событий.</p>
+      </section>
+      <section className="obj-sec">
+        <span className="kicker">Мои уведомления</span>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault()
+            setMail({ s: 'saving' })
+            try {
+              await a.saveEmail(email.trim() || null)
+              setMail({ s: 'saved' })
+            } catch (err) {
+              setMail({ s: 'error', msg: err instanceof Error ? err.message : 'Не удалось сохранить email' })
+            }
+          }}
+        >
+          <div className="form-grid two-col">
+            <label style={{ gridColumn: '1 / -1' }}>
+              Email для копий задач
+              <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button type="submit" className="btn small" disabled={mail.s === 'saving' || email.trim() === (user.email || '')}>
+              {mail.s === 'saving' ? 'Сохраняем…' : 'Сохранить email'}
+            </button>
+            {mail.s === 'saved' && email.trim() === (user.email || '') && <span className="save-state" data-s="saved">Сохранено</span>}
+            {mail.s === 'error' && <span className="err-line">{mail.msg}</span>}
+          </div>
+        </form>
+        <p className="hint">Задачи всегда видны в шапке. Письма уходят, только если на сервере настроена почта.</p>
+      </section>
+    </>
   )
 }

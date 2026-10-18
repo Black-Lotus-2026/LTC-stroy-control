@@ -50,6 +50,9 @@ export const fmtDay = (d: Date | number) => {
 
 export const DAY_MS = 864e5
 
+/** "16:05" today, "19 октября, 16:05" on another day: deadlines and decisions span days. */
+export const atTime = (t: number, now = Date.now()) => (dayStart(t) === dayStart(now) ? hhmm(t) : `${fmtDay(t)}, ${hhmm(t)}`)
+
 /** Local calendar day of a timestamp (00:00 local). Stages are planned in whole days. */
 export function dayStart(t: number | Date) {
   const d = new Date(typeof t === 'number' ? t : t.getTime())

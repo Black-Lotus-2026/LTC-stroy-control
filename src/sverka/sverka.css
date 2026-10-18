@@ -1721,6 +1721,96 @@ button.ctx#ctxZone { cursor: pointer; }
 }
 @keyframes itFadeOnly { from { opacity: 0; } }
 
+/* ── Tasks: deadlines, rechecks, history, the price of inaction ── */
+/* the tasks button appears with the first task; the count only while something is unread */
+.tasks-btn { position: relative; }
+.tasks-btn .t-count { position: absolute; top: 2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--err); color: var(--on-status); font: 600 10px/16px var(--f-ui); text-align: center; box-shadow: 0 0 0 2px var(--bg); }
+.menu.wide { width: 400px; max-width: calc(100vw - 16px); }
+.menu .tasks-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 6px 8px 10px; }
+/* the menu's own button rule must not reach the segments */
+.menu .tasks-head .seg { grid-template-columns: repeat(3, auto); }
+.menu .tasks-head .seg button { display: block; width: auto; height: 26px; padding: 0 9px; border-radius: 6px; text-align: center; font-size: 12px; }
+.menu .tasks-head .seg button:hover { background: none; }
+.menu .tasks-head .seg button:focus-visible { background: none; outline: 2px solid var(--plan-2); outline-offset: -2px; }
+.menu .tasks-head .seg .pill { height: 26px; }
+.menu .task .t-mark { width: 8px; height: 8px; margin: 6px 0 0 5px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--fg-4); }
+.menu .task[data-unread] .t-mark { background: var(--warn); box-shadow: none; }
+.menu .task[data-kind="escalated"][data-unread] .t-mark { background: var(--err); }
+.menu .task[data-kind="verified"][data-unread] .t-mark { background: var(--ok); }
+.menu .task b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu .task:not([data-unread]) b { color: var(--fg-2); font-weight: 400; }
+.menu .m-note { padding: 8px 10px 6px 38px; color: var(--fg-3); font-size: 12px; }
+.menu .task small .late, .q-done .late, .q-card .q-sub .late { color: var(--err); }
+.q-done em.late { font-style: normal; }
+.q-done .who { color: var(--fg-4); }
+
+/* the case: who answers for it and by when */
+.task-line { margin: 8px 0 0; font-size: 13px; color: var(--fg-2); text-wrap: pretty; }
+.task-line > span + span::before { content: " · "; color: var(--fg-4); }
+.task-line b { color: var(--fg); font-weight: 500; }
+.task-line[data-late] .when { color: var(--err); }
+.check { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12.5px; color: var(--fg-2); }
+.check[data-s="requested"] { border-color: color-mix(in srgb, var(--info) 38%, transparent); }
+.check[data-s="failed"] { border-color: color-mix(in srgb, var(--err) 42%, transparent); color: var(--fg); }
+.check[data-s="unavailable"] { background: var(--hatch), var(--bg-2); }
+.decided .hint { color: var(--fg-3); }
+.hist { border-top: 1px solid var(--line); }
+.hist-toggle { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0 8px; color: var(--fg-3); font-size: 12.5px; }
+.hist-toggle:hover:not([disabled]) { color: var(--fg-2); }
+.hist-toggle[disabled] { cursor: default; }
+.hist ol { list-style: none; margin: 0; padding: 0 0 4px; display: flex; flex-direction: column; gap: 7px; }
+.hist li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; font-size: 12.5px; color: var(--fg-2); }
+.hist li time { min-width: 40px; color: var(--fg-3); font-size: 11.5px; white-space: nowrap; padding-top: 1px; }
+.hist .by { color: var(--fg-3); }
+
+/* the conclusion's price: a scenario estimate, drawn in the colours of fact, not of alarm */
+.cost { margin-top: 10px; padding: 12px 12px 10px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); }
+.cost .c-line { font-size: 13.5px; color: var(--fg-2); }
+.cost .c-sum { font: 400 22px/1.1 var(--f-display); letter-spacing: -0.01em; color: var(--fg); white-space: nowrap; }
+.cost .c-sub { margin-top: 3px; font-size: 12px; color: var(--fg-3); }
+.cost .c-doubt { color: var(--warn); }
+.cost .c-chart { display: block; width: 100%; height: 72px; margin-top: 10px; cursor: crosshair; touch-action: pan-y; }
+.cost .c-chart:focus-visible { outline: 2px solid var(--plan-2); outline-offset: 2px; border-radius: 4px; }
+.cost .c-area { fill: color-mix(in srgb, var(--fg) 6%, transparent); }
+.cost .c-curve { fill: none; stroke: var(--fg-2); stroke-width: 1.5; stroke-linejoin: round; }
+.cost .c-pt { fill: var(--fg-3); }
+.cost .c-mark line { stroke: var(--fg-3); stroke-width: 1; stroke-dasharray: 2 3; }
+.cost .c-mark circle { fill: var(--fg); stroke: var(--bg-2); stroke-width: 2; }
+.cost .c-axis { display: flex; justify-content: space-between; margin-top: 4px; font: 400 11px/1 var(--f-mono); color: var(--fg-4); }
+.cost .c-why { margin-top: 9px; font-size: 12.5px; color: var(--fg-3); border-bottom: 1px dotted var(--fg-4); }
+.cost .c-why:hover { color: var(--fg-2); }
+.cost .c-basis { margin-top: 8px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--fg-2); }
+.cost .c-basis p { margin: 0; font-size: 12.5px; color: var(--fg-2); }
+.cost .c-b { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 10px; }
+.cost .c-b b { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
+.cost .c-b small { grid-column: 1 / -1; color: var(--fg-3); font-size: 11.5px; }
+.cost .c-basis > small { color: var(--fg-4); font-size: 11.5px; }
+.step .cost-none { margin: 8px 0 0; font-size: 12.5px; color: var(--fg-3); }
+
+/* the week's weather in the stage card: the stage's own days in full ink, the rest faded */
+.wx { margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line); }
+.wx-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 8px; }
+.wx-day { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0 5px; border-radius: 6px; color: var(--fg); }
+.wx-day[data-out] { opacity: .42; }
+.wx-day[data-now] { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.wx-day[data-warn] { box-shadow: inset 0 -2px 0 var(--warn); }
+.wx-d { font-size: 11px; color: var(--fg-3); }
+.wx-glyph { width: 20px; height: 20px; color: var(--fg-2); }
+.wx-t { font: 500 12px/1 var(--f-mono); }
+.wx-t2 { font: 400 11px/1 var(--f-mono); color: var(--fg-3); }
+.wx-alert { margin: 8px 0 0; font-size: 12.5px; color: var(--warn); }
+.wx-src { display: block; margin-top: 8px; font-size: 11px; color: var(--fg-4); }
+.wx-src a { color: inherit; }
+.wx-place { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-lead-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.wx-soon { font-size: 12px; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wx-soon::before { content: "· "; color: var(--fg-4); }
+
+/* settings: a server value shown as it is, and a field in a settings row */
+.set-row .set-val { font: 500 13px/1 var(--f-mono); color: var(--fg-2); justify-self: end; }
+.set-row .set-input { width: 200px; height: 34px; }
+@media (max-width: 860px) { .set-row .set-input { width: 100%; grid-column: 1 / -1; } }
+
 /* ── Light theme: what tokens alone do not carry ──────────── */
 /* shadows on paper are short and warm; the dark ones would read as smudges */
 :root[data-theme="light"] :is(.pop, .menu, .pf-detail) { box-shadow: 0 22px 54px -22px rgba(52, 42, 24, .26), 0 0 0 1px rgba(30, 27, 20, .03); }

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as api from './api'
-import type { ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
+import type { AdminRecipient, ApiAlert, ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, OBSERVED_LINE, STATUS_WORD, evaluate, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
@@ -21,6 +21,7 @@ import { Setup } from './parts/Setup'
 import { Auth } from './parts/Auth'
 import { Journal } from './parts/Journal'
 import { Intro, Showcase } from './parts/Intro'
+import { TaskList } from './parts/Tasks'
 
 export function SverkaApp() {
   const [user, setUser] = useState<UserProfile | null | undefined>(undefined)
@@ -53,6 +54,7 @@ export function SverkaApp() {
             <div className="ws-host" inert={intro === 'on'}>
               <Workspace
                 user={user}
+                onUser={setUser}
                 covered={intro === 'on'}
                 onIntro={showIntro}
                 onLogout={() => {
@@ -105,7 +107,7 @@ const store = {
   },
 }
 
-function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; covered: boolean; onIntro: () => void; onLogout: () => void }) {
+function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserProfile; onUser: (u: UserProfile) => void; covered: boolean; onIntro: () => void; onLogout: () => void }) {
   const toast = useToast()
   const [engine] = useState(() => new Engine())
   const obs = useObservation(engine)
@@ -130,7 +132,13 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
   const [sheet, setSheet] = useState<SheetTab | null>(null)
   const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
-  const [menu, setMenu] = useState<null | { kind: 'project' | 'user'; anchor: DOMRect }>(null)
+  const [menu, setMenu] = useState<null | { kind: 'project' | 'user' | 'tasks'; anchor: DOMRect }>(null)
+  const [alerts, setAlerts] = useState<ApiAlert[]>([])
+  // the forecast for the object's address; null where the server has none
+  const [weather, setWeather] = useState<api.Weather | null>(null)
+  const [admins, setAdmins] = useState<AdminRecipient[]>([])
+  // an event to open once its object has loaded (a task of another object)
+  const wantCase = useRef<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const loadToken = useRef(0)
@@ -140,7 +148,8 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
   const created = useRef(new Map<string, string | number>())
   const lastSaveError = useRef(0)
 
-  const visible = useMemo(() => (projects || []).filter((p) => user.role === 'admin' || !p.owner_username || p.owner_username === user.username), [projects, user])
+  // the server gives a non-admin only the objects they own (an object without an owner is the administrator's)
+  const visible = useMemo(() => (projects || []).filter((p) => user.role === 'admin' || p.owner_username === user.username), [projects, user])
   const project = creating ? null : visible.find((p) => p.id === projectId) ?? visible[0] ?? null
 
   /* projects */
@@ -149,7 +158,24 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
       setLoadError(e.message)
       setProjects([])
     })
+    api.admins().then(setAdmins, () => undefined)
   }, [])
+
+  /* tasks of this user across objects: assignments, escalations, confirmed fixes */
+  useEffect(() => {
+    let alive = true
+    const load = () =>
+      api.alerts().then(
+        (a) => alive && setAlerts(a),
+        () => undefined,
+      )
+    load()
+    const timer = window.setInterval(load, 15_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [user.id])
 
   /* everything below belongs to one object; a late answer for a previous object is dropped */
   useEffect(() => {
@@ -169,6 +195,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
     setCaseOpen(null)
     setRule(null)
     setJournal(null)
+    setWeather(null)
     if (!project) {
       if (projects) setSetupOpen(true)
       return
@@ -183,29 +210,51 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
         setCameras(c)
         engine.setCameras(c)
         setStages(toStages(s))
-        setEvents(inc.map((i) => toEvent(i, api.mediaUrl)))
+        setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
         if (cfg) setSettingsState((x) => ({ ...x, window: cfg.violation_evaluation_window_seconds }))
         setLoaded(true)
         setLoadError(null)
-        if (!s.length || !c.length) setSetupOpen(true)
+        const want = wantCase.current
+        wantCase.current = null
+        if (want && inc.some((i) => i.id === want)) setCaseOpen({ id: want, origin: null })
+        else if (!s.length || !c.length) setSetupOpen(true)
       })
       .catch((e: Error) => {
         if (token !== loadToken.current) return
         setLoadError(e.message)
         setLoaded(true)
       })
+    loadWeather(project.id, token)
   }, [project?.id, projects == null])
 
-  /* refresh the journal now and then (decisions from other operators) */
+  /* the forecast is extra: a server without it (404) or a weather service that is down leaves the plan as it was */
+  const noWeather = useRef(false)
+  const loadWeather = (id: string, token: number, fresh = false) => {
+    if (noWeather.current) return
+    const ask = fresh ? api.refreshWeather(id) : api.weather(id)
+    ask
+      .then((w) => {
+        if (token !== loadToken.current) return
+        setWeather(w)
+        // a saved forecast that is short or for an old address is asked for again, once
+        if (!fresh && w.location_configured && (w.days.length < 7 || !w.resolved_address)) loadWeather(id, token, true)
+      })
+      .catch((e) => {
+        // the server has no forecast at all: do not ask again in this session
+        if (!fresh && e instanceof api.ApiError && e.status === 404) noWeather.current = true
+      })
+  }
+
+  /* refresh the journal now and then: decisions of others, deadlines, the server's rechecks */
   useEffect(() => {
     if (!project) return
     const id = project.id
     const timer = window.setInterval(() => {
       api.incidents(id).then((inc) => {
         if (id !== project.id) return
-        setEvents(inc.map((i) => toEvent(i, api.mediaUrl)))
+        setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
       }, () => undefined)
-    }, 60_000)
+    }, 15_000)
     return () => clearInterval(timer)
   }, [project])
 
@@ -213,7 +262,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
     const prev = settings
     setSettingsState(s)
     if (project) saveSettings(project.id, s)
-    if (s.window !== prev.window)
+    if (s.window !== prev.window && user.role === 'admin')
       api.setIncidentConfig(s.window).catch((e: Error) => {
         toast(`Окно сверки не сохранено на сервере: ${e.message}`, { error: true })
       })
@@ -295,10 +344,13 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
     const names = live.map((s) => s.name).join(', ')
     const demo = obs.model === 'demo'
     const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; ${demo ? 'распознавание в демо-режиме' : 'распознавание работает'}, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
-    // context the server has no fields for travels in the description and is read back on reload
-    const tail = (since: number) => [`${OBSERVED_LINE}${new Date(since).toISOString()}`, ...(demo ? [DEMO_LINE] : [])]
+    // demo recognition has no field on the server: it travels in the description and is read back on reload
+    const tail = demo ? [DEMO_LINE] : []
+    // the event belongs to the source it is shown on, and to that camera's zone
+    const src = live.find((x) => x.id === selected) ?? live[0]
+    const where = { zone_id: zoneIdOf(src?.id), zone_name: zoneOf(src?.id), camera_id: cameras.some((c) => c.id === src?.id) ? src!.id : null, camera_name: src?.name ?? null }
     const open = (code: Code, kind: 'missing' | 'oop') => [...meta.current].some(([id, m]) => m.code === code && m.kind === kind && m.stageId === stage.id && !episodes.get(id)?.to)
-    const make = (key: string, kind: 'missing' | 'oop', code: Code, since: number, payload: Omit<api.IncidentCreate, 'project_id'>) => {
+    const make = (key: string, kind: 'missing' | 'oop', code: Code, since: number, payload: Omit<api.IncidentCreate, 'project_id' | keyof typeof where>) => {
       const c = created.current.get(key)
       if ((typeof c === 'string') || (typeof c === 'number' && Date.now() < c) || open(code, kind)) return
       // one open event per machine and stage: after a reload, adopt the pending one from the journal
@@ -313,8 +365,13 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
       const shots = engine.liveSnapshots()
       api
         .createIncident({
+          ...where,
           ...payload,
           project_id: project.id,
+          captured_at: new Date(since).toISOString(),
+          observation_key: key,
+          // demo detections are not the model's: the server is not told they are
+          ...(demo ? {} : { model_status: 'valid' as const }),
           album_snapshots: shots.map((x, i) => ({ camera_name: x.name, snapshot_base64: x.snapshot, is_primary: selected ? x.id === selected : i === 0 })),
         })
         .then((res) => {
@@ -337,8 +394,6 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
       make(`${stage.id}|miss|${s.code}|${Math.round(s.since / 1000)}`, 'missing', s.code, s.since, {
         stage_id: stage.id,
         stage_name: stage.name,
-        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
-        camera_name: live[0]?.name ?? null,
         severity: s.sev === 'err' ? 'ERROR' : 'WARNING',
         discrepancy_type: 'MISSING_MANDATORY',
         machinery_type: MACH[s.code].name,
@@ -349,7 +404,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           `Правило: ${MACH[s.code].name} — обязательная техника этапа «${stage.name}» (${Math.round(s.p * 100)}% по справочнику${s.edited ? ', изменено вручную' : ''}); предупреждение через ${durShort(s.warnAfter * 1000)}.`,
           `Наблюдение: с ${hhmmss(s.since)} ${MACH[s.code].lower} не найден ни на одном источнике (${names}).${others.length ? ` При этом замечены: ${others.join(', ')}.` : ''}`,
           quality,
-          ...tail(s.since),
+          ...tail,
         ].join('\n'),
       })
     }
@@ -359,8 +414,6 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
       make(`${stage.id}|rec|${s.code}|${Math.round(s.since / 1000)}`, 'missing', s.code, s.since, {
         stage_id: stage.id,
         stage_name: stage.name,
-        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
-        camera_name: live[0]?.name ?? null,
         severity: 'WARNING',
         discrepancy_type: 'MISSING_RECOMMENDED',
         machinery_type: MACH[s.code].name,
@@ -371,7 +424,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           `Правило: ${MACH[s.code].name} — рекомендуемая техника этапа «${stage.name}» (${Math.round(s.p * 100)}% по справочнику${s.edited ? ', изменено вручную' : ''}); предупреждение через ${durShort(s.warnAfter * 1000)}, отклонением не становится.`,
           `Наблюдение: с ${hhmmss(s.since)} ${MACH[s.code].lower} не найден ни на одном источнике (${names}).`,
           quality,
-          ...tail(s.since),
+          ...tail,
         ].join('\n'),
       })
     }
@@ -380,8 +433,6 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
       make(`${stage.id}|oop|${o.code}|${Math.round(o.since / 1000)}`, 'oop', o.code, o.since, {
         stage_id: stage.id,
         stage_name: stage.name,
-        zone_name: zoneOf(selected && live.some((x) => x.id === selected) ? selected : live[0]?.id),
-        camera_name: live[0]?.name ?? null,
         severity: 'ERROR',
         discrepancy_type: 'UNCHARACTERISTIC_PRESENT',
         machinery_type: MACH[o.code].name,
@@ -392,7 +443,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           `Правило: ${MACH[o.code].name} — нехарактерная техника для этапа «${stage.name}» (${Math.round(o.p * 100)}% по справочнику).`,
           `Наблюдение: с ${hhmmss(o.since)} замечен на источниках: ${o.cams.map((c) => obs.sources.find((x) => x.id === c.src)?.name || c.src).join(', ')}.`,
           quality,
-          ...tail(o.since),
+          ...tail,
         ].join('\n'),
       })
     }
@@ -409,12 +460,16 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           project_id: project.id,
           stage_id: stage?.id ?? null,
           stage_name: stage?.name ?? null,
+          zone_id: zoneIdOf(src.id),
           zone_name: zoneOf(src.id),
+          camera_id: src.id,
           camera_name: src.name,
+          captured_at: new Date(at).toISOString(),
+          observation_key: `${src.id}|${type}|${Math.round(at / 1000)}`,
           severity: type === 'STREAM_LOST' ? 'ERROR' : 'WARNING',
           discrepancy_type: type,
           title,
-          description: [`Наблюдение: ${observation}`, `Качество данных: ${quality}`, `${OBSERVED_LINE}${new Date(at).toISOString()}`].join('\n'),
+          description: [`Наблюдение: ${observation}`, `Качество данных: ${quality}`].join('\n'),
         })
         .then((res) => {
           setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
@@ -473,26 +528,78 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
   })
 
   /* decisions */
-  // a swipe answers instantly (undo right away); the case file waits for the server so "saving" stays visible
-  const decide = async (id: string, status: EventStatus, quiet = false, optimistic = true) => {
+  const rightsOf = (e: UiEvent) => rightsFor(e, user, project?.owner_username)
+  // The server keeps no way back to "ждёт решения". So a swipe answers on screen at once and
+  // leaves for the server only when its undo has expired; until then "Отменить" simply keeps it.
+  const sending = useRef(new Map<string, { status: EventStatus; timer: number }>())
+  const keepUnsent = (e: UiEvent, old: UiEvent[]) => {
+    const w = sending.current.get(e.id)
+    return w ? { ...e, status: w.status, decidedAt: old.find((x) => x.id === e.id)?.decidedAt ?? Date.now() } : e
+  }
+  const sendDecision = async (id: string, status: EventStatus) => {
+    const res = await api.setIncidentStatus(id, status)
+    setEvents((l) => l.map((e) => (e.id === id ? { ...toEvent(res, api.mediaUrl), decidedAt: Date.now() } : e)))
+  }
+  const decideSoon = (id: string, status: EventStatus) => {
+    const before = events.find((e) => e.id === id)
+    if (!before || before.sample || sending.current.has(id)) return
+    setEvents((l) => l.map((e) => (e.id === id ? { ...e, status, decidedAt: Date.now() } : e)))
+    // a little longer than the toast, so the undo is gone before the decision leaves
+    const timer = window.setTimeout(() => {
+      sending.current.delete(id)
+      sendDecision(id, status).catch((e: Error) => {
+        setEvents((l) => l.map((x) => (x.id === id ? before : x)))
+        toast(`Решение не сохранено: ${e.message}`, { error: true, retry: () => decideSoon(id, status) })
+      })
+    }, 7200)
+    sending.current.set(id, { status, timer })
+    toast(`${STATUS_WORD[status]} · ${before.code}`, {
+      undo: () => {
+        clearTimeout(timer)
+        sending.current.delete(id)
+        setEvents((l) => l.map((x) => (x.id === id ? before : x)))
+      },
+    })
+  }
+  /** The case file waits for the server, so "Сохраняем…" and a refusal stay visible there. */
+  const decideNow = async (id: string, status: EventStatus) => {
     const before = events.find((e) => e.id === id)
     if (!before || before.sample) return
-    const done = () => {
-      if (!quiet && status !== 'pending') toast(`${STATUS_WORD[status]} · ${before.code}`, { undo: () => void decide(id, 'pending', true).catch(() => undefined) })
+    await sendDecision(id, status)
+    toast(status === 'resolved' ? `Проверка исправления запрошена · ${before.code}` : `${STATUS_WORD[status]} · ${before.code}`)
+  }
+  // decisions still waiting for their undo leave with the page, or before signing out
+  const flushSending = () => {
+    for (const [id, w] of sending.current) {
+      clearTimeout(w.timer)
+      void api.setIncidentStatus(id, w.status, true).catch(() => undefined)
     }
-    if (optimistic) {
-      setEvents((l) => l.map((e) => (e.id === id ? { ...e, status, decidedAt: Date.now() } : e)))
-      done()
-    }
-    try {
-      const res = await api.setIncidentStatus(id, status)
-      setEvents((l) => l.map((e) => (e.id === id ? { ...toEvent(res, api.mediaUrl), decidedAt: status === 'pending' ? null : Date.now() } : e)))
-      if (!optimistic) done()
-    } catch (e) {
-      setEvents((l) => l.map((x) => (x.id === id ? before : x)))
-      if (optimistic) toast(`Решение не сохранено: ${(e as Error).message}`, { error: true, retry: () => void decide(id, status).catch(() => undefined) })
-      throw e
-    }
+    sending.current.clear()
+  }
+  useEffect(() => {
+    addEventListener('pagehide', flushSending)
+    return () => removeEventListener('pagehide', flushSending)
+  })
+
+  /* tasks */
+  const unread = alerts.filter((a) => !a.read_at).length
+  const readAlert = (a: ApiAlert) => {
+    if (a.read_at) return
+    setAlerts((l) => l.map((x) => (x.id === a.id ? { ...x, read_at: new Date().toISOString() } : x)))
+    api.markAlertRead(a.id).catch(() => undefined)
+  }
+  /** A task opens its event: here, or after switching to its object. */
+  const openAlert = (a: ApiAlert) => {
+    readAlert(a)
+    setMenu(null)
+    if (a.project_id === project?.id) {
+      if (events.some((e) => e.id === a.incident_id)) setCaseOpen({ id: a.incident_id, origin: null })
+      else toast(`${a.incident_code} нет среди последних ${api.JOURNAL_LIMIT} событий объекта`, { error: true })
+    } else if (visible.some((p) => p.id === a.project_id)) {
+      wantCase.current = a.incident_id
+      setProjectId(a.project_id)
+      setCreating(false)
+    } else toast(`${a.incident_code}: объект недоступен в вашем списке. ${a.body}`, { error: true })
   }
 
   /* rules */
@@ -593,6 +700,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
     if (!project) return
     const res = await api.updateProject(project.id, d)
     setProjects((l) => (l || []).map((p) => (p.id === res.id ? { ...p, ...res, owner_username: p.owner_username } : p)))
+    if (weather && (d.address || '').trim() !== (project.address || '').trim()) loadWeather(project.id, loadToken.current, true)
   }
   const deleteProject = async () => {
     if (!project) return
@@ -631,6 +739,10 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
     const cam = cameras.find((c) => c.id === sourceId)
     const z = zones.find((x) => x.id === cam?.zone_id)
     return z?.name ?? (zones.length === 1 ? zones[0].name : null)
+  }
+  const zoneIdOf = (sourceId?: string) => {
+    const cam = cameras.find((c) => c.id === sourceId)
+    return zones.find((x) => x.id === cam?.zone_id)?.id ?? (zones.length === 1 ? zones[0].id : null)
   }
 
   const openRecording = (file: File, start: number) => {
@@ -765,6 +877,15 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           </button>
         )}
         <TimePill obs={obs} onExit={closeRecording} />
+        {alerts.length > 0 && (
+          <button type="button" className="icon-btn tasks-btn" onClick={(e) => setMenu({ kind: 'tasks', anchor: e.currentTarget.getBoundingClientRect() })} aria-haspopup="menu" aria-label={unread ? `Задачи: ${unread} ${plural(unread, 'новая', 'новые', 'новых')}` : 'Задачи'} title="Задачи">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5z" />
+              <path d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+            </svg>
+            {unread > 0 && <span className="t-count">{unread > 9 ? '9+' : unread}</span>}
+          </button>
+        )}
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
@@ -788,10 +909,9 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
             episodes={episodes}
             t={t}
             prof={prof}
+            rightsOf={rightsOf}
             onOpen={(id, el) => setCaseOpen({ id, origin: el.getBoundingClientRect() })}
-            onDecide={(id, status) => {
-              decide(id, status).catch(() => undefined)
-            }}
+            onDecide={(id, status) => decideSoon(id, status)}
             onJournal={(el) => setJournal({ origin: el.getBoundingClientRect() })}
           />
         </aside>
@@ -847,6 +967,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
         open={dockOpen}
         setOpen={setDockOpen}
         shift={{ from: settings.shiftFrom, to: settings.shiftTo }}
+        weather={weather}
       />
 
       {journal && project && (
@@ -871,8 +992,11 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           prof={caseStage ? profiles.get(caseStage.id) ?? null : null}
           obs={obs}
           origin={caseOpen!.origin}
+          rights={rightsOf(caseEvent)}
+          user={user}
+          admins={admins}
           onClose={() => setCaseOpen(null)}
-          onDecide={(status) => decide(caseEvent.id, status, false, false)}
+          onDecide={(status) => decideNow(caseEvent.id, status)}
           onRule={(code) => {
             const sid = caseStage?.id
             setCaseOpen(null)
@@ -915,6 +1039,18 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
           onCheck={api.probeCamera}
           onRecording={openRecording}
           onClose={() => setSheet(null)}
+          user={user}
+          admins={admins}
+          weather={weather}
+          tasks={{
+            load: () => api.alertSettings(project.id),
+            save: async (d) => {
+              const r = await api.saveAlertSettings(project.id, d)
+              setProjects((l) => (l || []).map((p) => (p.id === r.project_id ? { ...p, ...r } : p)))
+              return r
+            },
+            saveEmail: async (email) => onUser(await api.setMyEmail(email)),
+          }}
           objectActions={{
             counts: { stages: stages.length, events: events.filter((e) => !e.sample).length },
             onUpdateProject: updateProject,
@@ -927,8 +1063,10 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
         />
       )}
       {menu && (
-        <Menu anchor={menu.anchor} onClose={() => setMenu(null)}>
-          {menu.kind === 'project' ? (
+        <Menu anchor={menu.anchor} onClose={() => setMenu(null)} wide={menu.kind === 'tasks'}>
+          {menu.kind === 'tasks' ? (
+            <TaskList alerts={alerts} projects={visible} current={project?.id ?? null} onOpen={openAlert} />
+          ) : menu.kind === 'project' ? (
             <>
               <div className="m-k kicker">Объекты</div>
               {visible.map((p) => (
@@ -968,7 +1106,7 @@ function Workspace({ user, covered, onIntro, onLogout }: { user: UserProfile; co
               <div className="m-sep" />
               <ThemeRow />
               <div className="m-sep" />
-              <button type="button" className="m-item" role="menuitem" onClick={onLogout}>
+              <button type="button" className="m-item" role="menuitem" onClick={() => { flushSending(); onLogout() }}>
                 <span />
                 <span><b>Выйти</b></span>
               </button>
@@ -1003,7 +1141,7 @@ function TimePill({ obs, onExit }: { obs: Observation; onExit: () => void }) {
   )
 }
 
-function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => void; children: React.ReactNode }) {
+function Menu({ anchor, onClose, children, wide = false }: { anchor: DOMRect; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   const el = useRef<HTMLDivElement>(null)
   // the app re-renders on every camera frame and passes a fresh onClose each time; the menu must
   // open once per anchor, not replay its entrance (and grab focus) on every frame
@@ -1050,7 +1188,7 @@ function Menu({ anchor, onClose, children }: { anchor: DOMRect; onClose: () => v
     }
   }, [anchor])
   return (
-    <div className="menu" ref={el} role="menu" style={{ opacity: 0 }}>
+    <div className={`menu${wide ? ' wide' : ''}`} ref={el} role="menu" style={{ opacity: 0 }}>
       {children}
     </div>
   )

@@ -1,6 +1,6 @@
-import type { ApiIncident, ApiProfile, StageItem } from './api'
+import type { ApiIncident, ApiProfile, StageItem, UserProfile } from './api'
 import { CODES, MACH, toCode, type Code } from './lib/machinery'
-import { dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
+import { atTime, dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
 
 /* ── Role ───────────────────────────────────────────────── */
 /** The role shown to the user. The server has admin / manager / viewer and no site roles yet,
@@ -302,7 +302,17 @@ export interface UiEvent {
   demo: boolean
   /** an example the server returns for an empty journal; it is not stored, so it cannot be decided */
   sample: boolean
+  /** the task the server opens with the event: who answers for it, by when, and the recheck of the fix */
+  assigneeId: string | null
+  assignee: string | null
+  deadline: number | null
+  check: Check
+  checkedAt: number | null
+  checkDetails: { working?: number; configured?: number; seen?: string[]; reason?: string }
+  escalatedAt: number | null
 }
+/** The server's recheck of a fix: asked for, then passed (the event closes), failed or impossible. */
+export type Check = 'none' | 'requested' | 'passed' | 'failed' | 'unavailable'
 /* Lines our events carry in their description, read back to restore context after a reload. */
 export const OBSERVED_LINE = 'Время наблюдения: '
 export const DEMO_LINE = 'Распознавание: демо-режим, модель недоступна.'
@@ -316,6 +326,27 @@ export const STATUS_WORD: Record<EventStatus, string> = {
 }
 /** Signal lost or back is a fact about a camera, not a hypothesis about the site: nobody confirms it. */
 export const awaitsDecision = (e: UiEvent) => e.status === 'pending' && !e.sample && e.kind !== 'stream'
+/** Closed events stay closed: the server does not reopen them. */
+export const isOpen = (e: UiEvent) => e.status === 'pending' || e.status === 'confirmed' || e.status === 'in_progress'
+/** Confirmed or taken into work, not fixed yet. */
+export const inWork = (e: UiEvent) => !e.sample && e.kind !== 'stream' && (e.status === 'confirmed' || e.status === 'in_progress')
+export const overdue = (e: UiEvent, now: number) => isOpen(e) && e.deadline != null && e.deadline <= now
+
+/** What the user may do with an event. The server checks the same and refuses otherwise. */
+export interface Rights {
+  /** confirm, take into work, report a fix */
+  act: boolean
+  /** mark as false: only an administrator */
+  dismiss: boolean
+  /** why acting is not possible, said instead of the buttons */
+  reason?: string
+}
+export function rightsFor(e: UiEvent, user: UserProfile, owner?: string | null): Rights {
+  if (user.role === 'viewer') return { act: false, dismiss: false, reason: 'Роль наблюдателя: решения принимают ответственный и администратор.' }
+  const admin = user.role === 'admin'
+  if (admin || e.assigneeId === user.id || (!e.assigneeId && owner === user.username)) return { act: true, dismiss: admin }
+  return { act: false, dismiss: false, reason: `Событие назначено${e.assignee ? `: ${e.assignee}` : ' другому пользователю'}. Решение принимает ответственный или администратор.` }
+}
 export const statusWord = (e: UiEvent) => (e.kind === 'stream' ? 'Видеопоток' : STATUS_WORD[e.status])
 /** how an event looks: a camera that came back is news, not a warning */
 export const toneOf = (e: UiEvent) => (e.type === 'STREAM_ONLINE' ? 'info' : e.sev)
@@ -325,8 +356,12 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
   const raw = (a.status || 'pending').toLowerCase()
   const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
   const description = a.description || ''
-  const observed = description.split('\n').find((l) => l.startsWith(OBSERVED_LINE))?.slice(OBSERVED_LINE.length)
+  // older events carry the observed time in the description; newer ones send it to the server
+  const observed = description.split('\n').find((l) => l.startsWith(OBSERVED_LINE))?.slice(OBSERVED_LINE.length) ?? a.first_seen_at
   const observedAt = observed ? new Date(observed).getTime() : NaN
+  const time = (v?: string | null) => (v ? new Date(v).getTime() : null)
+  const v = (a.verification_status || 'pending').toLowerCase()
+  const d = a.verification_details || {}
   return {
     id: a.id,
     code: a.code,
@@ -348,6 +383,13 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     decidedAt: null,
     demo: description.includes(DEMO_LINE),
     sample: SAMPLE_IDS.has(a.id),
+    assigneeId: a.assigned_user_id ?? null,
+    assignee: a.assignee_name ?? null,
+    deadline: time(a.sla_deadline),
+    check: (['requested', 'passed', 'failed', 'unavailable'].includes(v) ? v : 'none') as Check,
+    checkedAt: time(a.last_checked_at),
+    checkDetails: { working: d.working_cameras, configured: d.configured_cameras, seen: d.observed_machinery, reason: d.reason },
+    escalatedAt: time(a.escalated_at),
   }
 }
 /** Descriptions we create carry labelled lines; older ones are shown as one block. */
@@ -447,13 +489,23 @@ export function verdictOf(ctx: {
     if (others > 0) sub += ` Ещё ${others} ${plural(others, 'событие ждёт', 'события ждут', 'событий ждут')} решения.`
     return { tone: sevNow(e, ep, t, prof), title: liveTitle(e, ep, t, true), sub, actions: [{ label: 'Разобрать', act: 'case', id: e.id, primary: true }] }
   }
+  // deadlines are wall-clock time, also while a recording is replayed
+  const now = Date.now()
+  const late = events.filter((e) => inWork(e) && overdue(e, now)).sort((a, b) => a.deadline! - b.deadline!)[0]
+  if (late)
+    return {
+      tone: 'err',
+      title: `Срок исправления истёк ${durWords(now - late.deadline!)} назад`,
+      sub: `«${late.title}»${late.assignee ? `, ответственный ${late.assignee}` : ''}, срок был до ${atTime(late.deadline!, now)}. ${late.escalatedAt ? `Передано руководителю в ${atTime(late.escalatedAt, now)}.` : 'Сервер проверит камеры и передаст событие руководителю, если нарушение останется.'}`,
+      actions: [{ label: 'Открыть', act: 'case', id: late.id, primary: true }],
+    }
   // a confirmed deviation is still a deviation until the machine is back
-  const held = events.find((e) => !e.sample && (e.status === 'confirmed' || e.status === 'in_progress') && episodes.get(e.id) && episodes.get(e.id)!.to == null)
+  const held = events.find((e) => inWork(e) && episodes.get(e.id) && episodes.get(e.id)!.to == null)
   if (held)
     return {
       tone: sevNow(held, episodes.get(held.id), t, prof),
       title: liveTitle(held, episodes.get(held.id), t, true),
-      sub: `${held.status === 'confirmed' ? 'Отклонение подтверждено' : 'Передано в работу'}${held.decidedAt ? ` в ${hhmm(held.decidedAt)}` : ''}. Ситуация продолжается, событие закроется, когда ${held.mach ? `${MACH[held.mach].lower} появится на камерах` : 'ситуация изменится'}.`,
+      sub: `${held.status === 'confirmed' ? 'Отклонение подтверждено' : 'Передано в работу'}${held.decidedAt ? ` в ${hhmm(held.decidedAt)}` : ''}. ${held.check === 'requested' ? 'Проверка исправления запрошена: сервер сверит кадры камер.' : `Ситуация продолжается${held.deadline ? `, исправить до ${atTime(held.deadline, now)}` : ''}.`}`,
       actions: [{ label: 'Открыть', act: 'case', id: held.id }],
     }
   if (off.length) {
