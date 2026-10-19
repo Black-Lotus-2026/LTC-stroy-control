@@ -43,13 +43,31 @@ from app.models.project import (
 from app.models.reference import ObjectClass, WorkType
 from app.models.report import GeneratedReport, ObservationLog, ReportSchedule
 from app.models.rules import CostRate, RuleSet, WorkRequirement
+from app.models.safety import (
+    SafetyDocument,
+    SafetyRequirement,
+    SafetySanction,
+    SafetyZone,
+    SafetyTrack,
+    SafetyFrameReceipt,
+    SafetyEvent,
+)  # noqa: F401
 from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
 
 __all__ = [
-    "ManagementRun", "ManagementRunStep", "TaskDependency",
+    "SafetyDocument",
+    "SafetyRequirement",
+    "SafetySanction",
+    "SafetyZone",
+    "SafetyTrack",
+    "SafetyFrameReceipt",
+    "SafetyEvent",
+    "ManagementRun",
+    "ManagementRunStep",
+    "TaskDependency",
     # Справочники
     "ObjectClass",
     "WorkType",

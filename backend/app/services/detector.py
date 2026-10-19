@@ -1,7 +1,7 @@
 """Specialized Construction Machinery YOLO Detector.
 
 Loads explicitly supplied Ultralytics YOLO weights and maps supported model
-labels to 10 canonical classes of specialized construction equipment:
+labels to 11 canonical classes of specialized construction equipment:
 1. Экскаватор (Excavator)
 2. Бульдозер (Bulldozer)
 3. Самосвал (Dump truck)
@@ -12,6 +12,7 @@ labels to 10 canonical classes of specialized construction equipment:
 8. Каток (Roller / Compactor)
 9. Автогрейдер (Grader)
 10. Экскаватор-погрузчик (Backhoe loader)
+11. Бетононасос (Concrete pump)
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Canonical mapping of the 10 specialized machinery classes
+# Canonical mapping of the 11 specialized machinery classes
 MACHINERY_CLASSES: dict[int, tuple[str, str, str]] = {
     0: ("excavator", "Экскаватор", "MACHINERY_EXCAVATOR"),
     1: ("bulldozer", "Бульдозер", "MACHINERY_BULLDOZER"),
@@ -243,13 +244,9 @@ class MachineryDetector:
                 logger.warning(self.status_message)
                 self.model = None
             else:
-                logger.info(
-                    "Custom weights not found at %s. Initializing with yolov8n.pt",
-                    self.weights_path,
-                )
-                self.model = YOLO("yolov8n.pt")
-                self.status = "ready"
-                self.status_message = "YOLO model loaded: yolov8n.pt (COCO mapped to machinery)"
+                self.model = None
+                self.status = "weights_missing"
+                self.status_message = "YOLO weights are missing; automatic model substitution is disabled"
         except ImportError as error:
             self.status = "runtime_missing"
             self.status_message = "ultralytics is not installed"

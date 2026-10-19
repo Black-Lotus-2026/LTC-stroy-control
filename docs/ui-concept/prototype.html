@@ -1,0 +1,94 @@
+<meta charset="utf-8">
+<title>Строй-контроль Сверка</title>
+<meta name="description" content="Интерактивный прототип нового интерфейса Строй-контроля: сверка плана работ и техники на камерах.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="proto.css">
+
+<div class="app" id="app">
+  <header class="bar">
+    <div class="brand" aria-hidden="true">СК</div>
+    <button class="ctx" id="ctxObject" type="button" aria-label="Сменить объект">
+      <small>Объект</small><span id="objName">Многоквартирный жилой дом · корпус 2</span>
+    </button>
+    <span class="slash" aria-hidden="true">/</span>
+    <button class="ctx" id="ctxZone" type="button" aria-label="Сменить зону">
+      <small>Зона</small><span id="zoneName">Котлован</span>
+    </button>
+    <div class="grow"></div>
+    <button class="proto-btn" id="scnBtn" type="button" aria-haspopup="menu" aria-expanded="false">
+      <em>макет</em><span class="lbl" id="scnLabel">Нет самосвала</span>
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </button>
+    <button class="time-pill" id="timePill" type="button" data-live="true" aria-label="Время наблюдения">
+      <i class="dot" aria-hidden="true"></i><b id="timeMode">Сейчас</b><span class="mono" id="timeVal">10:47:32</span><span class="date" id="timeDate">5 мая</span>
+    </button>
+    <button class="icon-btn" id="settingsBtn" type="button" aria-label="Настройки контроля">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
+    <span class="avatar" aria-hidden="true">ИТ</span>
+  </header>
+
+  <section class="verdict" id="verdict" aria-live="polite">
+    <div class="v-glyph" id="vGlyph" aria-hidden="true"></div>
+    <div class="v-text">
+      <div class="v-line" id="vTitleWrap"><h1 class="v-title" id="vTitle">Самосвал не замечен 6 минут</h1></div>
+      <p class="v-sub" id="vSub"></p>
+    </div>
+    <div class="v-actions" id="vActions"></div>
+  </section>
+
+  <main class="work" id="work">
+    <section class="stage" aria-label="Камеры">
+      <div class="frame-wrap">
+        <div class="frame" id="frame" data-boxes="on">
+          <img class="f-img" id="fImg" alt="" draggable="false">
+          <img class="f-img" id="fImg2" alt="" draggable="false" style="opacity:0">
+          <div class="f-shade"></div>
+          <div class="boxes" id="boxes"></div>
+          <div class="ticks"></div>
+          <div class="f-top">
+            <span class="chip-mat" id="fLive"><i class="dot"></i><span>Прямой эфир</span></span>
+            <span class="chip-mat" id="fCount">2 объекта</span>
+          </div>
+          <div class="f-meta">
+            <div><div class="cam-name" id="fCam">Котлован · общий план</div><div class="cam-sub" id="fCamSub">Камера 1 · кадр 1280×720</div></div>
+            <span class="mono" id="fTime">10:47:31</span>
+          </div>
+          <div class="f-state" id="fState"><div class="hatch"></div><div class="msg"><strong id="fStateT"></strong><p id="fStateP"></p></div></div>
+        </div>
+      </div>
+      <div class="strip" id="strip" role="group" aria-label="Источники"></div>
+    </section>
+
+    <aside class="side" id="side">
+      <section class="panel recon" id="recon" aria-labelledby="reconTitle"></section>
+      <section class="panel queue" id="queue" aria-labelledby="queueTitle"></section>
+    </aside>
+    <button type="button" class="q-jump" id="qJump" hidden><i></i><span id="qJumpT">Требуют решения</span></button>
+  </main>
+
+  <section class="setup" id="setup" hidden></section>
+
+  <section class="dock" id="dock" aria-label="План и время">
+    <div class="grip" id="grip" role="button" tabindex="0" aria-label="Развернуть план работ" aria-expanded="false"><i></i></div>
+    <div class="dock-body" id="dockBody">
+      <div class="dock-lead" id="dockLead"></div>
+      <div class="plan-canvas" id="planCanvas"></div>
+      <div class="day" id="day" role="slider" tabindex="0" aria-label="Время наблюдения" aria-valuemin="0" aria-valuemax="86400"></div>
+      <div class="dock-tools" id="dockTools"></div>
+      <div class="plan-full" id="planFull" data-open="false"></div>
+    </div>
+  </section>
+
+</div>
+
+<div class="scrim" id="scrim"></div>
+<section class="case" id="case" role="dialog" aria-modal="true" aria-labelledby="caseTitle" hidden></section>
+<section class="pop" id="pop" role="dialog" aria-modal="false" aria-labelledby="popTitle" hidden></section>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden></section>
+<div class="menu" id="menu" role="menu" aria-label="Сценарий макета" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="proto.js"></script>

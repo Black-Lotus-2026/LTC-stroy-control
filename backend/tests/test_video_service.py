@@ -33,7 +33,9 @@ def sqlite_session() -> Session:
         session.close()
 
 
-def test_video_registration_and_sync(sqlite_session: Session) -> None:
+def test_video_registration_and_sync(
+    sqlite_session: Session, tmp_path, monkeypatch
+) -> None:
     project = Project(code="PRJ-VID", name="Объект с камерами")
     sqlite_session.add(project)
     sqlite_session.commit()
@@ -52,9 +54,20 @@ def test_video_registration_and_sync(sqlite_session: Session) -> None:
     sqlite_session.add(stage)
     sqlite_session.commit()
 
+    import cv2
+    import numpy as np
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "storage_local_root", tmp_path / "media")
+    source = tmp_path / "source.avi"
+    writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"MJPG"), 3, (64, 48))
+    assert writer.isOpened()
+    for _ in range(6):
+        writer.write(np.zeros((48, 64, 3), dtype=np.uint8))
+    writer.release()
     service = VideoService(sqlite_session)
     asset = service.register_video(
-        file_bytes=b"dummy video data",
+        file_bytes=source.read_bytes(),
         filename="site_demo.mp4",
         start_timestamp=base_time,
         project_id=project.id,
