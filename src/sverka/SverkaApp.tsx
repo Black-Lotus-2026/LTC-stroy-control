@@ -129,6 +129,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const [dockOpen, setDockOpen] = useState(false)
   const [caseOpen, setCaseOpen] = useState<{ id: string; origin: DOMRect | null } | null>(null)
   const [rule, setRule] = useState<{ code: Code; stageId: string; anchor: DOMRect } | null>(null)
+  const [safetyRecordingCameraId, setSafetyRecordingCameraId] = useState('')
   const [sheet, setSheet] = useState<SheetTab | null>(null)
   const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
@@ -181,6 +182,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   useEffect(() => {
     const token = ++loadToken.current
     engine.reset()
+    engine.safetyProjectId = project?.id
+    setSafetyRecordingCameraId('')
     setZones([])
     setCameras([])
     setStages([])
@@ -877,6 +880,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
             {unread > 0 && <span className="t-count">{unread > 9 ? '9+' : unread}</span>}
           </button>
         )}
+        <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')}>Безопасность</button>
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
@@ -1019,6 +1023,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       {sheet && project && (
         <SettingsSheet
           tab={sheet}
+          recordingCameraId={safetyRecordingCameraId}
+          onRecordingCamera={(id) => { setSafetyRecordingCameraId(id); engine.setSafetyRecordingCamera(id || undefined) }}
           settings={settings}
           onSettings={setSettings}
           obs={obs}

@@ -62,6 +62,14 @@ test('actual engine retains all25 observations, records only stage13, fails clos
   rt.view.dets=[{code:'excavator'}]
   await capture()
   assert.equal(engine.model,'down');assert.deepEqual(rt.view.dets,[]);assert.equal(engine.frames,2)
+  let captured, calls=0
+  engine.canvas.toBlob = callback => { captured=callback }
+  globalThis.__inferenceUiMock.detectFrame = async () => { calls++; return {model_ready:true,detections:[]} }
+  engine.capture(rt)
+  engine.setSafetyRecordingCamera('different-camera')
+  captured(new Blob(['frame']))
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(calls,0,'a pending capture cannot be submitted after camera context changed')
 })
 
 test('photo and video call distinct real endpoints and preserve explicit fallback/error fields', async context => {

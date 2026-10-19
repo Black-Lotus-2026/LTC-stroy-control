@@ -49,6 +49,10 @@ export class Engine {
   conf = 60
   windowMs = 30_000
   stageName?: string
+  safetyProjectId?: string
+  safetyRecordingCameraId?: string
+  private safetySession = Math.random().toString(36).slice(2)
+  private generation = 0
   private rts = new Map<string, Rt>()
   private pool: HTMLDivElement | null = null
   private canvas = document.createElement('canvas')
@@ -90,6 +94,9 @@ export class Engine {
   }
   /** Forget everything: used when the object changes. */
   reset() {
+    this.generation++
+    this.safetyProjectId = undefined
+    this.safetyRecordingCameraId = undefined
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.cameras = []
@@ -115,6 +122,12 @@ export class Engine {
       this.emitPending = 0
       for (const fn of this.listeners) fn()
     }, 120)
+  }
+
+  setSafetyRecordingCamera(cameraId?: string) {
+    this.safetyRecordingCameraId = cameraId
+    this.safetySession = Math.random().toString(36).slice(2)
+    this.generation++
   }
 
   now() {
@@ -187,6 +200,8 @@ export class Engine {
 
   /* recording mode: the observation clock follows the video */
   startRecording(file: File, start: number) {
+    this.safetySession = Math.random().toString(36).slice(2)
+    this.generation++
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.clearSession()
@@ -348,6 +363,9 @@ export class Engine {
     else if (rt.view.status !== 'live') this.setStatus(rt, 'live')
 
     const at = this.now()
+    const generation = this.generation
+    const cameraId = isVideo ? this.safetyRecordingCameraId : rt.view.id
+    const safety = this.safetyProjectId && cameraId ? { projectId: this.safetyProjectId, cameraId, sourceId: `${this.safetySession}:${rt.view.id}`, positionMs: at, recordingMode: isVideo } : undefined
     rt.view.snapshot = snapshot
     rt.view.lastFrame = at
     rt.fails = 0
@@ -356,13 +374,14 @@ export class Engine {
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {
-        if (!blob) {
+        if (!blob || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
           rt.inFlight = false
           return
         }
         api
-          .detectFrame(blob, this.stageName)
+          .detectFrame(blob, this.stageName, safety)
           .then((res) => {
+            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             if (!res.model_ready) {
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
@@ -384,6 +403,7 @@ export class Engine {
             this.addCoverage(at)
           })
           .catch((e: unknown) => {
+            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             const msg = e instanceof Error ? e.message : 'сервис не ответил'
             rt.view.dets = []
             this.setModel('down', msg)

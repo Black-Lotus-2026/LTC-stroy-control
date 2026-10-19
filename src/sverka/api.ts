@@ -24,7 +24,7 @@ function authHeaders(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {}
 }
 
-async function req<T>(path: string, init: RequestInit = {}, fallbackMessage = 'Сервер не ответил'): Promise<T> {
+export async function req<T>(path: string, init: RequestInit = {}, fallbackMessage = 'Сервер не ответил'): Promise<T> {
   let res: Response
   try {
     res = await fetch(`${API_PREFIX}${path}`, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } })
@@ -201,11 +201,18 @@ export const putOverrides = (stageId: string, overrides: Record<string, unknown>
 /* detection */
 export interface ApiDetection { raw_label: string; canonical_code: string; label_ru: string; confidence: number; x1: number; y1: number; x2: number; y2: number }
 export interface DetectResponse { compliance_enabled?: boolean; evaluable_classes?: string[]; model_ready: boolean; detector_status: string; message?: string | null; detections: ApiDetection[]; source?: 'yolo' | 'vlm'; fallback_status?: 'not_requested' | 'not_needed' | 'used' | 'empty' | 'unavailable' | 'timeout' | 'error'; fallback_message?: string | null; model_sha256?: string | null; confidence_calibrated?: false }
-export function detectFrame(blob: Blob, stageName?: string) {
+export function detectFrame(blob: Blob, stageName?: string, safety?: { projectId: string; cameraId: string; sourceId: string; positionMs: number; recordingMode?: boolean }) {
   const fd = new FormData()
   fd.append('file', blob, 'frame.jpg')
   if (stageName) fd.append('stage_name', stageName)
-  return req<DetectResponse>('/videos/detect-frame', { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
+  if (safety) {
+    fd.append('camera_id', safety.cameraId)
+    fd.append('source_id', safety.sourceId)
+    fd.append('position_ms', String(Math.round(safety.positionMs)))
+    fd.append('recording_mode', String(safety.recordingMode === true))
+  }
+  const path = safety ? `/safety/projects/${encodeURIComponent(safety.projectId)}/analyze-frame` : '/videos/detect-frame'
+  return req<DetectResponse>(path, { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
 }
 /** Only still photos may request the server's photo-specific VLM fallback. */
 export function detectPhoto(file: File) {
