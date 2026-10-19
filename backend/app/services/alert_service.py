@@ -5,11 +5,9 @@ from __future__ import annotations
 import logging
 import smtplib
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from functools import lru_cache
 from typing import Callable
 
 from sqlalchemy import or_, select
@@ -21,7 +19,7 @@ from app.models.enums import IncidentEventType, IncidentStatus, UserRole
 from app.models.incident import Incident, IncidentEvent
 from app.models.project import Camera, Project
 from app.models.user import User
-from app.services.detector import MachineryDetector
+from app.services.detector_provider import get_detector
 from app.services.rule_engine import to_russian_machinery_name
 
 logger = logging.getLogger(__name__)
@@ -172,9 +170,8 @@ def _capture_frame(camera: Camera) -> bytes | None:
         capture.release()
 
 
-@lru_cache(maxsize=1)
-def _detector() -> MachineryDetector:
-    return MachineryDetector()
+def _detector():
+    return get_detector()
 
 
 def verify_incident(db: Session, incident: Incident) -> VerificationResult:
@@ -190,11 +187,15 @@ def verify_incident(db: Session, incident: Incident) -> VerificationResult:
     if not cameras:
         return VerificationResult("unavailable", {"reason": "no_live_cameras"})
     detector = _detector()
+    if not (incident.discrepancy_type or "").startswith("STREAM_") and hasattr(detector, "compliance_enabled"):
+        if not detector.compliance_enabled or not detector.can_evaluate(incident.machinery_type or ""):
+            return VerificationResult("unavailable", {"reason": "construction_shadow_or_unapproved_class"})
     if not detector.is_ready and not (incident.discrepancy_type or "").startswith("STREAM_"):
         return VerificationResult("unavailable", {"reason": "detector_not_ready"})
 
     observed: set[str] = set()
     working: set[str] = set()
+    construction_inference_failed = False
     samples = 3
     for sample in range(samples):
         for camera in cameras:
@@ -207,7 +208,11 @@ def verify_incident(db: Session, incident: Incident) -> VerificationResult:
                     for detection in detector.detect_frame(frame):
                         if detection.confidence >= 0.6:
                             observed.add(to_russian_machinery_name(detection.label_ru))
+                            if hasattr(detector, "compliance_enabled"):
+                                observed.update((detection.raw_label, detection.canonical_code))
             except Exception:
+                if hasattr(detector, "compliance_enabled"):
+                    construction_inference_failed = True
                 logger.exception("Camera recheck failed: %s", camera.id)
         if sample < samples - 1:
             time.sleep(max(1, settings.violation_evaluation_window_seconds / (samples - 1)))
@@ -223,6 +228,9 @@ def verify_incident(db: Session, incident: Incident) -> VerificationResult:
         if len(working) == len(cameras):
             return VerificationResult("passed", details)
         return VerificationResult("unavailable", details)
+
+    if construction_inference_failed:
+        return VerificationResult("unavailable", {**details, "reason": "construction_inference_failed"})
 
     target = to_russian_machinery_name(incident.machinery_type or "")
     present = target in observed

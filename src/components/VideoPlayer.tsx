@@ -173,22 +173,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {selectedStream === 'UPLOADED_DEMO' && `Старт записи: ${uploadedVideo?.start_timestamp}`}
           </div>
 
-          {/* Synthetic AI Detection Bounding Boxes Overlay */}
-          <div className="absolute inset-0 pointer-events-none p-8 flex items-center justify-around">
-            <div className="relative border-2 border-emerald-400 bg-emerald-500/10 rounded px-2 py-1 w-44 h-32 flex flex-col justify-between">
-              <span className="bg-emerald-500 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded-sm self-start">
-                Самосвал 94%
-              </span>
-              <span className="text-[9px] text-emerald-300 font-mono">ID: trk-04</span>
-            </div>
 
-            <div className="relative border-2 border-amber-400 bg-amber-500/10 rounded px-2 py-1 w-40 h-28 flex flex-col justify-between">
-              <span className="bg-amber-500 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded-sm self-start">
-                Погрузчик 88%
-              </span>
-              <span className="text-[9px] text-amber-300 font-mono">ID: trk-07</span>
-            </div>
-          </div>
         </div>
 
         {/* Video Controls Overlay */}

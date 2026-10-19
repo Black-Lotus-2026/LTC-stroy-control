@@ -129,7 +129,7 @@ function CameraFrame({
   activeStageName?: string
   onSelectClass?: (label: string) => void
   onDetectionsUpdate?: (dets: LiveDetectionInfo[]) => void
-  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string, complianceEnabled?: boolean) => void
   onStreamStatusChange?: (online: boolean) => void
 }) {
   const [currentTime, setCurrentTime] = useState(0)
@@ -245,7 +245,7 @@ function CameraFrame({
         try {
           const res = await detectFrameImage(blob, activeStageName)
           if (generation !== sourceGenerationRef.current) return
-          setDetectorNotice(res.model_ready ? res.message ?? null : res.message || 'Модель YOLO не готова')
+          setDetectorNotice(res.model_ready ? `${res.message ?? 'Распознавание работает'}${res.compliance_enabled === true ? '' : '; автоматические выводы об отсутствии техники выключены'}` : res.message || 'Модель YOLO не готова')
           const mapped: LiveDetectionInfo[] = res.detections.map((d) => ({
             label: d.label_ru,
             conf: Math.round(d.confidence * 100),
@@ -259,7 +259,7 @@ function CameraFrame({
           setRealDetections(mapped)
           onDetectionsUpdate?.(validDets)
           if (snapshotDataUrl && res.model_ready) {
-            onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime, streamName, streamName)
+            onFrameAnalysis?.(snapshotDataUrl, validDets, currentTime, streamName, streamName, res.compliance_enabled === true)
           }
         } catch (err) {
           if (generation !== sourceGenerationRef.current) return
@@ -469,7 +469,7 @@ function Monitoring({ activeProject, activeZones, camerasList, selectedCameraId,
   uploadedVideoUrl: string | null; uploadedVideoName: string | null; videoTimestamp: string
   setUploadedVideoUrl: (url: string | null) => void; setUploadedVideoName: (name: string | null) => void
   setIsUploadModalOpen: (open: boolean) => void; setIsCameraModalOpen: (open: boolean) => void
-  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string) => void
+  onFrameAnalysis?: (snapshot: string, dets: LiveDetectionInfo[], time: number, sourceId?: string, sourceName?: string, complianceEnabled?: boolean) => void
   onStreamStatusChange?: (online: boolean) => void; toast: (message: string) => void
 }) {
   const [boxes, setBoxes] = useState(true)
@@ -530,12 +530,12 @@ function Monitoring({ activeProject, activeZones, camerasList, selectedCameraId,
           streamName={uploadedVideoName || currentCamera?.name || 'Камера'} timestamp={uploadedVideoUrl ? `Запись от ${new Date(videoTimestamp).toLocaleString('ru-RU')}` : ''}
           activeClass={activeEquipment} activeStageName={activeStage?.name}
           onSelectClass={equipment => setActiveEquipment(previous => previous === equipment ? null : equipment)} onDetectionsUpdate={setLiveDetections}
-          onFrameAnalysis={(snapshot, detections, time) => onFrameAnalysis?.(snapshot, detections, time, uploadedVideoUrl ? 'video-source' : currentCamera?.id, uploadedVideoName || currentCamera?.name)}
+          onFrameAnalysis={(snapshot, detections, time, _sourceId, _sourceName, complianceEnabled) => onFrameAnalysis?.(snapshot, detections, time, uploadedVideoUrl ? 'video-source' : currentCamera?.id, uploadedVideoName || currentCamera?.name, complianceEnabled)}
           onStreamStatusChange={onSourceStatus}/>
         <div hidden aria-hidden="true">{camerasList.filter(camera => camera.id !== currentCamera?.id && camera.stream_url && !camera.stream_url.startsWith('rtsp:')).map(camera => <CameraFrame key={camera.id} compact boxes={false} streamUrl={camera.stream_url} streamName={camera.name} activeStageName={activeStage?.name}
-          onFrameAnalysis={(snapshot, detections, time) => onFrameAnalysis?.(snapshot, detections, time, camera.id, camera.name)}/>)}</div>
+          onFrameAnalysis={(snapshot, detections, time, _sourceId, _sourceName, complianceEnabled) => onFrameAnalysis?.(snapshot, detections, time, camera.id, camera.name, complianceEnabled)}/>)}</div>
       </section>}
-      {online && <section className="monitor-detections"><h3>В кадре <span>{liveDetections.length}</span></h3>{liveDetections.length ? <div>{liveDetections.map(detection => <button key={detection.label} className={activeEquipment === detection.label ? 'active' : ''} onClick={() => setActiveEquipment(previous => previous === detection.label ? null : detection.label)}>{detection.label}<span>{detection.conf}%</span></button>)}</div> : <p>Техника пока не обнаружена</p>}</section>}
+      {online && <section className="monitor-detections"><h3>В кадре <span>{liveDetections.length}</span></h3>{liveDetections.length ? <div>{liveDetections.map((detection, index) => <button key={`${detection.label}:${index}`} className={activeEquipment === detection.label ? 'active' : ''} onClick={() => setActiveEquipment(previous => previous === detection.label ? null : detection.label)}>{detection.label}<span>{detection.conf}%</span></button>)}</div> : <p>Техника пока не обнаружена</p>}</section>}
       {activeStage && !rules && <p className="monitor-rules-notice" role="status">{rulesLoading ? 'Загружаем правила контроля…' : <>Правила недоступны. Оценка отклонений приостановлена.<button className="button" onClick={onRetryRules}>Повторить</button></>}</p>}
       <details className="monitor-context"><summary>План и правила контроля</summary><div>
         <p className="monitor-stage-label">Этап плана{uploadedVideoUrl ? ' на дату записи' : ''}</p><strong>{activeStage?.name || 'Нет этапа на выбранную дату'}</strong>
@@ -1766,8 +1766,17 @@ export default function App() {
       dets: LiveDetectionInfo[],
       timeSeconds: number,
       sourceId?: string,
-      sourceName?: string
+      sourceName?: string,
+      complianceEnabled = false
     ) => {
+      // Missing permission is fail-closed; observations still render in CameraFrame.
+      if (!complianceEnabled) {
+        observationWindowsRef.current.clear()
+        detectedLabelsInWindowRef.current.clear()
+        sourcesStateRef.current.clear()
+        streamStartTimeRef.current = null
+        return
+      }
       // Do not run violation detection or create alerts when video stream is offline
       if (!isStreamOnline || !activeProjectId || !currentUser || currentUser.role === 'viewer') {
         streamStartTimeRef.current = null

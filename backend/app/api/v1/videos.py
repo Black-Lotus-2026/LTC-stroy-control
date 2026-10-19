@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from functools import lru_cache
 from typing import Any
 
 import anyio
@@ -22,16 +21,18 @@ from app.schemas.stroy_control import (
     VideoSyncStatusResponse,
     VideoUploadResponse,
 )
-from app.services.detector import MACHINERY_CLASSES, MachineryDetector
-from app.services.video_service import VideoService
+from app.services.detector import MACHINERY_CLASSES
+from app.services.detector_provider import get_detector
+from app.services.video_service import VideoService, VideoTooLarge, VideoProjectNotFound
+from app.core.config import settings
+from app.services.trained_detector import decode_image
 
 router = APIRouter(prefix="/videos", tags=["Видеоконтроль и камеры"])
 
 
-@lru_cache(maxsize=1)
-def get_machinery_detector() -> MachineryDetector:
+def get_machinery_detector():
     """Load the detector once and reuse it for periodic live-frame inference."""
-    return MachineryDetector()
+    return get_detector()
 
 
 @router.get("/detector-status")
@@ -42,8 +43,35 @@ def detector_status() -> dict[str, Any]:
         "ready": detector.is_ready,
         "status": detector.status,
         "message": detector.status_message,
-        "weights_path": str(detector.weights_path),
+        "weights_path": str(detector.weights_path).replace("\\", "/").rsplit("/", 1)[-1]
+        if detector.weights_path
+        else None,
+        "model_sha256": getattr(detector, "sha256", None),
+        "quality_verified": getattr(detector, "quality_verified", False),
         "supported_classes": [value[0] for value in MACHINERY_CLASSES.values()],
+        **(
+            {
+                "profile": detector.profile,
+                "policy": detector.policy,
+                "weight_paths": detector.weight_paths,
+                "compliance_enabled": detector.compliance_enabled,
+                "supported_classes": detector.supported_classes,
+                "unsupported_classes": detector.unsupported_classes,
+            }
+            if hasattr(detector, "profile")
+            else {}
+        ),
+    }
+
+
+@router.post("/construction-frame")
+async def construction_frame(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Compatibility frame upload: the same sole trained YOLO, never VLM."""
+    result = await _detect_uploaded_image(file, None, photo=False)
+    return {
+        "profile": "construction_trained",
+        "physical_machine_count": None,
+        **result.model_dump(),
     }
 
 
@@ -75,14 +103,19 @@ async def upload_video(
             detail=f"Неверный формат даты старта съемки: {e}. Используйте YYYY-MM-DD HH:MM:SS или ISO 8601",
         )
 
-    content = await file.read()
     service = VideoService(db)
-    asset = service.register_video(
-        file_bytes=content,
-        filename=file.filename,
-        start_timestamp=parsed_dt,
-        project_id=project_id,
-    )
+    try:
+        asset = await anyio.to_thread.run_sync(
+            lambda: service.register_video_stream(
+                file.file, file.filename, parsed_dt, project_id
+            )
+        )
+    except VideoTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except VideoProjectNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     return VideoUploadResponse(
         video_id=asset.id,
@@ -137,13 +170,58 @@ async def detect_video_frame(
     file: UploadFile = File(...),
     stage_name: str | None = Form(None),
 ) -> FrameDetectionResponse:
-    """Детектировать строительную технику на кадре видео с помощью AI / Computer Vision."""
-    contents = await file.read()
-    detector = get_machinery_detector()
-    results = await anyio.to_thread.run_sync(
-        detector.detect_frame, contents, stage_name, True
-    )
+    """YOLO-only video/camera frame. This path can never invoke a VLM."""
+    return await _detect_uploaded_image(file, stage_name, photo=False)
 
+
+def get_photo_vlm():
+    from app.services.photo_vlm import get_photo_vlm as factory
+
+    return factory()
+
+
+@router.post("/detect-photo", response_model=FrameDetectionResponse)
+async def detect_photo(
+    file: UploadFile = File(...),
+    stage_name: str | None = Form(None),
+) -> FrameDetectionResponse:
+    """Still photograph: same trained YOLO first; bounded VLM only on success+empty."""
+    return await _detect_uploaded_image(file, stage_name, photo=True)
+
+
+async def _detect_uploaded_image(file, stage_name, *, photo):
+    contents = await file.read(settings.max_image_upload_bytes + 1)
+    if len(contents) > settings.max_image_upload_bytes:
+        raise HTTPException(413, "Изображение превышает допустимый размер")
+    try:
+        image = await anyio.to_thread.run_sync(decode_image, contents)
+    except ValueError as exc:
+        raise HTTPException(400, "Нужен корректный одиночный кадр изображения") from exc
+    detector = await anyio.to_thread.run_sync(get_machinery_detector)
+    if not detector.is_ready:
+        raise HTTPException(503, detector.status_message or "YOLO недоступна")
+    try:
+        results = await anyio.to_thread.run_sync(
+            detector.detect_frame, image, stage_name, False
+        )
+    except Exception as exc:
+        raise HTTPException(502, "Ошибка распознавания YOLO; повторите запрос") from exc
+    if not detector.is_ready or detector.status in {"inference_error", "model_error"}:
+        raise HTTPException(502, "Ошибка распознавания YOLO; повторите запрос")
+    source = "yolo"
+    fallback_status = "not_needed" if photo and results else "not_requested"
+    fallback_message = None
+    if photo and not results:
+        try:
+            fallback = await get_photo_vlm().detect(contents)
+            fallback_status, fallback_message = fallback.status, fallback.message
+            if fallback.status == "used" and fallback.detections:
+                results, source = fallback.detections, "vlm"
+        except Exception:
+            fallback_status = "error"
+            fallback_message = (
+                "Дополнительная визуальная проверка недоступна; результат YOLO сохранён"
+            )
     items = [
         DetectionBoxItem(
             class_id=r.class_id,
@@ -171,12 +249,18 @@ async def detect_video_frame(
         message=detector.status_message,
         count=len(items),
         detections=items,
+        source=source,
+        model_sha256=getattr(detector, "sha256", None),
+        fallback_status=fallback_status,
+        fallback_message=fallback_message,
+        compliance_enabled=getattr(detector, "compliance_enabled", False),
+        evaluable_classes=[],
     )
 
 
 @router.get("/proxy-stream")
 async def proxy_camera_stream(
-    url: str = Query(..., description="URL потока камеры (HTTP/HTTPS/MJPEG)")
+    url: str = Query(..., description="URL потока камеры (HTTP/HTTPS/MJPEG)"),
 ):
     """Проксировать поток IP-камеры или VLC в обход CORS и самоподписанных SSL-сертификатов."""
     clean_url = url.strip()
@@ -211,7 +295,9 @@ async def proxy_camera_stream(
         }
         content_type = r.headers.get("content-type", "multipart/x-mixed-replace")
 
-        return StreamingResponse(stream_generator(), media_type=content_type, headers=headers)
+        return StreamingResponse(
+            stream_generator(), media_type=content_type, headers=headers
+        )
     except Exception as e:
         await client.aclose()
         raise HTTPException(
@@ -222,7 +308,7 @@ async def proxy_camera_stream(
 
 @router.get("/check-stream")
 async def check_camera_stream(
-    url: str = Query(..., description="URL потока камеры для проверки связи")
+    url: str = Query(..., description="URL потока камеры для проверки связи"),
 ):
     """Проверить доступность сетевой камеры (HTTP, HTTPS или RTSP) с диагностикой портов."""
     import socket
@@ -293,6 +379,8 @@ async def check_camera_stream(
                 "url": clean_url,
                 "error": f"Ошибка HTTP подключения: {err}",
                 "rtsp_hint": rtsp_hint,
-                "suggestion": f"На хосте {host} обнаружен активный RTSP стрим порт 8554! Попробуйте: rtsp://{host}:8554/video" if rtsp_hint else "Проверьте IP-адрес, порт и включен ли видеопоток в VLC/камере",
+                "suggestion": f"На хосте {host} обнаружен активный RTSP стрим порт 8554! Попробуйте: rtsp://{host}:8554/video"
+                if rtsp_hint
+                else "Проверьте IP-адрес, порт и включен ли видеопоток в VLC/камере",
             }
     return {"status": "unknown", "url": clean_url}

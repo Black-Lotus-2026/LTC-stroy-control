@@ -190,8 +190,8 @@ export function Setup({
                     {live ? 'Кадр получен' : 'Ждём кадр от источника…'}
                   </div>
                   <div>
-                    <i className={obs.model === 'ready' ? '' : obs.model === 'down' ? 'bad' : obs.model === 'demo' ? 'warn' : 'wait'} />
-                    {obs.model === 'ready' ? 'Распознавание работает' : obs.model === 'demo' ? `Модель недоступна, включено демо-распознавание (${obs.modelMessage || 'нет ответа'})` : obs.model === 'down' ? `Распознавание недоступно: ${obs.modelMessage || 'нет ответа'}` : 'Проверяем распознавание…'}
+                    <i className={obs.model === 'ready' ? '' : obs.model === 'down' ? 'bad' : 'wait'} />
+                    {obs.model === 'ready' ? 'Распознавание работает' : obs.model === 'down' ? `Распознавание недоступно: ${obs.modelMessage || 'нет ответа'}` : 'Проверяем распознавание…'}
                   </div>
                   <div>
                     <i className={stageNow ? '' : 'warn'} />

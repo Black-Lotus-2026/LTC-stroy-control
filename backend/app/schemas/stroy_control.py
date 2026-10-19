@@ -209,7 +209,10 @@ class IncidentAlbumResponse(BaseModel):
 
 
 class IncidentStatusUpdateRequest(BaseModel):
-    status: str = Field(..., description="Статус инцидента: pending / confirmed / false_positive или русские эквиваленты")
+    status: str = Field(
+        ...,
+        description="Статус инцидента: pending / confirmed / false_positive или русские эквиваленты",
+    )
 
 
 class IncidentCreateRequest(BaseModel):
@@ -392,3 +395,10 @@ class FrameDetectionResponse(BaseModel):
     message: str | None = None
     count: int
     detections: list[DetectionBoxItem]
+    source: str = "yolo"
+    model_sha256: str | None = None
+    fallback_status: str = "not_requested"
+    fallback_message: str | None = None
+    confidence_calibrated: bool = False
+    compliance_enabled: bool = False
+    evaluable_classes: list[str] = Field(default_factory=list)

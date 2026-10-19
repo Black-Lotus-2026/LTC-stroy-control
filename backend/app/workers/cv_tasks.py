@@ -17,7 +17,7 @@ from app.models.incident import Incident
 from app.models.enums import IncidentCategory, IncidentPriority, IncidentStatus, IncidentType
 from app.models.project import Project
 from app.models.schedule import ScheduleTask
-from app.services.detector import MachineryDetector
+from app.services.detector_provider import get_detector
 from app.services.rule_engine import RuleEngine
 from app.services.alert_service import OPEN_STATUSES, assign_initial_alert
 
@@ -48,8 +48,12 @@ def process_video_frame_sync(
             return []
 
         # 1. Run YOLO inference
-        detector = MachineryDetector()
+        detector = get_detector()
         detections = detector.detect_frame(frame_bytes)
+
+        if hasattr(detector, "compliance_enabled") and not detector.compliance_enabled:
+            logger.info("Construction shadow/not-ready frame: %s observations; no compliance changes", len(detections))
+            return []
 
         # 2. Count detected machinery by Russian name and raw label
         detected_counts: dict[str, int] = {}
@@ -60,7 +64,8 @@ def process_video_frame_sync(
         # 3. Evaluate discrepancy rules
         engine = RuleEngine()
         probs = stage.machinery_probabilities or {}
-        evaluations = engine.evaluate_stage_machinery(probs, detected_counts)
+        evaluations = (detector.evaluate_rules(probs, detections) if hasattr(detector, "evaluate_rules")
+                       else engine.evaluate_stage_machinery(probs, detected_counts))
 
         violations: list[dict[str, Any]] = []
         for ev in evaluations:

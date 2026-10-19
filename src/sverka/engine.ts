@@ -11,11 +11,9 @@
  * Analysis runs in this browser tab. The UI says so; continuous server-side collection is a
  * separate backend task.
  *
- * Demo recognition: when the model is unavailable and demo mode is on, detections come from the
- * demo scene below instead of the detector. Everything downstream works the same way, and every
- * screen and event says that recognition is a demo.
  */
 import * as api from './api'
+import { toObservationCode } from '../domain/constructionObservations'
 import type { CameraItem } from './api'
 import { CODES, toCode, type Code } from './lib/machinery'
 import type { Det, Observation, SourceView } from './model'
@@ -40,23 +38,11 @@ interface Rt {
 }
 interface Sight { at: number; src: string; c: number }
 
-/* Demo scene: where machines stand on the project's demo frames (src/assets/construction-camera.png
-   and its crops). Camera 1 is the overview, 2 the crane, 3 the west side of the pit. */
-const DEMO_SCENE: Record<'overview' | 'crane' | 'west', Omit<Det, 'demo'>[]> = {
-  overview: [
-    { code: 'excavator', c: 0.93, x: 0.175, y: 0.38, w: 0.275, h: 0.32 },
-    { code: 'tower_crane', c: 0.86, x: 0.528, y: 0.0, w: 0.05, h: 0.37 },
-    { code: 'dump_truck', c: 0.89, x: 0.512, y: 0.5, w: 0.215, h: 0.235 },
-  ],
-  crane: [{ code: 'tower_crane', c: 0.94, x: 0.186, y: 0.0, w: 0.086, h: 0.64 }],
-  west: [{ code: 'excavator', c: 0.91, x: 0.318, y: 0.236, w: 0.5, h: 0.582 }],
-}
-
 export class Engine {
   mode: 'live' | 'recording' = 'live'
-  model: 'unknown' | 'ready' | 'down' | 'demo' = 'unknown'
-  /** substitute demo detections when the model is unavailable */
-  demo = true
+  model: 'unknown' | 'ready' | 'down' = 'unknown'
+  complianceEnabled = false
+  evaluableClasses: Code[] = []
   modelMessage?: string
   modelSince?: number
   frames = 0
@@ -378,18 +364,19 @@ export class Engine {
           .detectFrame(blob, this.stageName)
           .then((res) => {
             if (!res.model_ready) {
-              if (this.demo) return this.demoFrame(rt, at, res.message || 'модель не загружена')
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
               return
             }
+            this.setCompliance(res)
             this.setModel('ready')
             const dets: Det[] = []
             for (const d of res.detections) {
-              const code = toCode(d.raw_label) ?? toCode(d.canonical_code)
+              const code = toObservationCode(d.canonical_code) ?? toObservationCode(d.raw_label)
               if (!code || d.confidence * 100 < this.conf) continue
               dets.push({ code, c: d.confidence, x: d.x1, y: d.y1, w: d.x2 - d.x1, h: d.y2 - d.y1 })
-              this.record(code, { at, src: rt.view.id, c: d.confidence })
+              const stageCode = toCode(code)
+              if (stageCode) this.record(stageCode, { at, src: rt.view.id, c: d.confidence })
             }
             rt.view.dets = dets
             rt.lastAnalyzed = Date.now()
@@ -398,8 +385,8 @@ export class Engine {
           })
           .catch((e: unknown) => {
             const msg = e instanceof Error ? e.message : 'сервис не ответил'
-            if (this.demo) this.demoFrame(rt, at, msg)
-            else this.setModel('down', msg)
+            rt.view.dets = []
+            this.setModel('down', msg)
           })
           .finally(() => {
             rt.inFlight = false
@@ -411,34 +398,38 @@ export class Engine {
     )
   }
 
-  private setModel(state: 'ready' | 'down' | 'demo', message?: string) {
+  private setModel(state: 'ready' | 'down', message?: string) {
     if (this.model !== state) this.modelSince = this.now()
     this.model = state
+    if (state === 'down') {
+      this.complianceEnabled = false
+      this.evaluableClasses = []
+      for (const rt of this.rts.values()) rt.view.dets = []
+    }
     this.modelMessage = state === 'ready' ? undefined : message
     this.emit()
   }
 
-  /** The model is unavailable: answer from the demo scene so the stand can show the whole flow. */
-  private demoFrame(rt: Rt, at: number, reason: string) {
-    this.setModel('demo', reason)
-    const scene = rt.view.kind === 'video' ? 'overview' : (['overview', 'crane', 'west'] as const)[(rt.view.n - 1) % 3]
-    // the dump truck works ten minutes and leaves for six; in a recording it leaves after the first fifth
-    const rec = this.rec
-    const truck = rec ? at - rec.start < Math.max(30_000, 0.2 * (rec.duration || 0)) : Math.floor(at / 60_000) % 16 < 10
-    const dets: Det[] = DEMO_SCENE[scene].filter((d) => d.code !== 'dump_truck' || truck).filter((d) => d.c * 100 >= this.conf).map((d) => ({ ...d, demo: true }))
-    for (const d of dets) this.record(d.code, { at, src: rt.view.id, c: d.c })
-    rt.view.dets = dets
-    rt.lastAnalyzed = Date.now()
-    this.frames++
-    this.addCoverage(at)
+  private setCompliance(response: { compliance_enabled?: boolean; evaluable_classes?: string[] }) {
+    const enabled = response.compliance_enabled === true
+    const classes = enabled ? (response.evaluable_classes ?? []).flatMap(c => { const code = toCode(c); return code ? [code] : [] }).sort() : []
+    if (enabled !== this.complianceEnabled || classes.join(',') !== this.evaluableClasses.join(',')) {
+      // Coverage collected under another permission cannot establish qualified absence.
+      this.cov = []
+      this.dets.clear()
+    }
+    this.complianceEnabled = enabled
+    this.evaluableClasses = classes
   }
+
   private async pollStatus() {
     try {
       const s = await api.detectorStatus()
-      if (!s.ready) this.setModel(this.demo ? 'demo' : 'down', s.message || 'модель не загружена')
+      this.setCompliance(s)
+      if (!s.ready) this.setModel('down', s.message || 'модель не загружена')
       else if (this.model !== 'ready') this.setModel('ready')
     } catch (e) {
-      this.setModel(this.demo ? 'demo' : 'down', e instanceof Error ? e.message : 'сервис не ответил')
+      this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил')
     }
   }
 
@@ -508,6 +499,8 @@ export class Engine {
       t: this.now(),
       sources,
       model: this.model,
+      complianceEnabled: this.complianceEnabled,
+      evaluableClasses: [...this.evaluableClasses],
       modelMessage: this.modelMessage,
       modelSince: this.modelSince,
       frames: this.frames,

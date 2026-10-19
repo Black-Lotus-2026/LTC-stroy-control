@@ -9,7 +9,7 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint src --max-warnings=0",
     "preview": "vite preview",
-    "test:ui": "node --test tests/ui-contracts.test.mjs"
+    "test:ui": "node --test tests/*ui*.test.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

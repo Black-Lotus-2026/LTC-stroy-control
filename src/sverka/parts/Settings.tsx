@@ -1,3 +1,4 @@
+import { PhotoInspection } from './PhotoInspection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AdminRecipient, AlertSettings, CameraItem, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import type { NumKey, Observation, Settings as S } from '../model'
@@ -8,7 +9,7 @@ import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo'
 
 /** The server side of tasks: who answers for the object's events, the deadlines, the user's email. */
 export interface TaskActions {
@@ -147,6 +148,7 @@ export function SettingsSheet({
             [
               ['control', 'Контроль'],
               ['sources', 'Источники'],
+              ['photo', 'Фото'],
               ['shift', 'Смена'],
               ['tasks', 'Задачи'],
               ['object', 'Объект'],
@@ -168,20 +170,6 @@ export function SettingsSheet({
               {row({ k: "oopAfter", title: "Техника не по этапу", desc: "Создать отклонение, если нехарактерная техника видна дольше этого времени." })}
               <div className="set-row">
                 <div>
-                  <h4>Демо-распознавание</h4>
-                  <p>Если модель недоступна, детекции подставляются по демо-сцене, чтобы показать весь сценарий. Экран и события помечаются как демо.</p>
-                </div>
-                <button type="button" className="toggle" role="switch" aria-checked={settings.demo} onClick={() => onSettings({ ...settings, demo: !settings.demo })}>
-                  <span className="sw" />
-                  {settings.demo ? 'Включено' : 'Выключено'}
-                </button>
-                <div className="def">
-                  {obs.model === 'demo' ? `Сейчас работает: ${obs.modelMessage || 'модель недоступна'}` : obs.model === 'ready' ? 'Сейчас не нужно: модель отвечает' : 'Включится, если модель не ответит'}
-                  <span>Хранится в этом браузере</span>
-                </div>
-              </div>
-              <div className="set-row">
-                <div>
                   <h4>Пороги профиля этапа</h4>
                   <p>Как доля этапов справочника, где встречается техника, переводится в требование. Задаются на сервере.</p>
                 </div>
@@ -197,6 +185,7 @@ export function SettingsSheet({
               </div>
             </>
           )}
+          {tab === 'photo' && <PhotoInspection />}
           {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} />}
           {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
@@ -355,7 +344,7 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
       <div className="set-row">
         <div>
           <h4>Распознавание</h4>
-          <p>{obs.model === 'ready' ? `Работает · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'demo' ? `Модель недоступна (${obs.modelMessage || 'причина не сообщена'}), работает демо-распознавание · кадров: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
+          <p>{obs.model === 'ready' ? `Распознавание работает${obs.complianceEnabled ? '' : '; автоматические выводы об отсутствии техники выключены'} · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
         </div>
         <span />
       </div>
