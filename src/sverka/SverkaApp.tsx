@@ -3,7 +3,7 @@ import * as api from './api'
 import type { AdminRecipient, ApiAlert, ApiProfile, CameraItem, ProjectItem, UserProfile, ZoneItem } from './api'
 import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
-import { DEFAULTS, DEMO_LINE, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
+import { DEFAULTS, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { PROBLEM_WORD, turnWords } from './lib/view'
 import { CODES, MACH, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
@@ -131,6 +131,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const [dockOpen, setDockOpen] = useState(false)
   const [caseOpen, setCaseOpen] = useState<{ id: string; origin: DOMRect | null } | null>(null)
   const [rule, setRule] = useState<{ code: Code; stageId: string; anchor: DOMRect } | null>(null)
+  const [safetyRecordingCameraId, setSafetyRecordingCameraId] = useState('')
   const [sheet, setSheet] = useState<SheetTab | null>(null)
   const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
@@ -187,6 +188,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   useEffect(() => {
     const token = ++loadToken.current
     engine.reset()
+    engine.safetyProjectId = project?.id
+    setSafetyRecordingCameraId('')
     setZones([])
     setCameras([])
     setViews([])
@@ -297,7 +300,6 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const stage = stageAt(stages, t)
   const prof = stage ? profiles.get(stage.id) ?? null : null
   engine.conf = settings.conf
-  engine.demo = settings.demo
   engine.windowMs = settings.window * 1000
   engine.stageName = stage?.name
 
@@ -362,18 +364,17 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* the system writes events itself, only when it really watched and the model answered */
   useEffect(() => {
-    if (!project || !stage || !prof || !ev.covered || !ev.inShift || (obs.model !== 'ready' && obs.model !== 'demo')) return
+    if (!project || !stage || !prof || !ev.covered || !ev.inShift || !obs.complianceEnabled || obs.model !== 'ready') return
     const live = obs.sources.filter((s) => s.status === 'live')
     const names = live.map((s) => s.name).join(', ')
-    const demo = obs.model === 'demo'
-    const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; ${demo ? 'распознавание в демо-режиме' : 'распознавание работает'}, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
-    // demo recognition has no field on the server: it travels in the description and is read back on reload
-    const tail = demo ? [DEMO_LINE] : []
+    const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; распознавание работает, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
+    const tail: string[] = []
     // the event belongs to the source it is shown on, and to that camera's zone
     const src = live.find((x) => x.id === selected) ?? live[0]
     const where = { zone_id: zoneIdOf(src?.id), zone_name: zoneOf(src?.id), camera_id: cameras.some((c) => c.id === src?.id) ? src!.id : null, camera_name: src?.name ?? null }
     const open = (code: Code, kind: 'missing' | 'oop') => [...meta.current].some(([id, m]) => m.code === code && m.kind === kind && m.stageId === stage.id && !episodes.get(id)?.to)
     const make = (key: string, kind: 'missing' | 'oop', code: Code, since: number, payload: Omit<api.IncidentCreate, 'project_id' | keyof typeof where>) => {
+      if (!obs.evaluableClasses.includes(code)) return
       const c = created.current.get(key)
       if ((typeof c === 'string') || (typeof c === 'number' && Date.now() < c) || open(code, kind)) return
       // one open event per machine and stage: after a reload, adopt the pending one from the journal
@@ -393,8 +394,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           project_id: project.id,
           captured_at: new Date(since).toISOString(),
           observation_key: key,
-          // demo detections are not the model's: the server is not told they are
-          ...(demo ? {} : { model_status: 'valid' as const }),
+          model_status: 'valid' as const,
           album_snapshots: shots.map((x, i) => ({ camera_name: x.name, snapshot_base64: x.snapshot, is_primary: selected ? x.id === selected : i === 0 })),
         })
         .then((res) => {
@@ -1069,12 +1069,6 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           </>
         )}
         <div className="grow" />
-        {obs.model === 'demo' && (
-          <button type="button" className="demo-badge" onClick={() => setSheet('control')} title={`Модель недоступна: ${obs.modelMessage || 'причина не сообщена'}. Детекции подставляются по демо-сцене.`}>
-            <span className="db-full">Демо-распознавание</span>
-            <span className="db-short">Демо</span>
-          </button>
-        )}
         <TimePill obs={obs} onExit={closeRecording} />
         {alerts.length > 0 && (
           <button type="button" className="icon-btn tasks-btn" onClick={(e) => setMenu({ kind: 'tasks', anchor: e.currentTarget.getBoundingClientRect() })} aria-haspopup="menu" aria-label={unread ? `Задачи: ${unread} ${plural(unread, 'новая', 'новые', 'новых')}` : 'Задачи'} title="Задачи">
@@ -1085,6 +1079,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
             {unread > 0 && <span className="t-count">{unread > 9 ? '9+' : unread}</span>}
           </button>
         )}
+        <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')}>Безопасность</button>
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
@@ -1228,6 +1223,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       {sheet && project && (
         <SettingsSheet
           tab={sheet}
+          recordingCameraId={safetyRecordingCameraId}
+          onRecordingCamera={(id) => { setSafetyRecordingCameraId(id); engine.setSafetyRecordingCamera(id || undefined) }}
           settings={settings}
           onSettings={setSettings}
           obs={obs}

@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Engine } from '../engine'
 import type { Evaluation, Observation, Profile, SourceView, ViewCheck } from '../model'
 import { mediaUrl } from '../api'
-import { MACH } from '../lib/machinery'
+import { toCode } from '../lib/machinery'
 import { PROBLEM_WORD, turnWords } from '../lib/view'
+import { OBSERVATION_LABELS } from '../../domain/constructionObservations'
 import { atTime, conf2, durShort, hhmm, hhmmss, plural } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
 
@@ -132,8 +133,6 @@ export function Stage({
             <span className="chip-mat f-count">
               {obs.model === 'down'
                 ? 'Распознавание недоступно'
-                : obs.model === 'demo' && src.status === 'live'
-                  ? `Демо: ${dets.length} ${plural(dets.length, 'объект', 'объекта', 'объектов')}`
                 : src.status !== 'live'
                   ? 'Анализ по источнику невозможен'
                   : `${dets.length} ${plural(dets.length, 'объект', 'объекта', 'объектов')} на кадре`}
@@ -213,18 +212,19 @@ function Boxes({ dets, prof, focus, sourceId }: { dets: Observation['sources'][n
   return (
     <div className="boxes" ref={root}>
       {dets.map((d, i) => {
-        const lvl = prof?.rules[d.code].lvl
+        const stageCode = toCode(d.code)
+        const lvl = stageCode ? prof?.rules[stageCode]?.lvl : undefined
         const cls = lvl === 'no' ? 'oop' : lvl === 'skip' ? 'stationary' : ''
         const tag = lvl === 'no' ? ' · не по этапу' : lvl === 'skip' ? ' · не учитывается' : ''
         return (
           <div
             key={d.code + i}
-            className={`box ${cls}${d.demo ? ' demo' : ''}${d.y < 0.08 ? ' lbl-in' : ''}${focus === d.code ? ' focus' : ''}`}
+            className={`box ${cls}${d.y < 0.08 ? ' lbl-in' : ''}${focus === d.code ? ' focus' : ''}`}
             data-box={d.code}
             style={{ left: `${d.x * 100}%`, top: `${d.y * 100}%`, width: `${d.w * 100}%`, height: `${d.h * 100}%` }}
           >
             <b>
-              {MACH[d.code].name}
+              {OBSERVATION_LABELS[d.code]}
               {tag}
               <i>{conf2(d.c)}</i>
             </b>
@@ -323,7 +323,7 @@ function Strip({
         <span>
           Окно сверки {settings.window} с · порог {settings.conf}%
         </span>
-        <span className="proto-line">{obs.model === 'demo' ? 'Демо-распознавание: модель недоступна' : covered ? 'Анализ идёт, пока открыта эта вкладка' : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
+        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Анализ идёт, пока открыта эта вкладка' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
       </div>
       <div className="frame-tools">
         <button type="button" className="toggle" role="switch" aria-checked={boxes} onClick={() => setBoxes(!boxes)}>

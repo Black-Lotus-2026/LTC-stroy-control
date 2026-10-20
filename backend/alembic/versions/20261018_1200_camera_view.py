@@ -1,7 +1,7 @@
 """Approved camera view, view proposals, planned camera moves and their history.
 
 Revision ID: 20261018_1200
-Revises: 20261016_1300
+Revises: 20261019_1600
 """
 
 from typing import Sequence, Union
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20261018_1200"
-down_revision: Union[str, None] = "20261016_1300"
+down_revision: Union[str, None] = "20261019_1600"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

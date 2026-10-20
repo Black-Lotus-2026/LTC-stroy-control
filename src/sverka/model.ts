@@ -1,7 +1,8 @@
+import type { ObservationCode } from '../domain/constructionObservations'
 import type { ApiIncident, ApiProfile, StageItem, UserProfile } from './api'
 import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { atTime, dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
-import { PROBLEM_WORD, turnWords as turnWordsOf, type ViewProblem } from './lib/view'
+import { PROBLEM_WORD, turnWords as turnWordsOf, viewBlocked, type ViewProblem } from './lib/view'
 
 /* ── Role ───────────────────────────────────────────────── */
 /** The role shown to the user. The server has admin / manager / viewer and no site roles yet,
@@ -39,10 +40,9 @@ export interface Settings {
   shiftFrom: number // s since midnight
   shiftTo: number
   startGrace: number // s after shift start before absence counts
-  demo: boolean // substitute demo recognition when the model is unavailable
 }
-export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800, demo: true }
-export type NumKey = Exclude<keyof Settings, 'demo'>
+export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
+export type NumKey = keyof Settings
 export const STEPS: Record<NumKey, number[]> = {
   window: [10, 15, 30, 60, 120],
   conf: [40, 50, 60, 70, 80, 90],
@@ -165,7 +165,7 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
 }
 
 /* ── Observation (provided by the engine) ───────────────── */
-export interface Det { code: Code; c: number; x: number; y: number; w: number; h: number; demo?: boolean }
+export interface Det { code: ObservationCode; c: number; x: number; y: number; w: number; h: number }
 export type SourceStatus = 'connecting' | 'live' | 'stale' | 'offline' | 'unsupported' | 'idle'
 /** The camera's frames repeat a recording: what period, since when, and which earlier frame. */
 export interface LoopCheck {
@@ -197,8 +197,7 @@ export interface ViewCheck {
   moveUntil?: number
   moveBy?: string | null
 }
-/** A camera turned away or being moved says nothing about the site: its frames are not used. */
-export const viewBlocked = (s: { view?: ViewCheck }) => s.view?.state === 'changed' || s.view?.state === 'move'
+export { viewBlocked }
 export interface SourceView {
   id: string
   n: number
@@ -219,7 +218,9 @@ export interface Observation {
   mode: 'live' | 'recording'
   t: number
   sources: SourceView[]
-  model: 'unknown' | 'ready' | 'down' | 'demo'
+  model: 'unknown' | 'ready' | 'down'
+  complianceEnabled: boolean
+  evaluableClasses: Code[]
   modelMessage?: string
   modelSince?: number
   frames: number
@@ -270,7 +271,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
   const live = obs.sources.filter((x) => x.status === 'live' && !loopBlocked(x) && !viewBlocked(x))
   const analyzable = obs.sources.filter((x) => x.status !== 'unsupported' && x.status !== 'idle')
   const covStart = obs.coverageStart(t)
-  const covered = (obs.model === 'ready' || obs.model === 'demo') && covStart != null && live.length > 0
+  const covered = obs.model === 'ready' && covStart != null && live.length > 0
   const win = s.window * 1000
   const out: Evaluation = { t, stage, slots: [], oop: [], stationary: [], allowed: [], inShift, shiftStart, graceEnd, covered, liveSources: live.length, totalSources: obs.sources.length }
   if (!stage || !prof) return out
@@ -281,6 +282,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
       const slot: Slot = { ...r, state: 'unknown', cams }
       if (!covered) slot.state = 'unknown'
       else if (cams.length) slot.state = 'seen'
+      else if (!obs.complianceEnabled || !obs.evaluableClasses.includes(code)) slot.state = 'unknown'
       else if (!inShift) slot.state = 'offshift'
       else {
         const ls = obs.lastSeen(code, t)
@@ -301,7 +303,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
         }
       }
       out.slots.push(slot)
-    } else if (r.lvl === 'no' && cams.length) {
+    } else if (r.lvl === 'no' && cams.length && obs.complianceEnabled && obs.evaluableClasses.includes(code)) {
       const since = obs.episodeStart(code, t, win * 2) ?? t
       out.oop.push({ ...r, cams, since, dur: t - since })
     } else if (r.lvl === 'skip') out.stationary.push(r)

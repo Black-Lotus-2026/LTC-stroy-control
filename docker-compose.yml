@@ -36,6 +36,8 @@ services:
       retries: 10
 
   api:
+    env_file:
+      - ./backend/.env
     build: ./backend
     command: >
       sh -c "alembic upgrade head &&
@@ -52,7 +54,7 @@ services:
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction_machinery.pt}
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction-yolov8m-v2.pt}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -75,6 +77,8 @@ services:
         condition: service_healthy
 
   worker:
+    env_file:
+      - ./backend/.env
     build: ./backend
     # Две очереди в одном воркере на время прототипа; когда появится модель,
     # очередь cv выносится в отдельный сервис с своим параллелизмом.
@@ -90,7 +94,7 @@ services:
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction_machinery.pt}
+      YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction-yolov8m-v2.pt}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
