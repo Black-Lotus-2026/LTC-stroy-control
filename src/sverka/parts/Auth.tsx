@@ -72,11 +72,6 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
             </button>
           </div>
         </form>
-        <p className="hint" style={{ marginTop: 18 }}>
-          <a className="link" href="#legacy" onClick={() => setTimeout(() => location.reload(), 0)}>
-            Открыть старый интерфейс
-          </a>
-        </p>
       </div>
     </main>
   )
