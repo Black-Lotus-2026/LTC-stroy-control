@@ -125,6 +125,7 @@ def boundary(monkeypatch, customer_http):
 
     monkeypatch.setattr(videos, "get_machinery_detector", lambda: Detector())
     monkeypatch.setattr(videos, "get_photo_vlm", factory, raising=False)
+    state["demo_id"] = str(customer_http.projects["demo"].id)
     with TestClient(app, raise_server_exceptions=False) as client:
         client.headers.update(customer_http.headers())
         client.params = {"project_id": str(customer_http.projects["a"].id)}
@@ -537,20 +538,7 @@ def test_detect_frame_and_photo_without_project_id_succeeds(boundary):
 
 def test_detect_frame_with_demo_project_id_is_not_blocked(boundary):
     state, client = boundary
-    from app.db.session import SessionLocal
-    from app.models.project import Project
-    from sqlalchemy import select
-
-    with SessionLocal() as db:
-        demo_project = db.scalar(select(Project).where(Project.kind == "shared_demo"))
-        if not demo_project:
-            demo_project = Project(code="PRJ-DEMO", name="Demo", kind="shared_demo")
-            db.add(demo_project)
-            db.commit()
-            db.refresh(demo_project)
-        demo_id = str(demo_project.id)
-
-    client.params = {"project_id": demo_id}
+    client.params = {"project_id": state["demo_id"]}
     response = post(client, "detect-frame")
     assert response.status_code == 200
     assert response.json()["model_ready"] is True
