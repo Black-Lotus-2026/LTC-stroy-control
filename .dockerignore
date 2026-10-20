@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-ssr/
 test-results/
 playwright-report/
 *.tsbuildinfo
@@ -13,16 +14,25 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-backend/var/
 .env
+**/.env
+**/.env.*
+id_rsa*
 
-# Local/private training inputs and camera recordings never enter frontend context.
+# Directories not needed by frontend build context
+backend/
+data/
+docs/
+img/
+info/
+scripts/
+specs/
+tests/
+tools/
 var/
-backend/.venv/
-backend/weights/
-data/construction/
-data/weather/
 7/
+
+# Media & weights
 *.mp4
 *.avi
 *.mov
@@ -30,6 +40,3 @@ data/weather/
 *.webm
 *.pt
 *.zip
-
-**/.env
-**/.env.*
