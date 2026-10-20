@@ -2,7 +2,7 @@ import { SafetyPanel } from './Safety'
 import { PhotoInspection } from './PhotoInspection'
 import { DocumentsPanel } from './Documents'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AdminRecipient, AlertSettings, CameraItem, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
+import type { AdminRecipient, AlertSettings, CameraItem, DocumentSelection, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import type { NumKey, Observation, Settings as S } from '../model'
 import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
 import { clock, durShort, hhmmss, plural, toLocalInput } from '../lib/format'
@@ -52,11 +52,13 @@ export function SettingsSheet({
   recordingCameraId,
   onRecordingCamera,
   onDocumentRulesChanged,
+  onBeforeDocumentAnalysis,
 }: {
   tab: SheetTab
   recordingCameraId: string
   onRecordingCamera: (id: string) => void
-  onDocumentRulesChanged: (stageIds: string[]) => Promise<void>
+  onDocumentRulesChanged: (changes: DocumentSelection[]) => Promise<void>
+  onBeforeDocumentAnalysis: () => Promise<void>
   settings: S
   onSettings: (s: S) => void
   obs: Observation
@@ -182,7 +184,7 @@ export function SettingsSheet({
           <i className="bar-ind" ref={ind} />
         </div>
         <div className="sheet-body">
-          {tab === 'documents' && <DocumentsPanel key={project.id} projectId={project.id} canWrite={user.role !== 'viewer'} onRulesChanged={onDocumentRulesChanged} />}
+          {tab === 'documents' && <DocumentsPanel key={project.id} projectId={project.id} canWrite={user.role !== 'viewer'} beforeAnalyze={onBeforeDocumentAnalysis} onRulesChanged={onDocumentRulesChanged} />}
           {tab === 'safety' && <SafetyPanel key={project.id} projectId={project.id} cameras={cameras} obs={obs} user={user} recordingCameraId={recordingCameraId} onRecordingCamera={onRecordingCamera} onDirtyChange={setSafetyDirty} />}
           {tab === 'control' && (
             <>

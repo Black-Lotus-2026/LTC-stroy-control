@@ -14,10 +14,11 @@ const skipReason: Record<string, string> = {
   already_applied: 'правило уже применено',
 }
 
-export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
+export function DocumentsPanel({ projectId, canWrite, beforeAnalyze, onRulesChanged }: {
   projectId: string
   canWrite: boolean
-  onRulesChanged: (stageIds: string[]) => Promise<void>
+  beforeAnalyze: () => Promise<void>
+  onRulesChanged: (changes: DocumentSelection[]) => Promise<void>
 }) {
   const toast = useToast()
   const [docs, setDocs] = useState<ProjectDocument[]>([])
@@ -71,7 +72,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     if (!run || !['completed', 'partial', 'failed'].includes(run.status) || reported.current.has(run.id)) return
     reported.current.add(run.id)
     const changed = run.result.applied.filter(item => !item.reverted_at)
-    if (changed.length) void onRulesChanged([...new Set(changed.map(item => item.stage_id))]).catch((cause: Error) => setError(cause.message))
+    if (changed.length) void onRulesChanged(changed.map(item => ({ stage_id: item.stage_id, class_code: item.class_code }))).catch((cause: Error) => setError(cause.message))
     if (startedHere.current.has(run.id)) {
       toast(run.status === 'failed' ? 'Анализ документов не завершён' : changed.length
         ? `Агент обновил ${changed.length} ${changed.length === 1 ? 'правило техники' : 'правил техники'}. Изменения можно отменить во вкладке «Документы».`
@@ -96,6 +97,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     })
   }
   const start = () => void act(async () => {
+    await beforeAnalyze()
     const created = await api.analyzeDocuments(projectId)
     startedHere.current.add(created.id)
     setRun(created)
@@ -107,7 +109,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
       const result = await api.revertDocumentProposals(projectId, run.id, [selection])
       setRun(result)
       setHistory(previous => previous.map(item => item.id === result.id ? result : item))
-      await onRulesChanged([selection.stage_id])
+      await onRulesChanged([selection])
       toast('Правило техники возвращено к прежнему значению')
     })
   }
@@ -124,7 +126,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
 
   return <div className="doc-panel">
     <h3>Документы проекта и агент техники</h3>
-    <p>Загрузите ПОС или ППР. После анализа агент обновит подтверждённые требования к технике и покажет, что изменилось. Любое изменение можно отменить.</p>
+    <p>Загрузите ПОС или ППР. Перед анализом выбранное «Не учитывать» сохраняется в правилах этапа. Затем агент обновит подтверждённые требования и покажет изменения. Любое изменение можно отменить.</p>
     {agentStatus && <div className={`doc-key-status ${agentStatus.configured ? 'is-ready' : 'is-missing'}`} role={agentStatus.configured ? 'status' : 'alert'}>
       <strong>{agentStatus.provider === 'gigachat' ? 'GigaChat' : 'Внешний API'} · ключ: {agentStatus.key_configured ? 'указан' : 'не указан'}</strong>
       <span>{agentStatus.configured ? `Модель: ${agentStatus.model}. Ключ хранится на сервере.` : agentStatus.key_configured ? 'Проверьте модель, адрес API, scope и сертификат на сервере.' : agentStatus.provider === 'gigachat' ? 'Добавьте GIGACHAT_CREDENTIALS в конфигурацию API и worker, затем перезапустите сервисы.' : 'Добавьте DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY в конфигурацию API и worker, затем перезапустите сервисы.'}</span>
