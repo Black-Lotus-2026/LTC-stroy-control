@@ -1,3 +1,5 @@
+import { SafetyPanel } from './Safety'
+import { PhotoInspection } from './PhotoInspection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import { mediaUrl } from '../api'
@@ -10,7 +12,7 @@ import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo' | 'safety'
 
 /** The server side of tasks: who answers for the object's events, the deadlines, the user's email. */
 export interface TaskActions {
@@ -62,8 +64,12 @@ export function SettingsSheet({
   weather,
   objectActions,
   views,
+  recordingCameraId,
+  onRecordingCamera,
 }: {
   tab: SheetTab
+  recordingCameraId: string
+  onRecordingCamera: (id: string) => void
   settings: S
   onSettings: (s: S) => void
   obs: Observation
@@ -84,6 +90,7 @@ export function SettingsSheet({
   views?: ViewActions | null
 }) {
   const [tab, setTab] = useState<SheetTab>(initialTab)
+  const [safetyDirty, setSafetyDirty] = useState(false)
   const el = useRef<HTMLElement>(null)
   const scrim = useRef<HTMLDivElement>(null)
   const closing = useRef(false)
@@ -114,6 +121,7 @@ export function SettingsSheet({
   useLayoutEffect(() => {
     const b = el.current?.querySelector<HTMLElement>('.tabs button[aria-selected="true"]')
     if (!b) return
+    b.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     if (first.current) {
       ix.current.set(b.offsetLeft)
       iw.current.set(b.offsetWidth)
@@ -125,11 +133,20 @@ export function SettingsSheet({
   }, [tab])
   const close = () => {
     if (closing.current) return
+    if (safetyDirty && !window.confirm('Есть несохранённые изменения зоны. Закрыть без сохранения?')) return
     closing.current = true
     sp.current?.to(0, { damping: 1, onRest: onClose })
   }
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && close()
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { close(); return }
+      if (e.key !== 'Tab' || !el.current) return
+      const nodes = [...el.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, a[href], [tabindex="0"]')].filter(n => n.getClientRects().length > 0)
+      const first = nodes[0], last = nodes[nodes.length - 1]
+      if (!first) { e.preventDefault(); return }
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === el.current.querySelector('#sheetTitle') || !el.current.contains(document.activeElement))) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && (document.activeElement === last || document.activeElement === el.current.querySelector('#sheetTitle'))) { e.preventDefault(); first.focus() }
+    }
     addEventListener('keydown', k)
     return () => removeEventListener('keydown', k)
   })
@@ -164,18 +181,21 @@ export function SettingsSheet({
             [
               ['control', 'Контроль'],
               ['sources', 'Источники'],
+              ['safety', 'Безопасность'],
+              ['photo', 'Фото'],
               ['shift', 'Смена'],
               ['tasks', 'Задачи'],
               ['object', 'Объект'],
             ] as const
           ).map(([k, v]) => (
-            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { if (!safetyDirty || window.confirm('Есть несохранённые изменения зоны. Перейти без сохранения?')) { setSafetyDirty(false); setTab(k) } }}>
               {v}
             </button>
           ))}
           <i className="bar-ind" ref={ind} />
         </div>
         <div className="sheet-body">
+          {tab === 'safety' && <SafetyPanel key={project.id} projectId={project.id} cameras={cameras} obs={obs} user={user} recordingCameraId={recordingCameraId} onRecordingCamera={onRecordingCamera} onDirtyChange={setSafetyDirty} />}
           {tab === 'control' && (
             <>
               {row({ k: "window", title: "Окно сверки", desc: "Техника считается замеченной, если найдена хотя бы на одном кадре любого источника за это время.", ...(user.role === 'admin' ? { where: 'Сохраняется на сервере' } : { where: 'Общее для сервера, меняет администратор', locked: true }) })}
@@ -183,20 +203,6 @@ export function SettingsSheet({
               {row({ k: "warnAfter", title: "Предупреждение, если обязательной техники нет", desc: "Общее значение. У отдельной техники на этапе можно задать своё в правиле." })}
               {row({ k: "errAfter", title: "Отклонение, если её нет", desc: "После этого времени предупреждение считается отклонением." })}
               {row({ k: "oopAfter", title: "Техника не по этапу", desc: "Создать отклонение, если нехарактерная техника видна дольше этого времени." })}
-              <div className="set-row">
-                <div>
-                  <h4>Демо-распознавание</h4>
-                  <p>Если модель недоступна, детекции подставляются по демо-сцене, чтобы показать весь сценарий. Экран и события помечаются как демо.</p>
-                </div>
-                <button type="button" className="toggle" role="switch" aria-checked={settings.demo} onClick={() => onSettings({ ...settings, demo: !settings.demo })}>
-                  <span className="sw" />
-                  {settings.demo ? 'Включено' : 'Выключено'}
-                </button>
-                <div className="def">
-                  {obs.model === 'demo' ? `Сейчас работает: ${obs.modelMessage || 'модель недоступна'}` : obs.model === 'ready' ? 'Сейчас не нужно: модель отвечает' : 'Включится, если модель не ответит'}
-                  <span>Хранится в этом браузере</span>
-                </div>
-              </div>
               <div className="set-row">
                 <div>
                   <h4>Пороги профиля этапа</h4>
@@ -214,6 +220,7 @@ export function SettingsSheet({
               </div>
             </>
           )}
+          {tab === 'photo' && <PhotoInspection />}
           {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} />}
           {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
@@ -375,7 +382,7 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
       <div className="set-row">
         <div>
           <h4>Распознавание</h4>
-          <p>{obs.model === 'ready' ? `Работает · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'demo' ? `Модель недоступна (${obs.modelMessage || 'причина не сообщена'}), работает демо-распознавание · кадров: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
+          <p>{obs.model === 'ready' ? `Распознавание работает${obs.complianceEnabled ? '' : '; автоматические выводы об отсутствии техники выключены'} · проанализировано кадров в этом сеансе: ${obs.frames}` : obs.model === 'down' ? `Недоступно: ${obs.modelMessage || 'причина не сообщена'}` : 'Ждём первый ответ сервиса'}</p>
         </div>
         <span />
       </div>

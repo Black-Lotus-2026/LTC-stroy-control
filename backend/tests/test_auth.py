@@ -1,14 +1,45 @@
 """Tests for authentication: registration, login, and JWT verification."""
 
 import uuid
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 
 from app.main import app
+from app.db.base import Base
+from app.db.session import get_db
 
-client = TestClient(app)
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb(type_, compiler, **kw):
+    return "JSON"
 
 
-def test_register_and_login_flow():
+@pytest.fixture
+def client():
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    Base.metadata.create_all(engine)
+
+    def session():
+        with Session(engine) as db:
+            yield db
+
+    app.dependency_overrides[get_db] = session
+    try:
+        with TestClient(app) as browser:
+            yield browser
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        engine.dispose()
+
+
+def test_register_and_login_flow(client):
     unique_username = f"user_{uuid.uuid4().hex[:8]}"
     password = "SecretPassword123"
 

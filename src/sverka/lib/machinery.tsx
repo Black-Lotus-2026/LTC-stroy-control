@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-/* The eleven detector classes (backend/app/services/detector.py) drawn as line-art, viewBox 64×40.
+/* The thirteen stage-rule machinery classes drawn as line-art, viewBox 64×40.
    Plan uses the gold drawing, fact the white ink — the same outline in two materials. */
 
 export const CODES = [
@@ -15,6 +15,8 @@ export const CODES = [
   'grader',
   'backhoe_loader',
   'concrete_pump',
+  'pile_driving',
+  'crawler_crane',
 ] as const
 export type Code = (typeof CODES)[number]
 
@@ -30,6 +32,8 @@ export const MACH: Record<Code, { name: string; lower: string; api: string }> = 
   grader: { name: 'Автогрейдер', lower: 'автогрейдер', api: 'MACHINERY_GRADER' },
   backhoe_loader: { name: 'Экскаватор-погрузчик', lower: 'экскаватор-погрузчик', api: 'MACHINERY_BACKHOE_LOADER' },
   concrete_pump: { name: 'Бетононасос', lower: 'бетононасос', api: 'MACHINERY_CONCRETE_PUMP' },
+  pile_driving: { name: 'Сваебойная установка', lower: 'сваебойная установка', api: 'MACHINERY_PILE_DRIVING' },
+  crawler_crane: { name: 'Гусеничный кран', lower: 'гусеничный кран', api: 'MACHINERY_CRAWLER_CRANE' },
 }
 
 const BY_API = new Map<string, Code>(CODES.map((c) => [MACH[c].api, c]))
@@ -44,6 +48,8 @@ export function toCode(raw?: string | null): Code | null {
 }
 
 export const SIL: Record<Code, string> = {
+  pile_driving: '<path d="M8 35h30v4H8zM16 35V4h5v31M21 7l14 28M19 4h12v5H19M31 9v21"/>',
+  crawler_crane: '<path d="M8 34h29v5H8zM12 34V25h22v9M20 25L48 3l3 3-27 23M49 5v20M47 25h4"/>',
   excavator: '<path d="M7 31.5h26a3.5 3.5 0 0 1 0 7H7a3.5 3.5 0 0 1 0-7z"/><path d="M5 31.5V24h21l3 7.5"/><path d="M5 27.5h4"/><path d="M15 24V14h8l3 10"/><path d="M28 22L41 6.5l3.5.5L51 17.5"/><path d="M49 16.5l6 3.5-1.6 6-7-1.6z"/>',
   bulldozer: '<path d="M15 31.5h28a3.5 3.5 0 0 1 0 7H15a3.5 3.5 0 0 1 0-7z"/><path d="M17 31.5V22h25v9.5"/><path d="M24 22V12h11l2 10"/><path d="M17 26h-6"/><path d="M11 17.5c-2.6 6.5-2.6 14 0 21H6.5c-2-7-2-14 0-21z"/><path d="M42 26l6 2.5v3"/>',
   dump_truck: '<circle cx="15" cy="34" r="4"/><circle cx="41" cy="34" r="4"/><circle cx="51" cy="34" r="4"/><path d="M5 30h6M19 30h18M55 30h4"/><path d="M47 30V17h7l4.5 6.5V30"/><path d="M50 17v6.5h8.5"/><path d="M6 28l2.4-14H45v14z"/><path d="M19 15.5v11M31 15.5v11"/>',

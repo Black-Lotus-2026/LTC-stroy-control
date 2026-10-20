@@ -1845,6 +1845,17 @@ button.ctx#ctxZone { cursor: pointer; }
   -webkit-background-clip: text; background-clip: text;
 }
 
+.photo-inspection { display: grid; gap: 16px; }
+.photo-inspection p { line-height: 1.5; overflow-wrap: anywhere; }
+.photo-controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.photo-controls label { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.photo-canvas { position: relative; width: 100%; background: #14191e; }
+.photo-canvas img { display: block; width: 100%; height: auto; }
+.photo-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.photo-canvas rect { fill: none; stroke: #83e5b5; stroke-width: .25; vector-effect: non-scaling-stroke; }
+.photo-canvas text { fill: white; stroke: #12181d; stroke-width: .18; paint-order: stroke; font-size: 1.8px; }
+.photo-hash { font: 11px monospace; }
+
 /* camera view: the approved reference, what the camera matches now, agreed moves */
 .f-top .f-count { margin-left: auto; }
 .view-chip[data-state="ok"] { color: var(--fg-2); }
