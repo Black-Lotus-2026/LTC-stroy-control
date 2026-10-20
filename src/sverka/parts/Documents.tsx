@@ -72,7 +72,15 @@ export function DocumentsPanel({ projectId, canWrite, beforeAnalyze, onRulesChan
     if (!run || !['completed', 'partial', 'failed'].includes(run.status) || reported.current.has(run.id)) return
     reported.current.add(run.id)
     const changed = run.result.applied.filter(item => !item.reverted_at)
-    if (changed.length) void onRulesChanged(changed.map(item => ({ stage_id: item.stage_id, class_code: item.class_code }))).catch((cause: Error) => setError(cause.message))
+    // Earlier document rules may already match this run. Refresh their server profiles too,
+    // so an open page cannot keep showing an old local rule after analysis completes.
+    const reviewed = run.result.stages.flatMap(stage => stage.proposals.map(proposal => ({
+      stage_id: stage.stage_id,
+      class_code: proposal.class_code,
+    })))
+    const selections = new Map([...reviewed, ...changed.map(item => ({ stage_id: item.stage_id, class_code: item.class_code }))]
+      .map(item => [`${item.stage_id}:${item.class_code}`, item]))
+    if (selections.size) void onRulesChanged([...selections.values()]).catch((cause: Error) => setError(cause.message))
     if (startedHere.current.has(run.id)) {
       toast(run.status === 'failed' ? 'Анализ документов не завершён' : changed.length
         ? `Агент обновил ${changed.length} ${changed.length === 1 ? 'правило техники' : 'правил техники'}. Изменения можно отменить во вкладке «Документы».`
