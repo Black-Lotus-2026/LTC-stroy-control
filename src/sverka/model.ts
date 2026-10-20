@@ -2,7 +2,7 @@ import type { ObservationCode } from '../domain/constructionObservations'
 import type { ApiIncident, ApiProfile, StageItem, UserProfile } from './api'
 import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { atTime, dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
-import { PROBLEM_WORD, turnWords as turnWordsOf, type ViewProblem } from './lib/view'
+import { PROBLEM_WORD, turnWords as turnWordsOf, viewBlocked, type ViewProblem } from './lib/view'
 
 /* ── Role ───────────────────────────────────────────────── */
 /** The role shown to the user. The server has admin / manager / viewer and no site roles yet,
@@ -185,8 +185,7 @@ export interface ViewCheck {
   moveUntil?: number
   moveBy?: string | null
 }
-/** A camera turned away or being moved says nothing about the site: its frames are not used. */
-export const viewBlocked = (s: { view?: ViewCheck }) => s.view?.state === 'changed' || s.view?.state === 'move'
+export { viewBlocked }
 export interface SourceView {
   id: string
   n: number

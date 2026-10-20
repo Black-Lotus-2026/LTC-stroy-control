@@ -168,6 +168,9 @@ export function judgeView(ref: ViewFeatures, cur: ViewFeatures, m: ViewMatch, ok
   return { verdict: 'unsure' }
 }
 
+/** A camera turned away or being moved says nothing about the site: its frames are not used. */
+export const viewBlocked = (s: { view?: { state: string } }) => s.view?.state === 'changed' || s.view?.state === 'move'
+
 /** Where the camera was turned, in words: «влево и вниз примерно на 10 %». */
 export function turnWords(m: { dx?: number; dy?: number }) {
   const dx = m.dx ?? 0

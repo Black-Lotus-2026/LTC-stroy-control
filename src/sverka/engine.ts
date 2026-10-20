@@ -20,8 +20,8 @@ import * as api from './api'
 import { toObservationCode } from '../domain/constructionObservations'
 import type { CameraItem, CameraViewState } from './api'
 import { CODES, toCode, type Code } from './lib/machinery'
-import { SHARP_H, SHARP_W, VIEW_H, VIEW_W, compareViews, judgeView, viewFeatures, type ViewFeatures, type ViewMatch, type ViewProblem } from './lib/view'
-import { viewBlocked, type Det, type Observation, type SourceView, type ViewCheck } from './model'
+import { SHARP_H, SHARP_W, VIEW_H, VIEW_W, compareViews, judgeView, viewBlocked, viewFeatures, type ViewFeatures, type ViewMatch, type ViewProblem } from './lib/view'
+import type { Det, Observation, SourceView, ViewCheck } from './model'
 
 const CAPTURE_EVERY = 2000
 const OFFLINE_AFTER_FAILS = 3
