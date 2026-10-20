@@ -4,7 +4,7 @@ import { OBSERVATION_CODES, OBSERVATION_LABELS, toObservationCode } from '../../
 
 const FALLBACK = { not_requested: 'Не запрашивалось', not_needed: 'Не потребовалось: есть результаты YOLO', used: 'Использован VLM', empty: 'VLM не нашёл объектов', unavailable: 'VLM недоступен', timeout: 'Время ожидания VLM истекло', error: 'Ошибка VLM' }
 
-export function PhotoInspection() {
+export function PhotoInspection({ projectId }: { projectId?: string } = {}) {
   const [file, setFile] = useState<File | null>(null)
   const [url, setUrl] = useState('')
   const [result, setResult] = useState<DetectResponse | null>(null)
@@ -27,7 +27,7 @@ export function PhotoInspection() {
     const request = ++generation.current
     setBusy(true); setError(''); setResult(null)
     try {
-      const response = await detectPhoto(file)
+      const response = await detectPhoto(file, projectId)
       if (request === generation.current) setResult(response)
     } catch (e) {
       if (request === generation.current) setError(e instanceof Error ? e.message : 'Сервис не ответил')

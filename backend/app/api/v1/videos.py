@@ -151,11 +151,12 @@ def detector_status(current_user: CurrentUser) -> dict[str, Any]:
 async def construction_frame(
     db: DbSession,
     current_user: CurrentUser,
-    project_id: uuid.UUID,
     file: Annotated[UploadFile, File()],
+    project_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> dict[str, Any]:
     """Compatibility frame upload: the same sole trained YOLO, never VLM."""
-    resolve_context(db, project_id, current_user, permission="video.analyze", write=True)
+    if project_id is not None:
+        resolve_context(db, project_id, current_user, permission="project.read", write=False)
     result = await _detect_uploaded_image(file, None, photo=False)
     return {
         "profile": "construction_trained",
@@ -284,12 +285,13 @@ def get_cameras(
 async def detect_video_frame(
     db: DbSession,
     current_user: CurrentUser,
-    project_id: uuid.UUID,
     file: Annotated[UploadFile, File()],
+    project_id: Annotated[uuid.UUID | None, Query()] = None,
     stage_name: str | None = Form(None),
 ) -> FrameDetectionResponse:
     """YOLO-only video/camera frame. This path can never invoke a VLM."""
-    resolve_context(db, project_id, current_user, permission="video.analyze", write=True)
+    if project_id is not None:
+        resolve_context(db, project_id, current_user, permission="project.read", write=False)
     return await _detect_uploaded_image(file, stage_name, photo=False)
 
 
@@ -303,12 +305,13 @@ def get_photo_vlm():
 async def detect_photo(
     db: DbSession,
     current_user: CurrentUser,
-    project_id: uuid.UUID,
     file: Annotated[UploadFile, File()],
+    project_id: Annotated[uuid.UUID | None, Query()] = None,
     stage_name: str | None = Form(None),
 ) -> FrameDetectionResponse:
     """Still photograph: same trained YOLO first; bounded VLM only on success+empty."""
-    resolve_context(db, project_id, current_user, permission="video.analyze", write=True)
+    if project_id is not None:
+        resolve_context(db, project_id, current_user, permission="project.read", write=False)
     return await _detect_uploaded_image(file, stage_name, photo=True)
 
 

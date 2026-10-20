@@ -238,7 +238,7 @@ export function SettingsSheet({
               </div>
             </>
           )}
-          {tab === 'photo' && <PhotoInspection />}
+          {tab === 'photo' && <PhotoInspection projectId={project.id} />}
           {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} canConfigure={canConfigure} canUpload={canUpload} />}
           {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} user={user} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}

@@ -119,7 +119,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [liveDemoProject, setLiveDemoProject] = useState<string | null>(null)
   const showLiveDemo = context.is_demo && liveDemoProject === context.project_id
   const [engine] = useState(() => new Engine())
-  engine.inferenceEnabled = !context.is_demo && context.lifecycle === 'active' && can(context, 'video.analyze')
+  engine.inferenceEnabled = engine.mode === 'recording' || (!context.is_demo && context.lifecycle === 'active' && can(context, 'video.analyze'))
   const obs = useObservation(engine)
 
   const [projects, setProjects] = useState<ProjectItem[] | null>(null)

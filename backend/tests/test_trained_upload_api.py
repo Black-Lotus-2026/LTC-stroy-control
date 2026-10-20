@@ -521,3 +521,39 @@ def test_frame_and_status_agree_on_enabled_rule_classes(boundary, monkeypatch):
     photo = post(client, "detect-photo").json()
     assert photo["source"] == "vlm" and not photo["compliance_enabled"]
     assert photo["evaluable_classes"] == []
+
+
+def test_detect_frame_and_photo_without_project_id_succeeds(boundary):
+    state, client = boundary
+    client.params = {}
+    response = post(client, "detect-frame")
+    assert response.status_code == 200
+    assert response.json()["model_ready"] is True
+
+    photo_response = post(client, "detect-photo")
+    assert photo_response.status_code == 200
+    assert photo_response.json()["model_ready"] is True
+
+
+def test_detect_frame_with_demo_project_id_is_not_blocked(boundary):
+    state, client = boundary
+    from app.db.session import SessionLocal
+    from app.models.project import Project
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        demo_project = db.scalar(select(Project).where(Project.kind == "shared_demo"))
+        if not demo_project:
+            demo_project = Project(code="PRJ-DEMO", name="Demo", kind="shared_demo")
+            db.add(demo_project)
+            db.commit()
+            db.refresh(demo_project)
+        demo_id = str(demo_project.id)
+
+    client.params = {"project_id": demo_id}
+    response = post(client, "detect-frame")
+    assert response.status_code == 200
+    assert response.json()["model_ready"] is True
+
+    photo_response = post(client, "detect-photo")
+    assert photo_response.status_code == 200
