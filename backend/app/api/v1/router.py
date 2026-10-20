@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     alerts,
     auth,
+    camera_views,
     health,
     incidents,
     management,
@@ -25,6 +26,7 @@ api_router.include_router(alerts.router)
 api_router.include_router(health.router)
 api_router.include_router(reports.router)
 api_router.include_router(projects.router)
+api_router.include_router(camera_views.router)
 api_router.include_router(schedule.router)
 api_router.include_router(videos.router)
 api_router.include_router(incidents.router)

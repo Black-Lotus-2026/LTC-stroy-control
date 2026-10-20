@@ -14,6 +14,7 @@ const semanticsUrl = await moduleUrl('../src/domain/constructionObservations.ts'
 const semantics = await import(semanticsUrl)
 const machineryUrl = await moduleUrl('../src/sverka/lib/machinery.tsx')
 const machinery = await import(machineryUrl)
+const viewUrl = await moduleUrl('../src/sverka/lib/view.ts')
 
 test('25 display classes preserve broad semantics and never become worker/hook stage rules', () => {
   assert.equal(semantics.OBSERVATION_CODES.length,25)
@@ -39,7 +40,7 @@ test('actual engine retains all25 observations, records only stage13, fails clos
   globalThis.__inferenceUiMock = {detectFrame:async()=>{if(response instanceof Error)throw response;return response}}
   context.after(()=>{delete globalThis.__inferenceUiMock})
   const apiMock=dataUrl('export const detectFrame=(...args)=>globalThis.__inferenceUiMock.detectFrame(...args);')
-  const {Engine}=await import(await moduleUrl('../src/sverka/engine.ts',{'./api':apiMock,'./lib/machinery':machineryUrl,'../domain/constructionObservations':semanticsUrl}))
+  const {Engine}=await import(await moduleUrl('../src/sverka/engine.ts',{'./api':apiMock,'./lib/machinery':machineryUrl,'./lib/view':viewUrl,'../domain/constructionObservations':semanticsUrl}))
   const engine=new Engine()
   const rt={view:{id:'camera',kind:'camera',n:1,status:'live',dets:[]},el:new HTMLImageElement(),fails:0,same:0,hash:0,inFlight:false}
   engine.rts.set('camera',rt)
@@ -93,7 +94,7 @@ test('photo and video call distinct real endpoints and preserve explicit fallbac
 
 test('stage evaluation preserves sightings but never infers absence or out-of-stage incidents without explicit class permission', async () => {
   const formatUrl = await moduleUrl('../src/sverka/lib/format.ts')
-  const model = await import(await moduleUrl('../src/sverka/model.ts',{'./lib/machinery':machineryUrl,'./lib/format':formatUrl}))
+  const model = await import(await moduleUrl('../src/sverka/model.ts',{'./lib/machinery':machineryUrl,'./lib/format':formatUrl,'./lib/view':viewUrl}))
   const now = new Date(2026,9,19,12).getTime()
   const rules=Object.fromEntries(machinery.CODES.map(code=>[code,{code,lvl:'req',p:99,warnAfter:0,errAfter:1}]))
   rules.worker={code:'worker',lvl:'req'} // not part of the stage vocabulary

@@ -33,7 +33,8 @@ from app.schemas.stroy_control import (
     IncidentStatusUpdateRequest,
 )
 from app.storage import get_storage
-from app.services.alert_service import OPEN_STATUSES, assign_initial_alert, request_verification
+from app.services.alert_service import OPEN_STATUSES, apply_verification, assign_initial_alert, request_verification
+from app.services.camera_view import VIEW_CHANGED, move_active, verify_view_incident
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def _incident_to_response(inc: Incident) -> IncidentResponse:
         code=inc.code,
         project_id=inc.project_id,
         zone_id=inc.zone_id,
+        camera_id=inc.camera_id,
         first_seen_at=inc.first_seen_at,
         confidence=inc.confidence,
         stage_id=inc.schedule_task_id,
@@ -222,7 +224,21 @@ def create_incident(
                 raise HTTPException(422, "Камера или этап относятся к другой зоне")
     if req.model_status != "valid" and req.discrepancy_type in ("MISSING_MANDATORY", "MISSING_RECOMMENDED", "UNCHARACTERISTIC_PRESENT"):
         raise HTTPException(422, "Модель недоступна: отсутствие техники не подтверждено")
-    dedup_key = f"{req.project_id}:{req.zone_id}:{req.stage_id}:{req.machinery_type}:{req.discrepancy_type}"
+    # a camera view belongs to its camera: two cameras turned at once are two events
+    view_type = req.discrepancy_type.startswith("VIEW_")
+    view_camera = db.get(Camera, req.camera_id) if view_type and req.camera_id else None
+    if view_type:
+        if view_camera is None:
+            raise HTTPException(422, "Событие о ракурсе относится к камере объекта")
+        if req.discrepancy_type == VIEW_CHANGED and not view_camera.view_reference_key:
+            raise HTTPException(422, "У камеры нет утверждённого ракурса")
+        if req.discrepancy_type == VIEW_CHANGED and move_active(view_camera):
+            raise HTTPException(409, "Перенос камеры согласован: смещение ракурса не нарушение")
+    dedup_key = (
+        f"{req.project_id}:{req.camera_id}:{req.discrepancy_type}"
+        if view_type
+        else f"{req.project_id}:{req.zone_id}:{req.stage_id}:{req.machinery_type}:{req.discrepancy_type}"
+    )
     previous = db.scalars(select(Incident).where(
         Incident.project_id == req.project_id, Incident.dedup_key == dedup_key,
         Incident.status.in_([IncidentStatus.PENDING, IncidentStatus.CONFIRMED, IncidentStatus.IN_PROGRESS]),
@@ -295,6 +311,17 @@ def create_incident(
         except Exception as e:
             logger.warning("Failed to save incident primary snapshot: %s", e)
 
+    # the approved view the frame is compared with goes into the album as evidence
+    if view_camera is not None and view_camera.view_reference_key:
+        saved_album_photos.append(
+            {
+                "url": storage.public_url(view_camera.view_reference_key),
+                "camera_name": f"{view_camera.name} · утверждённый ракурс",
+                "is_primary": False,
+                "captured_at": aware(view_camera.view_reference_at).isoformat() if view_camera.view_reference_at else None,
+            }
+        )
+
     priority = (
         IncidentPriority.CRITICAL
         if req.severity == IncidentSeverity.ERROR
@@ -312,8 +339,12 @@ def create_incident(
         schedule_task_id=req.stage_id,
         zone_id=req.zone_id,
         camera_id=req.camera_id,
-        category=(IncidentCategory.CAMERA if req.discrepancy_type.startswith("STREAM_") else IncidentCategory.EQUIPMENT),
-        type=(IncidentType.CAMERA_OFFLINE if req.discrepancy_type.startswith("STREAM_") else inc_type),
+        category=(IncidentCategory.CAMERA if req.discrepancy_type.startswith(("STREAM_", "VIEW_")) else IncidentCategory.EQUIPMENT),
+        type=(
+            IncidentType.CAMERA_OFFLINE if req.discrepancy_type.startswith("STREAM_")
+            else IncidentType.CAMERA_VISIBILITY if view_type
+            else inc_type
+        ),
         title=req.title,
         description=req.description,
         discrepancy_type=req.discrepancy_type,
@@ -419,6 +450,9 @@ def update_incident_status(
             request_verification(db, incident, current_user)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if (incident.discrepancy_type or "").startswith("VIEW_"):
+            # a camera view is rechecked at once: a few fresh frames against the reference, no detector, no queue
+            apply_verification(db, incident, verify_view_incident(db, incident, pause=1.0))
     elif new_status in (IncidentStatus.IN_PROGRESS, IncidentStatus.CONFIRMED):
         if incident.status not in OPEN_STATUSES:
             raise HTTPException(status_code=409, detail="Инцидент уже закрыт")
