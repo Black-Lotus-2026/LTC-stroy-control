@@ -79,8 +79,8 @@ export async function login(username: string, password: string) {
   setStoredToken(r.access_token)
   return r.user
 }
-export async function register(username: string, password: string, confirm: string) {
-  const r = await req<TokenResponse>('/auth/register', json('POST', { username, password, confirm_password: confirm }), 'Не удалось зарегистрироваться')
+export async function register(username: string, password: string, confirm: string, role: string = 'manager') {
+  const r = await req<TokenResponse>('/auth/register', json('POST', { username, password, confirm_password: confirm, role }), 'Не удалось зарегистрироваться')
   setStoredToken(r.access_token)
   return r.user
 }

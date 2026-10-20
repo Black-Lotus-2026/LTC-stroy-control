@@ -398,6 +398,7 @@ export async function registerUser(data: {
   username: string
   password: string
   confirm_password: string
+  role?: string
 }): Promise<AuthTokenResponse> {
   const res = await fetch(`${API_PREFIX}/auth/register`, {
     method: 'POST',

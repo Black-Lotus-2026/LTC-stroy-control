@@ -1260,9 +1260,11 @@ export default function App() {
       return
     }
 
+    const role = ((form.elements.namedItem('reg_role') as HTMLSelectElement)?.value || 'manager')
+
     setIsSubmittingAuth(true)
     try {
-      const res = await registerUser({ username, password, confirm_password: confirmPassword })
+      const res = await registerUser({ username, password, confirm_password: confirmPassword, role })
       setCurrentUser(res.user)
       setIsAuthModalOpen(false)
       toast(`Аккаунт «${res.user.username}» успешно создан!`)
@@ -2405,6 +2407,28 @@ export default function App() {
                     minLength={4}
                     required
                   />
+                </label>
+                <label style={{ display: 'block', marginTop: '12px' }}>
+                  Роль в системе *
+                  <select
+                    name="reg_role"
+                    defaultValue="manager"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      background: '#1e293b',
+                      color: '#f8fafc',
+                      border: '1px solid #334155',
+                      marginTop: '4px',
+                      fontSize: '13.5px',
+                    }}
+                  >
+                    <option value="manager">Руководитель проекта (управление объектом и техникой)</option>
+                    <option value="inspector">Инспектор технадзора (фиксация и проверка нарушений)</option>
+                    <option value="admin">Администратор (полный доступ)</option>
+                    <option value="viewer">Наблюдатель (только чтение)</option>
+                  </select>
                 </label>
                 <div className="dialog-actions" style={{ marginTop: '20px' }}>
                   <button type="submit" className="button primary full" disabled={isSubmittingAuth}>

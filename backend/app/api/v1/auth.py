@@ -46,8 +46,7 @@ def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
             detail=f"Пользователь с логином «{clean_username}» уже существует",
         )
 
-    # Registration does not grant project or organization authority.
-    role = UserRole.VIEWER
+    role = data.role or UserRole.VIEWER
 
     new_user = User(
         username=clean_username,
