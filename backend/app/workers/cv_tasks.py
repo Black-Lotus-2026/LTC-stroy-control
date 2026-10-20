@@ -63,7 +63,9 @@ def process_video_frame_sync(
 
         # 3. Evaluate discrepancy rules
         engine = RuleEngine()
-        probs = stage.machinery_probabilities or {}
+        from app.services.machinery_rules import effective_cv_probabilities
+
+        probs = effective_cv_probabilities(stage.machinery_probabilities or {})
         evaluations = (detector.evaluate_rules(probs, detections) if hasattr(detector, "evaluate_rules")
                        else engine.evaluate_stage_machinery(probs, detected_counts))
 

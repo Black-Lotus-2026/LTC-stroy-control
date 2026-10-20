@@ -881,6 +881,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           </button>
         )}
         <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')}>Безопасность</button>
+        <button type="button" className="btn small safety-entry" disabled={!project} onClick={() => setSheet('documents')}>Документы</button>
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
@@ -1025,6 +1026,14 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           tab={sheet}
           recordingCameraId={safetyRecordingCameraId}
           onRecordingCamera={(id) => { setSafetyRecordingCameraId(id); engine.setSafetyRecordingCamera(id || undefined) }}
+          onDocumentRulesChanged={async (stageIds) => {
+            const refreshed = await Promise.all(stageIds.map(async id => [id, await api.profile(id)] as const))
+            setApiProfiles(current => {
+              const next = new Map(current)
+              refreshed.forEach(([id, profile]) => next.set(id, profile))
+              return next
+            })
+          }}
           settings={settings}
           onSettings={setSettings}
           obs={obs}

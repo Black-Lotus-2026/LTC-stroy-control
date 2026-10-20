@@ -21,7 +21,7 @@ celery_app = Celery(
     "stroy_control",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.tasks", "app.workers.cv_tasks", "app.workers.management_tasks"],
+    include=["app.workers.tasks", "app.workers.cv_tasks", "app.workers.management_tasks", "app.workers.document_tasks"],
 )
 
 celery_app.conf.update(

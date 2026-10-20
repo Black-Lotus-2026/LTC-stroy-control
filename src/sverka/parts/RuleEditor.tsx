@@ -175,6 +175,7 @@ export function RuleEditor({
       <div className="meta">
         Этап {stage.n} · {stage.name}
       </div>
+      <div className="meta">Источник требования: {r.source === 'document' ? 'ПОС/ППР · цитата во вкладке «Документы»' : r.source === 'manual' ? 'ручная правка' : 'справочник этапов'}</div>
       <div className="field">
         <span className="lbl" id="segLbl">
           Требование на этом этапе

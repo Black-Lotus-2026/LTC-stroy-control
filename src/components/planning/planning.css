@@ -50,6 +50,23 @@
 .planning-stage-facts dt { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
 .planning-stage-facts dd { margin: 0; font-size: 13px; }
 .planning-requirements { color: var(--muted); font-size: 12px; margin: 20px 0 0; line-height: 1.6; }
+.document-search { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
+.document-search-heading, .document-upload-row, .document-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.document-search h4 { margin: 0; font-size: 15px; }
+.document-search-heading p, .document-muted, .document-upload-row > span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.document-search-heading p { max-width: 620px; }
+.document-upload-row { justify-content: flex-start; margin: 18px 0; }
+.document-upload-row label:first-child { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.document-upload-row select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); }
+.document-upload { position: relative; overflow: hidden; cursor: pointer; }
+.document-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.document-list, .document-analysis ul { padding: 0; list-style: none; }
+.document-list li, .document-analysis li { padding: 10px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.document-list small, .document-analysis small { color: var(--muted); }
+.document-list-actions { display: flex; gap: 8px; }
+.document-analysis { margin-top: 20px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.document-analysis blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--accent, #d6aa64); line-height: 1.5; }
+.document-source { margin-left: 12px; }
 .planning-date-form { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; margin-top: 22px; }
 .planning-date-form label, .planning-dialog label { display: grid; gap: 8px; font-size: 12px; color: var(--muted); }
 .planning-date-form input, .planning-dialog input, .planning-dialog select, .rules-stage-picker select, .rules-table select { min-height: 38px; padding: 8px 12px; color: var(--text, #e8e9ea); background: var(--bg, #121619); border: 1px solid var(--border); border-radius: 6px; font: inherit; }

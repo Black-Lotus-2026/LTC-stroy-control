@@ -64,6 +64,10 @@ class ScheduleTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     machinery_probabilities: Mapped[dict] = mapped_column(
         JSONB, default=dict, server_default="{}"
     )
+    # Per-class provenance for manual and document-approved changes.
+    machinery_rule_sources: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
 
     # Плановый прогресс на текущий момент и наблюдаемый факт. Оба в долях 0..1.
     planned_progress: Mapped[float | None] = mapped_column(Float, default=None)

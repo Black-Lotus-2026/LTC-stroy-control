@@ -24,6 +24,7 @@ from app.services.detector import MACHINERY_CLASSES
 from app.services.management.context import require_project
 from app.services.schedule_engine import ScheduleEngine
 from app.services.stage_matcher import StageMachineryService
+from app.services.machinery_rules import BY_CODE, code_for_name, current_probability, set_probability
 
 router = APIRouter(prefix="/schedule", tags=["Календарный план"])
 
@@ -247,6 +248,7 @@ def _build_stage_probability_response(
     stage_name = stage.name if stage else "Общестроительные работы"
     prob_profile = matcher.estimate_machinery_probabilities(stage_name)
     overrides = (stage.machinery_probabilities or {}) if stage else {}
+    sources = (stage.machinery_rule_sources or {}) if stage else {}
 
     status_to_prob = {
         "MANDATORY": 0.95,
@@ -262,8 +264,9 @@ def _build_stage_probability_response(
     items: list[MachineryProbabilityItem] = []
     # Map all 10 specialized classes
     for _cls_id, (raw_label, label_ru, code) in MACHINERY_CLASSES.items():
-        override_val = (
-            overrides.get(code) or overrides.get(raw_label) or overrides.get(label_ru)
+        override_val = next(
+            (overrides[key] for key in (code, raw_label, label_ru) if key in overrides),
+            None,
         )
         if override_val is not None:
             if (
@@ -303,6 +306,7 @@ def _build_stage_probability_response(
                 probability=round(prob, 2),
                 classification=cls,
                 requirement_level=level,
+                source=sources.get(code, {}).get("source", "catalog"),
             )
         )
 
@@ -321,7 +325,7 @@ def _build_stage_probability_response(
         else 0.95,
         probabilities=items,
         top_machinery=top_machinery,
-        has_custom_override=bool(overrides and len(overrides) > 0),
+        has_custom_override=bool(sources),
     )
 
 
@@ -345,8 +349,19 @@ def update_stage_probabilities(
     stage = _owned_stage(stage_id, db, user, write=True)
 
     current_overrides = dict(stage.machinery_probabilities or {})
-    current_overrides.update(payload.overrides)
+    origins = dict(stage.machinery_rule_sources or {})
+    for key, value in payload.overrides.items():
+        code = key if key in BY_CODE else code_for_name(key)
+        if code:
+            probability = current_probability({code: value}, code)
+            if probability is None or not 0 <= probability <= 1:
+                raise HTTPException(422, "Некорректное значение вероятности")
+            current_overrides = set_probability(current_overrides, code, probability)
+            origins[code] = {"source": "manual"}
+        else:
+            current_overrides[key] = value
     stage.machinery_probabilities = current_overrides
+    stage.machinery_rule_sources = origins
     db.commit()
     db.refresh(stage)
     return _build_stage_probability_response(stage)
@@ -363,7 +378,8 @@ def reset_stage_probabilities(
     """Сбросить ручные настройки техники к расчётам по справочнику/AI."""
     stage = _owned_stage(stage_id, db, user, write=True)
 
-    stage.machinery_probabilities = {}
+    stage.machinery_probabilities = StageMachineryService().estimate_machinery_probabilities(stage.name).probabilities
+    stage.machinery_rule_sources = {}
     db.commit()
     db.refresh(stage)
     return _build_stage_probability_response(stage)

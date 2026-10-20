@@ -110,6 +110,7 @@ export interface Rule {
   warnAfter: number // s
   errAfter: number // s
   ownTiming: boolean
+  source?: 'catalog' | 'document' | 'manual'
 }
 export interface Profile {
   stageId: string
@@ -158,6 +159,7 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
       warnAfter: l?.warnAfter ?? s.warnAfter,
       errAfter: l?.errAfter ?? s.errAfter,
       ownTiming: l?.warnAfter != null || l?.errAfter != null,
+      source: item?.source,
     }
   }
   return { stageId: api.stage_id, catalog: api.matched_catalog_stage ?? null, similarity: api.similarity_confidence, rules, edited: Object.keys(local).length > 0 }

@@ -3,6 +3,7 @@ import { type PageKey } from '../../data'
 import { type StageItem, type MachineryProbabilityItem, getCurrentStageByDate, loadDemoSchedule, uploadScheduleFile, clearSchedule, updateStageDates, cascadeShiftStages, fetchStageProbabilities, updateStageProbabilities, resetStageProbabilities } from '../../api/stroyControlApi'
 import { getStageMachineryRules } from '../../domain/stageRules'
 import { Icon, Status } from '../ui/Primitives'
+import { DocumentSearch } from './DocumentSearch'
 import './planning.css'
 
 const DAY = 86400000
@@ -252,6 +253,7 @@ export function Progress({ stages, setStages, activeProjectId, navigate, toast }
               <div className="planning-toolbar-actions"><button className="button primary" disabled={isLoading} type="submit">Сохранить</button><button className="button" type="button" disabled={isLoading} onClick={() => { setEditingStageId(null); setError('') }}>Отмена</button></div>
             </form> : <dl className="planning-stage-facts"><div><dt>Плановые сроки</dt><dd>{formatDate(selectedStage.planned_start)} — {formatDate(selectedStage.planned_end)}</dd></div><div><dt>Длительность</dt><dd>{selectedStage.duration_days} дн.</dd></div></dl>}
             {stageRules && <p className="planning-requirements">По справочнику обязательно: {stageRules.mandatory.join(', ') || 'не задано'}.</p>}
+            {activeProjectId && <DocumentSearch key={activeProjectId} projectId={activeProjectId} stageId={selectedStage.id} stageName={selectedStage.name} toast={toast} />}
           </section>}
         </>}
 

@@ -21,6 +21,36 @@ export interface StageItem {
   status: string
 }
 
+export type DocumentKind = 'POS' | 'PPR' | 'TER'
+
+export interface ProjectDocumentItem {
+  id: string
+  kind: DocumentKind
+  filename: string
+  size_bytes: number
+  created_at: string
+  chunk_count: number
+}
+
+export interface DocumentMachineryItem {
+  name: string
+  purpose: string
+  document_id: string
+  document_name: string
+  document_kind: DocumentKind
+  chunk_id: string
+  locator: string
+  quote: string
+}
+
+export interface DocumentAnalysis {
+  stage_id: string
+  summary: string
+  reviewed_chunks: number
+  document_count: number
+  items: DocumentMachineryItem[]
+}
+
 export interface CascadeShiftResponse {
   delayed_stage_id: string
   delay_days: number
@@ -684,6 +714,42 @@ export const DEMO_REFERENCE_STAGES: StageItem[] = [
 export async function fetchStages(projectId?: string): Promise<StageItem[]> {
   if (!isValidUuid(projectId)) throw new Error('Выберите объект')
   return checkedJson(`${API_PREFIX}/schedule/stages?project_id=${projectId}`, {}, 'Не удалось загрузить график')
+}
+
+export async function fetchProjectDocuments(projectId: string): Promise<ProjectDocumentItem[]> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents`, {}, 'Не удалось загрузить документы')
+}
+
+export async function uploadProjectDocument(projectId: string, file: File, kind: DocumentKind): Promise<ProjectDocumentItem> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('kind', kind)
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents`, { method: 'POST', body }, 'Не удалось загрузить документ')
+}
+
+export async function deleteProjectDocument(projectId: string, documentId: string): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${documentId}`, {
+    method: 'DELETE', headers: getAuthHeaders(),
+  })
+  if (!response.ok) throw new Error('Не удалось удалить документ')
+}
+
+export async function downloadProjectDocument(projectId: string, item: ProjectDocumentItem): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${item.id}/file`, { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error('Не удалось скачать документ')
+  const blobUrl = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = blobUrl
+  anchor.download = item.filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+}
+
+export async function analyzeProjectDocuments(projectId: string, stageId: string): Promise<DocumentAnalysis> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analyze`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage_id: stageId }),
+  }, 'Не удалось проанализировать документы')
 }
 
 export async function loadDemoSchedule(projectId?: string): Promise<StageItem[]> {
