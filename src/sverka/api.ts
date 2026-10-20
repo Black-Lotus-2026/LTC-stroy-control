@@ -82,9 +82,11 @@ export async function me(): Promise<UserProfile | null> {
   try {
     return await req<UserProfile>('/auth/me')
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) setStoredToken(null)
-    if (e instanceof ApiError && e.status === 0) throw e
-    return null
+    if (e instanceof ApiError && e.status === 401) {
+      setStoredToken(null)
+      return null
+    }
+    throw e
   }
 }
 export const logout = () => setStoredToken(null)

@@ -37,11 +37,18 @@ export function SverkaApp() {
   }, [])
   const dropIntro = useCallback(() => setIntro('off'), [])
   const showIntro = useCallback(() => setIntro('on'), [])
+  const onAuth = useCallback((u: UserProfile) => {
+    setOffline(null)
+    setUser(u)
+  }, [])
   useEffect(() => {
-    api.me().then(setUser, (e: Error) => {
+    let alive = true
+    api.me().then((u) => { if (alive) setUser(u) }, (e: Error) => {
+      if (!alive) return
       setOffline(e.message)
       setUser(null)
     })
+    return () => { alive = false }
   }, [])
   // sign-in and the intro share one backdrop, so the drawing carries over from one to the other
   const showcase = user === null || (!!user && intro !== 'off')
@@ -69,7 +76,7 @@ export function SverkaApp() {
           )}
           {showcase && (
             <Showcase mode={user ? 'intro' : 'auth'} leaving={!!user && intro === 'leaving'} onGone={dropIntro}>
-              {user ? <Intro user={user} leaving={intro === 'leaving'} onContinue={leaveIntro} /> : <Auth onAuth={setUser} offline={offline} />}
+              {user ? <Intro user={user} leaving={intro === 'leaving'} onContinue={leaveIntro} /> : <Auth onAuth={onAuth} offline={offline} />}
             </Showcase>
           )}
         </>
