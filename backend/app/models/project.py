@@ -197,6 +197,32 @@ class Camera(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), default=None
     )
 
+    # Утверждённый ракурс: кадр, с которым сверяется камера. Утверждает
+    # администратор; ответственный только предлагает (view_proposal_*).
+    view_reference_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    view_reference_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_reference_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    view_proposal_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    view_proposal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_proposal_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    view_proposal_note: Mapped[str | None] = mapped_column(Text, default=None)
+    # Перенос камеры: requested — ждёт администратора, approved — согласован до view_move_until.
+    view_move_status: Mapped[str | None] = mapped_column(String(16), default=None)
+    view_move_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_move_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    view_move_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    view_move_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_move_approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    view_move_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
     project: Mapped[Project] = relationship(back_populates="cameras")
     zone: Mapped[Zone | None] = relationship(back_populates="cameras")
 

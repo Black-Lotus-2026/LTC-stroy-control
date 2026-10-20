@@ -66,3 +66,12 @@ def refresh_weather_task() -> dict[str, int]:
 
     with session_scope() as db:
         return run_weather_refresh(db)
+
+
+@shared_task(name="cameras.expire_moves")
+def expire_camera_moves_task() -> dict[str, int]:
+    """Согласованный перенос камеры истёк без нового ракурса — событие ответственному."""
+    from app.services.camera_view import expire_moves
+
+    with session_scope() as db:
+        return {"expired": expire_moves(db)}

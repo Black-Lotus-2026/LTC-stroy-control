@@ -2,7 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as api from '../api'
 import type { AdminRecipient, ApiIncidentEvent, InactionCurve, UserProfile } from '../api'
 import type { Episode, EventStatus, Observation, Profile, Rights, Stage, UiEvent } from '../model'
-import { LV, STATUS_WORD, consequence, isOpen, liveTitle, parseDescription, sevNow, stageDay, toneOf } from '../model'
+import { LV, STATUS_WORD, consequence, isOpen, liveTitle, loopDecision, parseDescription, sevNow, stageDay, toneOf, viewDecision } from '../model'
+import type { SourceView } from '../model'
+import type { ViewActions } from './Settings'
+import { turnWords } from '../lib/view'
 import { MACH, type Code } from '../lib/machinery'
 import { atTime, durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
@@ -26,6 +29,7 @@ export function CaseFile({
   onDecide,
   onRule,
   onPlan,
+  view,
 }: {
   ev: UiEvent
   ep?: Episode
@@ -40,6 +44,8 @@ export function CaseFile({
   onDecide: (status: EventStatus) => Promise<void>
   onRule: (code: Code) => void
   onPlan: () => void
+  /** a camera-view event: the camera's approved view and what may be decided about it */
+  view?: { actions: ViewActions; cameraId: string }
 }) {
   const el = useRef<HTMLElement>(null)
   const scrim = useRef<HTMLDivElement | null>(null)
@@ -165,6 +171,8 @@ export function CaseFile({
   const desc = parseDescription(ev.description)
   const day = stage ? stageDay(stage, ev.at) : 0
   const live = obs.sources.filter((s) => s.status === 'live').length
+  const camLive = view ? obs.sources.find((s) => s.id === view.cameraId) : undefined
+  const camView = view?.actions.states.find((x) => x.camera_id === view.cameraId)
   const steps: { tone: string; h: string; p: React.ReactNode; src?: React.ReactNode; extra?: React.ReactNode }[] = []
   steps.push({
     tone: 'plan',
@@ -203,6 +211,21 @@ export function CaseFile({
         </>
       ),
     })
+  if (ev.kind === 'view') {
+    const ref = camView?.reference
+    steps.push({
+      tone: 'plan',
+      h: 'Утверждённый ракурс',
+      p: ref ? (
+        <>
+          Камера сверяется с кадром, утверждённым {atTime(new Date(ref.at || ev.at).getTime())}
+          {ref.by ? `, ${ref.by}` : ''}. Сдвинуть камеру без согласования администратора нельзя.
+        </>
+      ) : (
+        desc['Правило'] || 'Утверждённый ракурс не найден.'
+      ),
+    })
+  }
   steps.push({
     tone,
     h: 'Наблюдение',
@@ -224,6 +247,10 @@ export function CaseFile({
     p:
       ev.kind === 'stream'
         ? 'Событие видеопотока. Это сведения о камере, а не вывод о площадке, решение по нему не требуется.'
+        : ev.kind === 'loop'
+          ? `Отклонение: вместо камеры похоже идёт запись.${!isOpen(ev) ? ` Решение: ${(loopDecision(ev) ?? STATUS_WORD[ev.status]).toLowerCase()}.` : ' За минуту повтор не исключить, поэтому сервер сам событие не закрывает: это делает администратор, убедившись, что камера показывает площадку вживую.'}`
+        : ev.kind === 'view'
+          ? `Отклонение: камера смотрит не туда, куда утверждено.${!isOpen(ev) ? ` Решение: ${(viewDecision(ev) ?? STATUS_WORD[ev.status]).toLowerCase()}.` : ' Ответственный возвращает камеру — сервер сам сверит свежие кадры с эталоном. Если смещение намеренное, новый ракурс утверждает администратор.'}`
         : ev.kind === 'missing' && !rec && r && ep && !ep.to && sev !== 'err'
         ? `${SEV_WORD[sev]}. Станет отклонением через ${durShort(Math.max(0, r.errAfter * 1000 - (obs.t - ep.from)))}, если ${MACH[ev.mach!].lower} не появится.`
         : `${SEV_WORD[sev]}.${ev.status !== 'pending' ? ` Решение: ${STATUS_WORD[ev.status].toLowerCase()}.` : ''}`,
@@ -280,7 +307,7 @@ export function CaseFile({
           <div className="case-top">
             <span className="sev-tag" data-sev={tone}>
               <SevIcon sev={tone} />
-              {ev.kind === 'stream' ? 'Видеопоток' : SEV_WORD[sev]} · {ev.code} · {ev.zone ? `${ev.zone} · ` : ''}
+              {ev.kind === 'stream' ? 'Видеопоток' : ev.kind === 'view' ? 'Ракурс камеры' : ev.kind === 'loop' ? 'Повтор записи' : SEV_WORD[sev]} · {ev.code} · {ev.zone ? `${ev.zone} · ` : ''}
               {hhmm(ev.at)}
             </span>
             <button type="button" className="close-x" onClick={close} aria-label="Закрыть">
@@ -296,6 +323,12 @@ export function CaseFile({
                 ? consequence(ev.mach)
                 : ev.kind === 'oop'
                   ? 'Техника на площадке не соответствует текущему этапу плана.'
+                  : ev.kind === 'loop'
+                    ? 'Кадры камеры повторяются через одинаковое время, как запись по кругу. Пока повтор идёт, по ним нельзя сказать, что происходит на площадке.'
+                  : ev.kind === 'view'
+                    ? ev.type === 'VIEW_MOVE_OVERDUE'
+                      ? 'Согласованный перенос закончился, а новый ракурс не утверждён. Пока его нет, камера не сверяется с эталоном.'
+                      : 'Пока камера смотрит не туда, её кадры не учитываются в сверке техники: по ним нельзя сказать, есть ли техника на месте.'
                   : ev.kind === 'stream'
                     ? ev.type === 'STREAM_ONLINE'
                       ? 'Камера снова присылает кадры, наблюдение по её зоне возобновилось.'
@@ -338,11 +371,16 @@ export function CaseFile({
             ) : !isOpen(ev) ? (
               <div className="decided">
                 <span>
-                  Решение: <b>{ev.status === 'resolved' && ev.check === 'passed' ? 'Устранено, подтвердили камеры' : STATUS_WORD[ev.status]}</b>
+                  Решение: <b>{loopDecision(ev) ?? viewDecision(ev) ?? (ev.status === 'resolved' && ev.check === 'passed' ? 'Устранено, подтвердили камеры' : STATUS_WORD[ev.status])}</b>
+                  {(ev.checkDetails.resolution === 'accepted' || ev.checkDetails.resolution === 'admin_confirmed_live') && ev.checkDetails.resolvedBy ? ` · ${ev.checkDetails.resolvedBy}` : ''}
                   {decidedAt ? ` · ${atTime(decidedAt)}` : ''}
                 </span>
                 <span className="hint">Событие закрыто. Если нарушение повторится, система создаст новое.</span>
               </div>
+            ) : ev.kind === 'loop' && rights.act ? (
+              <LoopDecide ev={ev} live={obs.sources.find((s) => s.id === ev.cameraId)} admin={user.role === 'admin'} saving={save.s === 'saving'} decide={decide} />
+            ) : ev.kind === 'view' && view && rights.act ? (
+              <ViewDecide ev={ev} live={camLive} st={camView} a={view.actions} cameraId={view.cameraId} saving={save.s === 'saving'} decide={decide} onDone={close} />
             ) : !rights.act ? (
               <div className="decided">
                 <span>{ev.status === 'pending' ? <b>Ждёт решения</b> : <>Решение: <b>{STATUS_WORD[ev.status]}</b></>}</span>
@@ -457,6 +495,11 @@ function TaskLine({ ev }: { ev: UiEvent }) {
 }
 
 const REASON: Record<string, string> = {
+  loop_needs_admin: 'повтор записи за минуту не исключить, событие закрывает администратор',
+  no_view_reference: 'у камеры нет утверждённого ракурса',
+  no_frames: 'камера не прислала серверу ни одного кадра',
+  no_camera: 'камера удалена',
+  view_not_approved: 'новый ракурс ещё не утверждён',
   detector_not_ready: 'распознавание на сервере недоступно, исправление по камерам не подтвердить',
   no_live_cameras: 'у объекта нет камер с адресом потока',
   verification_error: 'проверка завершилась ошибкой на сервере',
@@ -465,7 +508,7 @@ const REASON: Record<string, string> = {
 function CheckState({ ev }: { ev: UiEvent }) {
   const d = ev.checkDetails
   const when = ev.checkedAt ? ` в ${atTime(ev.checkedAt)}` : ''
-  const cams = d.configured ? `кадры дали ${d.working ?? 0} из ${d.configured} камер` : null
+  const cams = d.match?.length ? `совпадение с утверждённым ракурсом ${d.match.map((m) => `${Math.round(m * 100)} %`).join(', ')}` : d.configured ? `кадры дали ${d.working ?? 0} из ${d.configured} камер` : null
   if (ev.check === 'requested')
     return (
       <p className="check" data-s="requested">
@@ -548,6 +591,141 @@ function History({ hist, open, onToggle, ev, user, admins }: { hist: ApiIncident
           })}
         </ol>
       )}
+    </div>
+  )
+}
+
+const pct = (m?: number) => `${Math.round(Math.max(0, m ?? 0) * 100)} %`
+
+/** Decisions on a camera-view event: put the camera back, or have the administrator approve the new view. */
+function ViewDecide({ ev, live, st, a, cameraId, saving, decide, onDone }: { ev: UiEvent; live?: SourceView; st?: api.CameraViewState; a: ViewActions; cameraId: string; saving: boolean; decide: (s: EventStatus) => Promise<void>; onDone: () => void }) {
+  const admin = a.user.role === 'admin'
+  const [form, setForm] = useState(false)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState<{ s: 'saving' | 'error'; msg?: string } | null>(null)
+  const now = live?.view
+  const overdue = ev.type === 'VIEW_MOVE_OVERDUE'
+  const run = async (f: () => Promise<void>, close = true) => {
+    setBusy({ s: 'saving' })
+    try {
+      await f()
+      setBusy(null)
+      setForm(false)
+      if (close) window.setTimeout(onDone, 480)
+    } catch (e) {
+      setBusy({ s: 'error', msg: e instanceof Error ? e.message : 'Не удалось сохранить' })
+    }
+  }
+  const off = saving || busy?.s === 'saving'
+  return (
+    <div className="decided">
+      <span>
+        {now?.state === 'ok' ? (
+          <>
+            Сейчас ракурс <b>совпадает</b> с утверждённым: {pct(now.match)}
+            {now.since ? ` с ${hhmmss(now.since)}` : ''}.
+          </>
+        ) : now?.state === 'changed' ? (
+          <>
+            Камера по-прежнему смотрит не туда: совпадение {pct(now.match)}
+            {now.problem === 'turned' && turnWords(now) ? `, повёрнута ${turnWords(now)}` : ''}.
+          </>
+        ) : now?.state === 'move' ? (
+          <>Идёт согласованный перенос камеры.</>
+        ) : (
+          <>Текущий кадр камеры с эталоном пока не сверен.</>
+        )}
+      </span>
+      <CheckState ev={ev} />
+      <div className="decide-row">
+        {!overdue && (
+          <button type="button" className="btn primary" onClick={() => decide('resolved')} disabled={off || ev.check === 'requested'}>
+            {ev.check === 'requested' ? 'Проверка запрошена' : 'Камера возвращена — проверить'}
+          </button>
+        )}
+        {admin && st?.proposal ? (
+          <button type="button" className="btn" disabled={off} onClick={() => run(() => a.approve(cameraId))}>
+            Утвердить предложенный ракурс
+          </button>
+        ) : admin ? (
+          <button type="button" className="btn" disabled={off || !live?.snapshot} onClick={() => run(() => a.submit(cameraId, `Смещение согласовано в разборе ${ev.code}`))}>
+            Принять новый ракурс
+          </button>
+        ) : st?.proposal ? null : (
+          <button type="button" className="btn" disabled={off} onClick={() => setForm(!form)} aria-expanded={form}>
+            Смещение намеренное
+          </button>
+        )}
+        {ev.status === 'pending' && (
+          <button type="button" className="btn ghost" disabled={off} onClick={() => decide('confirmed')}>
+            Подтвердить нарушение
+          </button>
+        )}
+      </div>
+      {form && (
+        <div className="sv-form">
+          <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Почему камеру сдвинули: кран переставили, камера на новой мачте" maxLength={500} />
+          <div className="form-actions">
+            <button type="button" className="btn small primary" disabled={off || note.trim().length < 3 || !live?.snapshot} onClick={() => run(() => a.submit(cameraId, note.trim()), false)}>
+              Отправить новый ракурс администратору
+            </button>
+          </div>
+        </div>
+      )}
+      <span className="hint">
+        {busy?.s === 'error'
+          ? busy.msg
+          : st?.proposal
+            ? `Новый ракурс предложил ${st.proposal.by || 'ответственный'}${st.proposal.note ? `: «${st.proposal.note}»` : ''}. ${admin ? 'Утвердив его, вы закроете событие как согласованное смещение.' : 'Решение за администратором.'}`
+            : admin
+              ? 'Приняв новый ракурс, вы утвердите текущий кадр эталоном, а событие закроется как согласованное смещение.'
+              : 'Сервер сам сверит свежие кадры с утверждённым ракурсом. Согласовать смещение может только администратор.'}
+      </span>
+    </div>
+  )
+}
+
+/** Decisions on a looped camera: only an administrator who saw the live picture closes it. */
+function LoopDecide({ ev, live, admin, saving, decide }: { ev: UiEvent; live?: Observation['sources'][number]; admin: boolean; saving: boolean; decide: (s: EventStatus) => Promise<void> }) {
+  const still = live?.loop?.looped
+  return (
+    <div className="decided">
+      <span>
+        {still ? (
+          <>
+            Повтор <b>продолжается</b>
+            {live?.loop?.period ? `: период около ${durShort(live.loop.period)}` : ''}.
+          </>
+        ) : live?.status === 'live' ? (
+          <>Сейчас кадры камеры не повторяются.</>
+        ) : (
+          <>Камера сейчас не даёт кадров, повтор не проверить.</>
+        )}
+      </span>
+      <div className="decide-row">
+        {admin && (
+          <button type="button" className="btn primary" onClick={() => decide('resolved')} disabled={saving}>
+            Видео живое — закрыть
+          </button>
+        )}
+        {ev.status === 'pending' && (
+          <button type="button" className={admin ? 'btn' : 'btn primary'} onClick={() => decide('confirmed')} disabled={saving}>
+            Подтвердить нарушение
+          </button>
+        )}
+        {admin && (
+          <button type="button" className="btn ghost" onClick={() => decide('false_positive')} disabled={saving}>
+            Ложное
+          </button>
+        )}
+      </div>
+      <span className="hint">
+        {admin
+          ? still
+            ? 'Повтор ещё идёт. Закрывайте, только если сами видите площадку вживую: например, попросите прораба пройти перед камерой.'
+            : 'Закрывая, вы подтверждаете, что камера показывает площадку вживую.'
+          : 'Снять событие может администратор, убедившись, что камера показывает площадку вживую. Подключите камеру напрямую и сообщите ему.'}
+      </span>
     </div>
   )
 }

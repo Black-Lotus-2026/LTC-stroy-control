@@ -171,6 +171,7 @@ class IncidentResponse(BaseModel):
     code: str
     project_id: uuid.UUID
     zone_id: uuid.UUID | None = None
+    camera_id: uuid.UUID | None = None
     first_seen_at: datetime | None = None
     confidence: float = 0
     stage_id: uuid.UUID | None = None

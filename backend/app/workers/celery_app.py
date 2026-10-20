@@ -75,4 +75,8 @@ celery_app.conf.beat_schedule = {
         "task": "weather.refresh_all",
         "schedule": crontab(hour=3, minute=0),
     },
+    "expire-camera-moves": {
+        "task": "cameras.expire_moves",
+        "schedule": crontab(minute="*"),
+    },
 }
