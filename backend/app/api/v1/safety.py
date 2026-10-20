@@ -584,7 +584,7 @@ async def analyze_frame(
     recording_mode: bool = Form(False),
 ):
     project = resolve_context(
-        db, project_id, user, permission="video.analyze", write=True, lock=True
+        db, project_id, user, permission="video.analyze", write=False, lock=False
     ).project
     source_id = source_id.strip()
     if not source_id:
@@ -621,6 +621,7 @@ async def analyze_frame(
     else:
         from app.services.camera_view import capture_frame
 
+        db.rollback()
         raw = await run_in_threadpool(capture_frame, camera)
         source_id = f"camera:{camera.id}"
         position_ms = int(observed_at.timestamp() * 1000)

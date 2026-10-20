@@ -153,12 +153,19 @@ function Cams({ feeds, switched }: { feeds: Feed[]; switched: boolean }) {
     feeds.forEach((f, i) => {
       const cv = frames.current[i]
       if (!cv || !f.img || cv.dataset.at === String(f.at)) return
-      const dpr = Math.min(2, devicePixelRatio || 1)
-      cv.width = Math.round(cv.clientWidth * dpr)
-      cv.height = Math.round(cv.clientHeight * dpr)
       const { naturalWidth: iw, naturalHeight: ih } = f.img
-      const k = Math.max(cv.width / iw, cv.height / ih)
-      cv.getContext('2d')!.drawImage(f.img, (cv.width - iw * k) / 2, (cv.height - ih * k) / 2, iw * k, ih * k)
+      if (!iw || !ih) return
+      const dpr = Math.min(2, devicePixelRatio || 1)
+      const w = Math.round(cv.clientWidth * dpr)
+      const h = Math.round(cv.clientHeight * dpr)
+      if (!w || !h) return
+      cv.width = w
+      cv.height = h
+      const k = Math.max(w / iw, h / ih)
+      const ctx = cv.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(f.img, (w - iw * k) / 2, (h - ih * k) / 2, iw * k, ih * k)
+      }
       cv.dataset.at = String(f.at)
     })
   }, [feeds])

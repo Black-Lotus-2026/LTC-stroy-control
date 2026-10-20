@@ -28,11 +28,24 @@ function authHeaders(): Record<string, string> {
 
 export async function req<T>(path: string, init: RequestInit = {}, fallbackMessage = 'Сервер не ответил'): Promise<T> {
   let res: Response
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let controller: AbortController | null = null
+  let signal = init.signal
+  if (!signal) {
+    controller = new AbortController()
+    signal = controller.signal
+    timer = setTimeout(() => controller?.abort(), 15000)
+  }
   try {
-    res = await fetch(`${API_PREFIX}${path}`, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } })
+    res = await fetch(`${API_PREFIX}${path}`, { ...init, signal, headers: { ...authHeaders(), ...(init.headers || {}) } })
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (controller?.signal.aborted) throw new ApiError('Сервер не ответил вовремя. Попробуйте обновить страницу.', 0)
+      throw error
+    }
     throw new ApiError('Нет связи с сервером. Проверьте, что API запущен.', 0)
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   if (!res.ok) {
     let msg = fallbackMessage
@@ -157,13 +170,33 @@ export async function grabFrame(cameraId: string, timeoutMs = 12000): Promise<HT
     } finally { await reader.cancel().catch(() => undefined) }
     if (!payload?.length) throw new ApiError('Камера не прислала полный кадр.', 0)
     imageUrl = URL.createObjectURL(new Blob([payload.slice().buffer], { type: jpegStart >= 0 ? 'image/jpeg' : response.headers.get('Content-Type') || 'image/jpeg' }))
-    const image = new Image(); image.decoding = 'async'
-    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new ApiError('Изображение камеры не удалось прочитать.', 0)); image.src = imageUrl })
+    const image = new Image()
+    image.decoding = 'async'
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new ApiError('Изображение камеры не удалось прочитать.', 0))
+      image.src = imageUrl
+    })
+    try {
+      await image.decode()
+    } catch {
+      // image ready
+    }
+    const toRevoke = imageUrl
+    imageUrl = ''
+    setTimeout(() => {
+      try { URL.revokeObjectURL(toRevoke) } catch { /* ignore */ }
+    }, 10000)
     return image
   } catch (error) {
-    if (controller.signal.aborted) throw new ApiError('Камера не прислала кадр за 6 секунд.', 0)
+    if (controller.signal.aborted) throw new ApiError('Камера не прислала кадр вовремя.', 0)
     throw error
-  } finally { clearTimeout(timer); if (imageUrl) URL.revokeObjectURL(imageUrl) }
+  } finally {
+    clearTimeout(timer)
+    if (imageUrl) {
+      try { URL.revokeObjectURL(imageUrl) } catch { /* ignore */ }
+    }
+  }
 }
 /** Connection probes use the saved camera identity and server network policy. */
 export async function probeCamera(cameraId: string): Promise<{ ok: boolean; message: string }> {

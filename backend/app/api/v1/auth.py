@@ -131,7 +131,7 @@ def login_user(data: UserLoginRequest, db: DbSession) -> TokenResponse:
 
 
 @router.get("/me", response_model=UserResponse)
-def get_current_user_profile(current_user: CurrentUser) -> UserResponse:
+async def get_current_user_profile(current_user: CurrentUser) -> UserResponse:
     """Получение профиля текущего авторизованного пользователя."""
     return UserResponse(
         id=current_user.id,

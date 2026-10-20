@@ -387,22 +387,6 @@ async def _detect_uploaded_image(file, stage_name, *, photo):
     )
 
 
-_hls_frame_cache: dict[uuid.UUID, tuple[float, bytes]] = {}
-
-
-def _get_hls_frame(camera: Camera) -> bytes | None:
-    now = monotonic()
-    cached = _hls_frame_cache.get(camera.id)
-    if cached and (now - cached[0] < 2.5):
-        return cached[1]
-    from app.services.camera_view import capture_frame
-
-    frame = capture_frame(camera)
-    if frame:
-        _hls_frame_cache[camera.id] = (now, frame)
-    return frame
-
-
 @router.get("/proxy-stream")
 async def proxy_camera_stream(
     db: DbSession,
@@ -415,8 +399,12 @@ async def proxy_camera_stream(
     ctx = resolve_context(db, camera.project_id, current_user, permission="camera.read")
     selected_assignment = ctx.assignment.id if ctx.assignment else None
     stream_url = (camera.stream_url or "").strip()
+    db.rollback()
+
     if ".m3u8" in stream_url.lower():
-        frame = await anyio.to_thread.run_sync(_get_hls_frame, camera)
+        from app.services.camera_view import capture_frame
+
+        frame = await anyio.to_thread.run_sync(capture_frame, camera)
         if not frame:
             raise HTTPException(502, "Поток камеры временно недоступен")
         return Response(

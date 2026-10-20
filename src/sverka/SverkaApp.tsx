@@ -61,7 +61,12 @@ export function SverkaApp() {
   return (
     <ToastProvider>
       {user === undefined ? (
-        <div className="auth" aria-busy="true" />
+        <div className="auth" aria-busy="true">
+          <div className="auth-card" style={{ textAlign: 'center', opacity: 0.85 }}>
+            <div className="brand" style={{ margin: '0 auto 16px' }} aria-hidden="true">СК</div>
+            <p style={{ margin: 0, color: 'var(--fg-2)', fontSize: 14 }}>Загрузка системы…</p>
+          </div>
+        </div>
       ) : (
         <CustomerWorkspace
           user={user}
