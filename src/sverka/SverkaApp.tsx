@@ -132,10 +132,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [zones, setZones] = useState<ZoneItem[]>([])
   const [cameras, setCameras] = useState<CameraItem[]>([])
   const [views, setViews] = useState<api.CameraViewState[]>([])
-  const [savedVideos, setSavedVideos] = useState<api.SavedVideo[]>([])
-  const [savedVideoId, setSavedVideoId] = useState('')
-  const [videosError, setVideosError] = useState<string | null>(null)
-  const [recordingUploadError, setRecordingUploadError] = useState<string | null>(null)
+
   const [stages, setStages] = useState<Stage[]>([])
   const [loadedProject, setLoadedProject] = useState<{ id: string; token: number } | null>(null)
   const [apiProfiles, setApiProfiles] = useState<Map<string, ApiProfile>>(new Map())
@@ -180,34 +177,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const lastSaveError = useRef(0)
   const videoSessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const videoRequest = useRef<AbortController | null>(null)
-  const playSavedVideo = async (video: api.SavedVideo) => {
-    videoRequest.current?.abort()
-    if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    const controller = new AbortController(); videoRequest.current = controller
-    const scopeToken = loadToken.current
-    let recovering = false
-    let recoveryAttempts = 0
-    const valid = () => !controller.signal.aborted && scopeToken === loadToken.current
-    const renew = async (restore = false) => {
-      if (recovering || !valid()) return
-      recovering = true
-      try {
-        const session = await savedVideoPlayback(video.video_id, controller.signal)
-        if (!valid()) return
-        if (restore) engine.refreshRecordingSession()
-        videoSessionTimer.current = setTimeout(() => void renew(), Math.max(10_000, Date.parse(session.expires_at) - Date.now() - 60_000))
-      } catch (error) { if (valid()) { engine.stopRecording(); setVideosError(error instanceof Error ? error.message : 'Сессия воспроизведения недоступна.') } }
-      finally { recovering = false }
-    }
-    try {
-      const session = await savedVideoPlayback(video.video_id, controller.signal)
-      if (!valid()) return
-      engine.startRecordingUrl(session.media_url, video.filename, Date.parse(video.start_timestamp), { credentials: true, onPlaybackError: () => { if (recoveryAttempts++ < 1) void renew(true) }, onPlaybackReady: () => { recoveryAttempts = 0 } })
-      videoSessionTimer.current = setTimeout(() => void renew(), Math.max(10_000, Date.parse(session.expires_at) - Date.now() - 60_000))
-      engine.setSafetyRecordingCamera(video.camera_id || undefined)
-      setSafetyRecordingCameraId(video.camera_id || ''); setSavedVideoId(video.video_id); setSelected('recording'); setSetupOpen(false)
-    } catch (error) { if (valid()) setVideosError(error instanceof Error ? error.message : 'Не удалось открыть запись.') }
-  }
+
   useEffect(() => {
     const controller = new AbortController()
     if (canUploadVideo) participants(context.project_id, controller.signal).then(setAssignmentOptions, () => undefined)
@@ -255,10 +225,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
     setCameras([])
     setViews([])
     viewSent.current.clear()
-    setSavedVideos([])
-    setSavedVideoId('')
-    setVideosError(null)
-    setRecordingUploadError(null)
+
     setStages([])
     setApiProfiles(new Map())
     setEvents([])
@@ -285,21 +252,13 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
     store.set('sverka:project', project.id)
     const local = loadSettings(project.id, isSharedDemoProject(project))
     setSettingsState(local)
-    Promise.all([api.zones(project.id), can(context, 'camera.read') ? api.cameras(project.id) : Promise.resolve([]), canReadPlan ? api.stages(project.id) : Promise.resolve([]), can(context, 'incident.read') ? api.incidents(project.id) : Promise.resolve([]), canReadPlan ? api.incidentConfig().catch(() => null) : Promise.resolve(null), can(context, 'video.read') ? api.savedVideos(project.id).catch((e: Error) => {
-      if (token === loadToken.current) setVideosError(e.message)
-      return [] as api.SavedVideo[]
-    }) : Promise.resolve([] as api.SavedVideo[])])
-      .then(([z, c, s, inc, cfg, videos]) => {
+    Promise.all([api.zones(project.id), can(context, 'camera.read') ? api.cameras(project.id) : Promise.resolve([]), canReadPlan ? api.stages(project.id) : Promise.resolve([]), can(context, 'incident.read') ? api.incidents(project.id) : Promise.resolve([]), canReadPlan ? api.incidentConfig().catch(() => null) : Promise.resolve(null)])
+      .then(([z, c, s, inc, cfg]) => {
         if (token !== loadToken.current) return
         setZones(z)
         setCameras(c)
         engine.setCameras(c)
         if (can(context, 'camera.read')) loadViews(project.id, token)
-        setSavedVideos(videos)
-        if (videos.length) {
-          const first = videos[0]
-          void playSavedVideo(first)
-        }
         setStages(toStages(s))
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
         if (cfg) setSettingsState((x) => ({ ...x, window: cfg.violation_evaluation_window_seconds }))
@@ -308,7 +267,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
         const want = wantCase.current
         wantCase.current = null
         if (want && inc.some((i) => i.id === want)) setCaseOpen({ id: want, origin: null })
-        else if (canManageControl && (!s.length || (!c.length && !videos.length))) setSetupOpen(false)
+        else if (canManageControl && (!s.length || !c.length)) setSetupOpen(false)
       })
       .catch((e: Error) => {
         if (token !== loadToken.current) return
@@ -350,10 +309,11 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   useEffect(() => {
     if (!project || !loaded || !can(context, 'incident.read')) return
     const id = project.id
-    const isCurrent = currentScope()
+    const token = loadToken.current
+    let active = true
     const timer = window.setInterval(() => {
       api.incidents(id).then((inc) => {
-        if (!isCurrent()) return
+        if (!active || token !== loadToken.current) return
 
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
       }, () => undefined)
@@ -364,22 +324,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   }, [project, loaded])
 
 
-  useEffect(() => {
-    if (!project || !can(context, 'video.read')) return
-    const id = project.id
-    const token = loadToken.current
-    let active = true
-    const timer = window.setInterval(() => {
-      api.savedVideos(id).then((videos) => {
-        if (!active || token !== loadToken.current) return
-        setSavedVideos(videos)
-        setVideosError(null)
-      }, (error: Error) => {
-        if (active && token === loadToken.current) setVideosError(error.message)
-      })
-    }, 30_000)
-    return () => { active = false; clearInterval(timer) }
-  }, [project?.id])
+
 
   const setSettings = (s: Settings) => {
     const prev = settings
@@ -490,9 +435,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   }, [refreshPprProfiles, project?.id, stage?.id])
 
   const ev = evaluate(obs, stage, prof, settings)
-  const activeSavedVideo = savedVideos.find(video => video.video_id === savedVideoId)
   const verdict = loaded ? obs.mode === 'recording'
-    ? { tone: 'none' as const, title: 'Серверная проверка записи', sub: recordingUploadError ? `Запись не сохранена: ${recordingUploadError}. Серверная проверка недоступна; плеер показывает распознавание текущего кадра.` : `${activeSavedVideo ? recordingAnalysisLabel(activeSavedVideo.analysis_status) + '. ' : 'Запись сохраняется для серверной проверки. '}Сервер сопоставляет записи камер вместе. Результаты проверки появляются в журнале; плеер показывает распознавание текущего кадра.` }
+    ? { tone: 'none' as const, title: 'Серверная проверка записи', sub: 'Распознавание выполняется в плеере на основе кадров текущего воспроизведения.' }
     : !canReadPlan ? { tone: 'none' as const, title: context.is_demo ? 'Демонстрация · только просмотр' : context.role === 'pto_engineer' ? 'Документы и требования' : 'Контроль в пределах назначения', sub: context.is_demo ? 'Доступны опубликованные источники и исторические дела. Изменения в общей демонстрации отключены.' : context.role === 'pto_engineer' ? 'Проверяйте цитаты и область применения. Требования включает в контроль управляющий заказчика.' : 'Очередь показывает доступные вам дела. Полный план объекта не входит в текущую область доступа.', actions: [{ label: context.role === 'pto_engineer' ? 'Открыть документы' : context.role === 'contractor_foreman' ? 'Мои задачи' : 'Доступные дела', act: context.role === 'pto_engineer' ? 'customer-documents' : 'customer-cases', primary: true }] }
     : verdictOf({ ev, obs, events, episodes, prof, hasPlan: stages.length > 0, s: settings }) : { tone: 'none' as const, title: 'Загружаем объект', sub: loadError || 'Получаем доступные материалы объекта.' }
 
@@ -1129,36 +1073,14 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
 
   const openRecording = (file: File, start: number) => {
     videoRequest.current?.abort(); if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    if (!canUploadVideo || (context.side === 'contractor' && !uploadAreaId)) { toast('Выберите разрешённую область для загрузки записи.', { error: true }); return }
-    const token = loadToken.current
-    setSavedVideoId('')
-    setRecordingUploadError(null)
     engine.startRecording(file, start)
-    const recordingUrl = engine.recording?.url
     engine.setSafetyRecordingCamera(undefined)
     setSafetyRecordingCameraId('')
     setSelected('recording')
-    if (project)
-      api.uploadVideo(project.id, file, new Date(start).toISOString(), uploadAreaId || undefined).then(
-        (asset) => {
-          if (token !== loadToken.current) return
-          if (engine.recording?.url === recordingUrl) setSavedVideoId(asset.video_id)
-          toast('Запись сохранена на сервере')
-          api.savedVideos(project.id).then((videos) => {
-            if (token === loadToken.current) setSavedVideos(videos)
-          }, () => undefined)
-        },
-        (e: Error) => {
-          if (token !== loadToken.current || engine.recording?.url !== recordingUrl) return
-          setRecordingUploadError(e.message)
-          toast(`Запись не сохранена на сервере: ${e.message}. Распознавание в плеере продолжается.`, { error: true })
-        },
-      )
+    toast('Видео открыто для просмотра и анализа')
   }
   const closeRecording = () => {
     videoRequest.current?.abort(); if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    setSavedVideoId('')
-    setRecordingUploadError(null)
     engine.stopRecording()
     engine.setCameras(cameras)
     setSelected(null)
@@ -1309,22 +1231,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
       ) : <Verdict v={verdict} onAction={onAction} at={obs.mode === 'recording' ? `запись ${fmtDay(t)}` : undefined} />)}
       {!showLiveDemo && project && isSharedDemoProject(project) && <p style={{ margin: 0, padding: '0 20px 6px' }}>Демонстрационные интервалы: предупреждение через {settings.warnAfter} с, отклонение через {settings.errAfter} с, техника не по этапу — через {settings.oopAfter} с.</p>}
 
-      {!showLiveDemo && (savedVideos.length > 0 || videosError) && <div className="saved-recordings" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        {savedVideos.length > 0 && <label style={{ minWidth: 0, maxWidth: '100%' }}>Сохранённые записи{' '}
-          <select style={{ maxWidth: '100%' }} aria-label="Сохранённые записи" value={savedVideoId} onChange={(event) => {
-            const video = savedVideos.find((item) => item.video_id === event.target.value)
-            if (!video) { closeRecording(); return }
-            setRecordingUploadError(null)
-            void playSavedVideo(video)
-          }}>
-            <option value="">Выбрать запись</option>
-            {savedVideos.map((video) => <option key={video.video_id} value={video.video_id}>{video.filename} · {new Date(video.start_timestamp).toLocaleString('ru-RU')} · {recordingAnalysisLabel(video.analysis_status)}</option>)}
-          </select>
-        </label>}
-        {videosError && <span role="status">{videosError}</span>}
-        {savedVideos.find(video => video.video_id === savedVideoId)?.analysis_status === 'FAILED' && <span role="status">Серверный анализ записи завершился ошибкой. Воспроизведение и распознавание в плеере доступны.</span>}
-      </div>}
-      {canUploadVideo && context.side === 'contractor' && <label className="customer-context" style={{ padding: '8px 20px' }}>Область для новой записи<select value={uploadAreaId} onChange={event => setUploadAreaId(event.target.value)}><option value="">Выберите назначенную область</option>{assignmentOptions?.areas.map(area => <option value={area.id} key={area.id}>{area.name}</option>)}</select></label>}
+      <div className="saved-recordings" style={{ display: 'none' }} />
       </div>
 
 
