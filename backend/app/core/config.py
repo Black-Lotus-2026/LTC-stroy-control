@@ -94,6 +94,39 @@ class Settings(BaseSettings):
     # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
     violation_evaluation_window_seconds: int = 30
 
+    # Production always uses the one pinned trained checkpoint. Historical profile
+    # names remain parseable for old environments but never select another YOLO.
+    detector_profile: Literal[
+        "construction_trained",
+        "legacy",
+        "construction_ensemble",
+        "construction_partial24",
+        "construction_partial",
+    ] = "construction_trained"
+    yolo_weights_path: Path = (
+        Path(__file__).resolve().parents[2] / "weights" / "construction-yolov8m-v2.pt"
+    )
+    photo_vlm_enabled: bool = True
+    photo_vlm_model: str = "openai/gpt-4o-mini"
+    photo_vlm_timeout_seconds: float = Field(default=20, gt=0, le=60)
+    max_image_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
+    max_video_upload_bytes: int = Field(default=4 * 1024 * 1024 * 1024, gt=0)
+    construction_policy: Literal["shadow", "enforce"] = "shadow"
+    construction_equipment_weights: Path | None = None
+    construction_mocs_weights: Path | None = None
+    construction_partial_weights: Path | None = None
+    construction_partial_sha256: str | None = None
+    construction_partial_mapping: Path | None = None
+    construction_partial_manifest: Path | None = None
+    construction_partial_parent_support_iou: float | None = Field(
+        default=None, gt=0, le=1
+    )
+    construction_device: str | None = None
+    construction_imgsz: int = Field(default=960, ge=32, le=4096)
+    construction_confidence: float = Field(default=0.5, gt=0, lt=1)
+    # Only independently validated semantic classes may drive rules in enforce.
+    construction_approved_classes: list[str] = Field(default_factory=list)
+
     # Optional SMTP delivery. In-app notifications work without these values.
     smtp_host: str | None = None
     smtp_port: int = 587

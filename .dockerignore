@@ -10,3 +10,21 @@ __pycache__/
 .ruff_cache/
 backend/var/
 .env
+
+# Local/private training inputs and camera recordings never enter frontend context.
+var/
+backend/.venv/
+backend/weights/
+data/construction/
+data/weather/
+7/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.pt
+*.zip
+
+**/.env
+**/.env.*

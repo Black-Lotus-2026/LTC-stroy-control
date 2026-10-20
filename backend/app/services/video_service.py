@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
+from io import BytesIO
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -14,8 +16,17 @@ from app.models.project import Project
 from app.models.schedule import ScheduleTask
 from app.models.video import VideoAsset
 from app.schemas.stroy_control import VideoSyncStatusResponse
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class VideoTooLarge(ValueError):
+    pass
+
+
+class VideoProjectNotFound(ValueError):
+    pass
 
 
 class VideoService:
@@ -29,7 +40,17 @@ class VideoService:
         start_timestamp: datetime,
         project_id: uuid.UUID | None = None,
     ) -> VideoAsset:
-        """Save video file to local storage and create VideoAsset record."""
+        """Compatibility helper; HTTP uploads stream from the spooled file."""
+        return self.register_video_stream(
+            BytesIO(file_bytes), filename, start_timestamp, project_id
+        )
+
+    def register_video_stream(self, stream, filename, start_timestamp, project_id=None):
+        """Probe actual decodable video; never register corrupt bytes as READY."""
+        import cv2
+
+        if project_id is not None and self.db.get(Project, project_id) is None:
+            raise VideoProjectNotFound("Объект не найден")
         if project_id is None:
             proj = self.db.scalars(select(Project)).first()
             if not proj:
@@ -38,32 +59,61 @@ class VideoService:
                 self.db.flush()
             project_id = proj.id
 
-        # Save to storage
-        storage_dir = Path(__file__).resolve().parents[2] / "var" / "storage" / "videos"
+        name = Path(filename.replace("\\", "/")).name
+        name = "".join(c for c in name if ord(c) >= 32).strip()
+        name = name.encode("utf-8")[:180].decode("utf-8", errors="ignore")
+        if not name or name in {".", ".."}:
+            raise ValueError("Некорректное имя файла")
+        storage_dir = settings.storage_local_root.resolve() / "videos"
         storage_dir.mkdir(parents=True, exist_ok=True)
         video_id = uuid.uuid4()
-        dest_filename = f"{video_id}_{filename}"
+        dest_filename = f"{video_id}_{name}"
         dest_path = storage_dir / dest_filename
 
-        with open(dest_path, "wb") as f:
-            f.write(file_bytes)
-
-        # Estimate basic parameters (duration ~ 120s if not probed)
-        asset = VideoAsset(
-            id=video_id,
-            project_id=project_id,
-            filename=filename,
-            storage_key=str(dest_path),
-            start_timestamp=start_timestamp,
-            duration_seconds=120.0,
-            fps=25.0,
-            frame_count=3000,
-            status="READY",
-        )
-        self.db.add(asset)
-        self.db.commit()
-        self.db.refresh(asset)
-        return asset
+        try:
+            written = 0
+            with dest_path.open("xb") as output:
+                while chunk := stream.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > settings.max_video_upload_bytes:
+                        raise VideoTooLarge("Видеофайл превышает допустимый размер")
+                    output.write(chunk)
+            capture = cv2.VideoCapture(str(dest_path))
+            try:
+                fps = float(capture.get(cv2.CAP_PROP_FPS))
+                frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+                ok, frame = capture.read()
+                if (
+                    not capture.isOpened()
+                    or not ok
+                    or frame is None
+                    or not math.isfinite(fps)
+                    or not 0 < fps <= 1000
+                    or frame_count <= 0
+                ):
+                    raise ValueError("Нужен корректный декодируемый видеофайл")
+                duration = frame_count / fps
+            finally:
+                capture.release()
+            asset = VideoAsset(
+                id=video_id,
+                project_id=project_id,
+                filename=name,
+                storage_key=str(dest_path),
+                start_timestamp=start_timestamp,
+                duration_seconds=duration,
+                fps=fps,
+                frame_count=frame_count,
+                status="READY",
+            )
+            self.db.add(asset)
+            self.db.commit()
+            self.db.refresh(asset)
+            return asset
+        except Exception:
+            self.db.rollback()
+            dest_path.unlink(missing_ok=True)
+            raise
 
     def sync_playback_time(
         self,

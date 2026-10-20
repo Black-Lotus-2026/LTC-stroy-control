@@ -886,13 +886,13 @@ export const MACHINERY_CODE_TO_RU: Record<string, string> = {
   // Lowercase & snake_case
   dump_truck: 'Самосвал',
   dumptruck: 'Самосвал',
-  truck: 'Самосвал',
+  truck: 'Грузовик',
   excavator: 'Экскаватор',
   digger: 'Экскаватор',
   tower_crane: 'Башенный кран',
   towercrane: 'Башенный кран',
   truck_crane: 'Автокран',
-  crane: 'Автокран',
+  crane: 'Кран (подтип не определён)',
   concrete_mixer: 'Автобетоносмеситель',
   mixer: 'Автобетоносмеситель',
   concrete_pump: 'Бетононасос',
@@ -906,6 +906,20 @@ export const MACHINERY_CODE_TO_RU: Record<string, string> = {
   grader: 'Автогрейдер',
   backhoe_loader: 'Экскаватор-погрузчик',
   asphalt_paver: 'Асфальтоукладчик',
+
+  cleaning_equipment: 'Уборочная техника',
+  crane_manipulator: 'Кран-манипулятор',
+  crawler_crane: 'Гусеничный кран',
+  forklift_giraffe: 'Телескопический погрузчик',
+  forklift_standart: 'Вилочный погрузчик',
+  gazelle: 'Газель',
+  hanging_head: 'Подвесной крюк',
+  mobile_crane: 'Мобильный кран',
+  other_vehicle: 'Другой транспорт',
+  pile_driving: 'Сваебойная установка',
+  tanker: 'Автоцистерна',
+  trailer: 'Прицеп',
+  worker: 'Рабочий',
 
   // Uppercase enum constants (MACHINERY_*)
   MACHINERY_DUMP_TRUCK: 'Самосвал',
@@ -1033,6 +1047,8 @@ export interface DetectionBoxItem {
 }
 
 export interface FrameDetectionResponse {
+  compliance_enabled?: boolean
+  evaluable_classes?: string[]
   timestamp: string
   active_stage?: string | null
   model_ready: boolean
