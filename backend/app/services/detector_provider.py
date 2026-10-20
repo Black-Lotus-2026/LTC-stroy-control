@@ -1,4 +1,4 @@
-"""Process-local detector profiles. New construction profiles require explicit local weights.
+"""Process-local detector profiles requiring explicit local construction weights.
 
 Shadow observations never enter compliance rules. No model download/fallback is
 permitted for a requested construction profile; partial initialization is unusable.
@@ -13,7 +13,8 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.services.construction_semantics import CANONICAL13, ConstructionEnsemble
-from app.services.detector import CLASS_BY_RAW_LABEL, DetectionResult, MachineryDetector
+from app.services.detector import CLASS_BY_RAW_LABEL, DetectionResult
+from app.services.detector import MachineryDetector as MachineryDetector
 from app.services.rule_engine import RuleEngine, to_russian_machinery_name
 
 
@@ -75,7 +76,10 @@ class ConstructionDetector:
         self.status_message = (
             "Shadow: observations only; compliance disabled"
             if policy == "shadow"
-            else "Enforce: approved classes only; observations indicate presence, not machine counts"
+            else (
+                "Enforce: approved classes only; observations indicate presence, "
+                "not machine counts"
+            )
         )
 
     @property
@@ -220,7 +224,10 @@ class ConstructionPartialDetector(ConstructionDetector):
         self.ensemble = None
         self.status, self.status_message = (
             "weights_missing",
-            "Partial profile requires local weights, trusted SHA, mapping and deployment JSON",
+            (
+                "Partial profile requires local weights, trusted SHA, mapping and "
+                "deployment JSON"
+            ),
         )
         if not expected_sha256 or not all(
             p and Path(p).is_file() for p in (weights, mapping, deployment_manifest)
@@ -242,7 +249,8 @@ class ConstructionPartialDetector(ConstructionDetector):
                 raise ValueError("Approved fine class absent from actual checkpoint head")
             if policy == "enforce" and not candidate.provenance["quality_verified"]:
                 raise ValueError(
-                    "Enforce requires independently reviewed quality marker plus class allowlist"
+                    "Enforce requires independently reviewed quality marker "
+                    "plus class allowlist"
                 )
             self.ensemble = candidate
         except Exception as exc:
@@ -278,7 +286,7 @@ def get_detector():
 
 @lru_cache(maxsize=1)
 def _cached_detector():
-    """One initialized profile per API/Celery process; restart after config/weight changes.
+    """One initialized profile per API/Celery process; restart after config changes.
 
     Celery prefork loads lazily inside the child, avoiding inherited CUDA state.
     A worker process and the API process intentionally have separate model caches.
@@ -290,4 +298,6 @@ def _cached_detector():
         device=settings.construction_device,
         imgsz=settings.construction_imgsz,
         confidence=settings.construction_confidence,
+        policy=settings.construction_policy,
+        approved_classes=settings.construction_approved_classes,
     )

@@ -94,13 +94,31 @@ class StageCatalogIndex:
         fallback_data = [
             ("Подготовительный этап", ["бульдозер", "экскаватор", "самосвал"]),
             ("Земляные работы", ["экскаватор", "самосвал", "бульдозер", "каток"]),
-            ("Устройство оснований и фундаментов", ["буровая установка", "бетононасос", "автобетоносмеситель", "автокран"]),
-            ("Возведение монолитных конструкций", ["башенный кран", "автобетоносмеситель", "бетононасос", "автокран"]),
-            ("Монтаж металлоконструкций", ["автокран", "башенный кран", "подъемник строительный"]),
-            ("Монтаж сборных железобетонных конструкций", ["башенный кран", "автокран", "панелевоз"]),
+            (
+                "Устройство оснований и фундаментов",
+                ["буровая установка", "бетононасос", "автобетоносмеситель", "автокран"],
+            ),
+            (
+                "Возведение монолитных конструкций",
+                ["башенный кран", "автобетоносмеситель", "бетононасос", "автокран"],
+            ),
+            (
+                "Монтаж металлоконструкций",
+                ["автокран", "башенный кран", "подъемник строительный"],
+            ),
+            (
+                "Монтаж сборных железобетонных конструкций",
+                ["башенный кран", "автокран", "панелевоз"],
+            ),
             ("Устройство кровли", ["автокран", "подъемник строительный"]),
-            ("Фасадные и отделочные работы", ["фасадный подъемник", "автовышка", "строительные леса"]),
-            ("Благоустройство территории", ["асфальтоукладчик", "каток", "погрузчик", "самосвал"]),
+            (
+                "Фасадные и отделочные работы",
+                ["фасадный подъемник", "автовышка", "строительные леса"],
+            ),
+            (
+                "Благоустройство территории",
+                ["асфальтоукладчик", "каток", "погрузчик", "самосвал"],
+            ),
         ]
         unique_equipment: set[str] = set()
         unique_stages: set[str] = set()
@@ -111,7 +129,9 @@ class StageCatalogIndex:
             for eq in eq_list:
                 unique_equipment.add(eq)
                 self._stage_requirements[stage].append(
-                    MachineryRequirement(equipment=eq, severity=RequirementSeverity.MANDATORY)
+                    MachineryRequirement(
+                        equipment=eq, severity=RequirementSeverity.MANDATORY
+                    )
                 )
                 self._stage_weights[stage][eq] = 1.0
         self.equipment_classes = sorted(unique_equipment)
@@ -123,7 +143,10 @@ class StageCatalogIndex:
     def _load_catalog(self) -> None:
         if not self.csv_path or not self.csv_path.is_file():
             logger.warning(
-                "Reference catalog file not found (tried: %s). Initializing with default catalog.",
+                (
+                    "Reference catalog file not found (tried: %s). Initializing "
+                    "with default catalog."
+                ),
                 self.csv_path,
             )
             self._load_fallback_catalog()
@@ -289,69 +312,93 @@ YOLO_RAW_TO_RU: dict[str, str] = {
 
 STAGE_DOMAIN_PRIORS: list[tuple[list[str], dict[str, float]]] = [
     # Masonry, brickwork, partitions, external walls:
-    (["кладк", "перегород", "каменн", "кирпич", "блок"], {
-        "tower_crane": 0.95,
-        "concrete_mixer": 0.90,
-        "loader": 0.80,
-        "dump_truck": 0.72,
-        "truck_crane": 0.65,
-    }),
+    (
+        ["кладк", "перегород", "каменн", "кирпич", "блок"],
+        {
+            "tower_crane": 0.95,
+            "concrete_mixer": 0.90,
+            "loader": 0.80,
+            "dump_truck": 0.72,
+            "truck_crane": 0.65,
+        },
+    ),
     # Monolithic structures, frame, columns, floors:
-    (["монолит", "каркас", "перекрыти", "колонн", "пилон", "лестниц"], {
-        "tower_crane": 0.96,
-        "concrete_mixer": 0.94,
-        "concrete_pump": 0.92,
-        "truck_crane": 0.65,
-        "dump_truck": 0.60,
-        "loader": 0.55,
-    }),
+    (
+        ["монолит", "каркас", "перекрыти", "колонн", "пилон", "лестниц"],
+        {
+            "tower_crane": 0.96,
+            "concrete_mixer": 0.94,
+            "concrete_pump": 0.92,
+            "truck_crane": 0.65,
+            "dump_truck": 0.60,
+            "loader": 0.55,
+        },
+    ),
     # Earthworks, pit excavation, soil:
-    (["котлован", "выемк", "грунт", "землян", "разработк"], {
-        "excavator": 0.96,
-        "dump_truck": 0.94,
-        "bulldozer": 0.88,
-        "loader": 0.72,
-        "backhoe_loader": 0.68,
-    }),
+    (
+        ["котлован", "выемк", "грунт", "землян", "разработк"],
+        {
+            "excavator": 0.96,
+            "dump_truck": 0.94,
+            "bulldozer": 0.88,
+            "loader": 0.72,
+            "backhoe_loader": 0.68,
+        },
+    ),
     # Site preparation:
-    (["подготовк.*площад", "подготовк.*территор", "подготовительн"], {
-        "bulldozer": 0.88,
-        "loader": 0.80,
-        "roller": 0.75,
-        "dump_truck": 0.70,
-        "excavator": 0.60,
-    }),
+    (
+        ["подготовк.*площад", "подготовк.*территор", "подготовительн"],
+        {
+            "bulldozer": 0.88,
+            "loader": 0.80,
+            "roller": 0.75,
+            "dump_truck": 0.70,
+            "excavator": 0.60,
+        },
+    ),
     # Foundations, base slab:
-    (["фундамент", "бетонн.*подготовк", "плит.*основан"], {
-        "concrete_mixer": 0.94,
-        "concrete_pump": 0.94,
-        "truck_crane": 0.82,
-        "tower_crane": 0.78,
-        "dump_truck": 0.65,
-        "loader": 0.60,
-    }),
+    (
+        ["фундамент", "бетонн.*подготовк", "плит.*основан"],
+        {
+            "concrete_mixer": 0.94,
+            "concrete_pump": 0.94,
+            "truck_crane": 0.82,
+            "tower_crane": 0.78,
+            "dump_truck": 0.65,
+            "loader": 0.60,
+        },
+    ),
     # Roof and insulation:
-    (["кровл", "крыш", "гидроизоляц"], {
-        "tower_crane": 0.88,
-        "truck_crane": 0.82,
-        "loader": 0.62,
-        "dump_truck": 0.50,
-    }),
+    (
+        ["кровл", "крыш", "гидроизоляц"],
+        {
+            "tower_crane": 0.88,
+            "truck_crane": 0.82,
+            "loader": 0.62,
+            "dump_truck": 0.50,
+        },
+    ),
     # Facade and windows:
-    (["фасад", "окон", "витраж", "проем"], {
-        "truck_crane": 0.82,
-        "loader": 0.76,
-        "tower_crane": 0.65,
-        "dump_truck": 0.50,
-    }),
+    (
+        ["фасад", "окон", "витраж", "проем"],
+        {
+            "truck_crane": 0.82,
+            "loader": 0.76,
+            "tower_crane": 0.65,
+            "dump_truck": 0.50,
+        },
+    ),
     # Landscaping, roads, paving:
-    (["благоустройств", "проезд", "тротуар", "асфальт", "дорог"], {
-        "roller": 0.92,
-        "grader": 0.88,
-        "dump_truck": 0.86,
-        "loader": 0.82,
-        "backhoe_loader": 0.78,
-    }),
+    (
+        ["благоустройств", "проезд", "тротуар", "асфальт", "дорог"],
+        {
+            "roller": 0.92,
+            "grader": 0.88,
+            "dump_truck": 0.86,
+            "loader": 0.82,
+            "backhoe_loader": 0.78,
+        },
+    ),
 ]
 
 
@@ -537,7 +584,8 @@ class StageMachineryService:
                         if prior_prob > yolo_probs.get(raw_k, 0.0):
                             yolo_probs[raw_k] = prior_prob
 
-            # Ensure both raw labels (e.g. 'tower_crane') and RU labels (e.g. 'башенный кран') are populated
+            # Ensure both raw labels (e.g. 'tower_crane') and RU labels (e.g. 'башенный
+            # кран') are populated
             for raw_k, ru_k in YOLO_RAW_TO_RU.items():
                 val = yolo_probs[raw_k]
                 probabilities[raw_k] = val

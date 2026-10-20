@@ -22,6 +22,7 @@ from app.schemas.management import (
     ProfileWrite,
     RunCreate,
 )
+from app.services.legacy_access import require_full_project_read
 from app.services.management.context import (
     aware,
     canonical_hash,
@@ -147,7 +148,7 @@ def get_owned_run(db, run_id: uuid.UUID, user) -> ManagementRun:
     run = db.get(ManagementRun, run_id)
     if run is None:
         raise HTTPException(404, "Запуск не найден")
-    require_project(db, run.project_id, user)
+    require_full_project_read(db, run.project_id, user)
     return run
 
 
@@ -156,7 +157,7 @@ def incident_inaction_cost(incident_id: uuid.UUID, db: DbSession, user: CurrentU
     incident = db.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(404, "Случай не найден")
-    project = require_project(db, incident.project_id, user)
+    project = require_full_project_read(db, incident.project_id, user).project
     run = db.scalars(
         select(ManagementRun)
         .where(
@@ -172,7 +173,8 @@ def incident_inaction_cost(incident_id: uuid.UUID, db: DbSession, user: CurrentU
         "observed_since": aware(incident.first_seen_at).isoformat(),
         "responsible": (
             incident.assignee.name or incident.assignee.username
-            if incident.assignee else None
+            if incident.assignee
+            else None
         ),
         "project_owner": project.owner_username,
     }
@@ -237,13 +239,13 @@ def demo_profile(
         "baseline", "camera_unavailable", "slack", "expensive_action"
     ] = "baseline",
 ):
-    require_project(db, project_id, user)
+    require_full_project_read(db, project_id, user)
     return make_demo_snapshot(project_id, episode).model_dump(mode="json")
 
 
 @router.get("/projects/{project_id}/management/profile")
 def get_profile(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
-    require_project(db, project_id, user)
+    require_full_project_read(db, project_id, user)
     row = db.get(ProjectSettings, project_id)
     return (
         (row.extra or {}).get(
@@ -420,7 +422,7 @@ def get_trace(run_id: uuid.UUID, db: DbSession, user: CurrentUser):
 
 @router.get("/projects/{project_id}/management/risks")
 def get_risks(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
-    require_project(db, project_id, user)
+    require_full_project_read(db, project_id, user)
     runs = db.scalars(
         select(ManagementRun)
         .where(ManagementRun.project_id == project_id)

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as api from '../api'
 import type { AdminRecipient, ApiIncidentEvent, InactionCurve, UserProfile } from '../api'
 import type { Episode, EventStatus, Observation, Profile, Rights, Stage, UiEvent } from '../model'
-import { LV, STATUS_WORD, consequence, isOpen, liveTitle, loopDecision, parseDescription, sevNow, stageDay, toneOf, viewDecision } from '../model'
+import { LV, STATUS_WORD, eventConsequence, isOpen, liveTitle, loopDecision, parseDescription, sevNow, stageDay, toneOf, viewDecision } from '../model'
 import type { SourceView } from '../model'
 import type { ViewActions } from './Settings'
 import { turnWords } from '../lib/view'
@@ -11,7 +11,9 @@ import { atTime, durShort, fmtDay, hhmm, hhmmss } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
 import { CloseIcon, SevIcon } from './common'
 import { Lightbox } from './Lightbox'
+import { CameraViewImage } from './CameraViewImage'
 import { CostMissing, CostOfInaction } from './Cost'
+import { PprCitations } from './PprSourceLink'
 
 const SEV_WORD = { warn: 'Предупреждение', err: 'Отклонение', info: 'Сведения' }
 
@@ -190,7 +192,8 @@ export function CaseFile({
       </button>
     ),
   })
-  if (ev.mach)
+  if (ev.pprRequirements?.length) steps.push({ tone: 'plan', h: 'Правило', p: <>{ev.pprRequirements.map((citation, index) => <span key={index}>{index > 0 && <br />}{citation.title || 'Требование ППР'}{citation.scope_text ? ` · ${citation.scope_text}` : ''}</span>)}</> })
+  else if (ev.mach)
     steps.push({
       tone: 'plan',
       h: 'Правило',
@@ -226,6 +229,7 @@ export function CaseFile({
       ),
     })
   }
+  if (ev.projectId && ev.pprRequirements?.length) steps.push({ tone: 'plan', h: 'Основание ППР', p: <PprCitations projectId={ev.projectId} citations={ev.pprRequirements} /> })
   steps.push({
     tone,
     h: 'Наблюдение',
@@ -251,7 +255,7 @@ export function CaseFile({
           ? `Отклонение: вместо камеры похоже идёт запись.${!isOpen(ev) ? ` Решение: ${(loopDecision(ev) ?? STATUS_WORD[ev.status]).toLowerCase()}.` : ' За минуту повтор не исключить, поэтому сервер сам событие не закрывает: это делает администратор, убедившись, что камера показывает площадку вживую.'}`
         : ev.kind === 'view'
           ? `Отклонение: камера смотрит не туда, куда утверждено.${!isOpen(ev) ? ` Решение: ${(viewDecision(ev) ?? STATUS_WORD[ev.status]).toLowerCase()}.` : ' Ответственный возвращает камеру — сервер сам сверит свежие кадры с эталоном. Если смещение намеренное, новый ракурс утверждает администратор.'}`
-        : ev.kind === 'missing' && !rec && r && ep && !ep.to && sev !== 'err'
+        : ev.kind === 'missing' && !ev.pprRequirements?.length && !rec && r && ep && !ep.to && sev !== 'err'
         ? `${SEV_WORD[sev]}. Станет отклонением через ${durShort(Math.max(0, r.errAfter * 1000 - (obs.t - ep.from)))}, если ${MACH[ev.mach!].lower} не появится.`
         : `${SEV_WORD[sev]}.${ev.status !== 'pending' ? ` Решение: ${STATUS_WORD[ev.status].toLowerCase()}.` : ''}`,
     extra: cost == null ? undefined : typeof cost === 'string' ? <p className="cost-none">Цена бездействия недоступна: {cost}.</p> : cost.status === 'unavailable' ? <CostMissing curve={cost} /> : <CostOfInaction curve={cost} />,
@@ -268,7 +272,7 @@ export function CaseFile({
             {photo && !broken.has(photo.url) ? (
               <>
                 <button type="button" className="ev-zoom" onClick={() => setLb(true)} aria-label="Открыть кадр на весь экран">
-                  <img src={photo.url} alt={`Кадр: ${photo.camera}`} onError={() => setBroken((b) => new Set(b).add(photo.url))} style={lb ? { visibility: 'hidden' } : undefined} />
+                  <CameraViewImage url={photo.url} alt={`Кадр: ${photo.camera}`} onError={() => setBroken((b) => new Set(b).add(photo.url))} style={lb ? { visibility: 'hidden' } : undefined} />
                 </button>
                 <div className="ticks" />
                 <div className="ev-cap">
@@ -296,7 +300,7 @@ export function CaseFile({
             <div className="ev-strip">
               {ev.album.map((a, i) => (
                 <button key={a.url} type="button" aria-pressed={i === shot} onClick={() => setShot(i)}>
-                  <img src={a.url} alt="" />
+                  <CameraViewImage url={a.url} alt="" />
                   <span>{a.camera}</span>
                 </button>
               ))}
@@ -319,10 +323,8 @@ export function CaseFile({
               {liveTitle(ev, ep, obs.t, true)}
             </h2>
             <p className="lead">
-              {ev.kind === 'missing'
-                ? consequence(ev.mach)
-                : ev.kind === 'oop'
-                  ? 'Техника на площадке не соответствует текущему этапу плана.'
+              {ev.kind === 'missing' || ev.kind === 'oop'
+                ? eventConsequence(ev)
                   : ev.kind === 'loop'
                     ? 'Кадры камеры повторяются через одинаковое время, как запись по кругу. Пока повтор идёт, по ним нельзя сказать, что происходит на площадке.'
                   : ev.kind === 'view'
@@ -371,7 +373,7 @@ export function CaseFile({
             ) : !isOpen(ev) ? (
               <div className="decided">
                 <span>
-                  Решение: <b>{loopDecision(ev) ?? viewDecision(ev) ?? (ev.status === 'resolved' && ev.check === 'passed' ? 'Устранено, подтвердили камеры' : STATUS_WORD[ev.status])}</b>
+                  Решение: <b>{loopDecision(ev) ?? viewDecision(ev) ?? STATUS_WORD[ev.status]}</b>
                   {(ev.checkDetails.resolution === 'accepted' || ev.checkDetails.resolution === 'admin_confirmed_live') && ev.checkDetails.resolvedBy ? ` · ${ev.checkDetails.resolvedBy}` : ''}
                   {decidedAt ? ` · ${atTime(decidedAt)}` : ''}
                 </span>
@@ -512,7 +514,7 @@ function CheckState({ ev }: { ev: UiEvent }) {
   if (ev.check === 'requested')
     return (
       <p className="check" data-s="requested">
-        Проверка исправления запрошена. Сервер сверит кадры камер и закроет событие, если нарушение не подтвердится.
+        Проверка камер запрошена. Её результат дополняет доказательства; устранение принимает заказчик в рабочем кабинете.
       </p>
     )
   if (ev.check === 'failed')
@@ -537,7 +539,7 @@ const EV_WORD: Record<string, string> = {
   assigned: 'Назначен ответственный',
   status_changed: 'Решение изменено',
   rejected: 'Отклонено',
-  auto_resolved: 'Камеры подтвердили исправление, событие закрыто',
+  auto_resolved: 'Закрыто по прежнему процессу; приёмка заказчиком не зафиксирована',
   verification_failed: 'Повторная проверка: нарушение сохраняется',
   verification_unavailable: 'Повторная проверка: данных с камер недостаточно',
   escalated: 'Срок истёк, событие передано руководителю',
@@ -644,7 +646,7 @@ function ViewDecide({ ev, live, st, a, cameraId, saving, decide, onDone }: { ev:
           </button>
         )}
         {admin && st?.proposal ? (
-          <button type="button" className="btn" disabled={off} onClick={() => run(() => a.approve(cameraId))}>
+          <button type="button" className="btn" disabled={off} onClick={() => run(() => a.approve(cameraId, st.proposal!.sha256!))}>
             Утвердить предложенный ракурс
           </button>
         ) : admin ? (

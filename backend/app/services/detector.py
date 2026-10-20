@@ -95,7 +95,9 @@ MODEL_LABEL_ALIASES: dict[str, str] = {
 }
 
 
-def _box_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
+def _box_iou(
+    box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]
+) -> float:
     """Compute IoU between two normalized boxes (x1, y1, x2, y2)."""
     xa1, ya1, xa2, ya2 = box_a
     xb1, yb1, xb2, yb2 = box_b
@@ -112,7 +114,9 @@ def _box_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float
     return inter_area / union_area if union_area > 0 else 0.0
 
 
-def _nms(detections: list[DetectionResult], iou_threshold: float = 0.45) -> list[DetectionResult]:
+def _nms(
+    detections: list[DetectionResult], iou_threshold: float = 0.45
+) -> list[DetectionResult]:
     """Non-maximum suppression across combined full-frame and tiled slice detections."""
     if not detections:
         return []
@@ -127,7 +131,8 @@ def _nms(detections: list[DetectionResult], iou_threshold: float = 0.45) -> list
             if cand.canonical_code == exist.canonical_code and iou > iou_threshold:
                 should_keep = False
                 break
-            # Suppress if candidate box is substantially enveloped by existing same-category box
+            # Suppress if candidate box is substantially enveloped by existing
+            # same-category box
             if cand.canonical_code == exist.canonical_code:
                 cand_area = (cand.x2 - cand.x1) * (cand.y2 - cand.y1)
                 inter_x1 = max(cand.x1, exist.x1)
@@ -246,13 +251,13 @@ class MachineryDetector:
             else:
                 self.model = None
                 self.status = "weights_missing"
-                self.status_message = "YOLO weights are missing; automatic model substitution is disabled"
+                self.status_message = (
+                    "YOLO weights are missing; automatic model substitution is disabled"
+                )
         except ImportError as error:
             self.status = "runtime_missing"
             self.status_message = "ultralytics is not installed"
-            logger.warning(
-                "%s: %s", self.status_message, error
-            )
+            logger.warning("%s: %s", self.status_message, error)
             self.model = None
         except Exception as error:
             self.status = "load_error"
@@ -270,7 +275,7 @@ class MachineryDetector:
         names = getattr(result, "names", None) or getattr(self.model, "names", {})
         if isinstance(names, dict):
             model_label = str(names.get(class_id, ""))
-        elif isinstance(names, (list, tuple)) and 0 <= class_id < len(names):
+        elif isinstance(names, list | tuple) and 0 <= class_id < len(names):
             model_label = str(names[class_id])
         else:
             model_label = ""
@@ -290,17 +295,21 @@ class MachineryDetector:
         stage_name: str | None = None,
         enable_slicing: bool = True,
     ) -> list[DetectionResult]:
-        """Run YOLO inference with adaptive tiled slicing (SAHI) for detecting small/distant machinery."""
+        (
+            "Run YOLO inference with adaptive tiled slicing (SAHI) for detecting "
+            "small/distant machinery."
+        )
         del stage_name
         if self.model is None:
             return []
 
         try:
             import io
+
             from PIL import Image
 
             img: Image.Image | None = None
-            if isinstance(image_input, (bytes, bytearray)):
+            if isinstance(image_input, bytes | bytearray):
                 try:
                     img = Image.open(io.BytesIO(image_input)).convert("RGB")
                 except Exception as decode_err:
@@ -318,7 +327,8 @@ class MachineryDetector:
 
             w, h = img.size
 
-            # Adaptive tiled slicing (2x2 grid with ~16% overlap) for high-res frames to catch small objects
+            # Adaptive tiled slicing (2x2 grid with ~16% overlap) for high-res frames to
+            # catch small objects
             if enable_slicing and w >= 600 and h >= 450:
                 tw = int(w * 0.58)
                 th = int(h * 0.58)
@@ -327,7 +337,13 @@ class MachineryDetector:
                     (img.crop((0, 0, tw, th)), 0, 0, tw, th),  # top-left
                     (img.crop((w - tw, 0, w, th)), w - tw, 0, tw, th),  # top-right
                     (img.crop((0, h - th, tw, h)), 0, h - th, tw, th),  # bottom-left
-                    (img.crop((w - tw, h - th, w, h)), w - tw, h - th, tw, th),  # bottom-right
+                    (
+                        img.crop((w - tw, h - th, w, h)),
+                        w - tw,
+                        h - th,
+                        tw,
+                        th,
+                    ),  # bottom-right
                 ]
 
                 # Batched prediction for maximum speed in single tensor pass

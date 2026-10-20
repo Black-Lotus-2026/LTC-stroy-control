@@ -5,18 +5,18 @@ from __future__ import annotations
 import logging
 import math
 import uuid
-from io import BytesIO
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.project import Project
 from app.models.schedule import ScheduleTask
 from app.models.video import VideoAsset
 from app.schemas.stroy_control import VideoSyncStatusResponse
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,17 @@ class VideoService:
             BytesIO(file_bytes), filename, start_timestamp, project_id
         )
 
-    def register_video_stream(self, stream, filename, start_timestamp, project_id=None):
+    def register_video_stream(
+        self,
+        stream,
+        filename,
+        start_timestamp,
+        project_id=None,
+        *,
+        owner_participation_id=None,
+        area_id=None,
+        camera_id=None,
+    ):
         """Probe actual decodable video; never register corrupt bytes as READY."""
         import cv2
 
@@ -98,6 +108,9 @@ class VideoService:
             asset = VideoAsset(
                 id=video_id,
                 project_id=project_id,
+                owner_participation_id=owner_participation_id,
+                area_id=area_id,
+                camera_id=camera_id,
                 filename=name,
                 storage_key=str(dest_path),
                 start_timestamp=start_timestamp,
@@ -132,7 +145,7 @@ class VideoService:
             project_id = asset.project_id
 
         # Query active schedule stage
-        query = select(ScheduleTask)
+        query = select(ScheduleTask).where(ScheduleTask.status != "cancelled")
         if project_id:
             query = query.where(ScheduleTask.project_id == project_id)
 

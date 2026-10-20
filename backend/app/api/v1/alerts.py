@@ -12,6 +12,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.models.alert import AlertNotification
 from app.models.incident import Incident
 from app.schemas.alert import AlertNotificationItem
+from app.services.access_policy import can_read_incident, incident_query, resolve_context
 
 router = APIRouter(prefix="/alerts", tags=["Алерты"])
 
@@ -38,12 +39,20 @@ def _item(notification: AlertNotification, incident: Incident) -> AlertNotificat
 
 @router.get("", response_model=list[AlertNotificationItem])
 def list_alerts(
-    db: DbSession, current_user: CurrentUser, limit: int = Query(50, ge=1, le=100)
+    db: DbSession,
+    current_user: CurrentUser,
+    project_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=100),
 ) -> list[AlertNotificationItem]:
+    ctx = resolve_context(db, project_id, current_user, permission="incident.read")
+    visible = incident_query(db, ctx).with_only_columns(Incident.id)
     rows = db.execute(
         select(AlertNotification, Incident)
         .join(Incident, Incident.id == AlertNotification.incident_id)
-        .where(AlertNotification.recipient_user_id == current_user.id)
+        .where(
+            AlertNotification.recipient_user_id == current_user.id,
+            Incident.id.in_(visible),
+        )
         .order_by(AlertNotification.created_at.desc())
         .limit(limit)
     ).all()
@@ -57,6 +66,12 @@ def mark_alert_read(
     notification = db.get(AlertNotification, alert_id)
     if not notification or notification.recipient_user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Алерт не найден")
+    incident = db.get(Incident, notification.incident_id)
+    ctx = resolve_context(
+        db, incident.project_id, current_user, permission="incident.read"
+    )
+    if not can_read_incident(db, ctx, incident):
+        raise HTTPException(404, detail={"code": "RESOURCE_NOT_FOUND"})
     if not notification.read_at:
         notification.read_at = datetime.now(UTC)
         db.commit()

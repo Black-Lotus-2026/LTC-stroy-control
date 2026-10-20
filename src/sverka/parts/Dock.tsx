@@ -29,6 +29,8 @@ export function Dock({
   setOpen,
   shift,
   weather,
+  readOnly = false,
+  planRestricted = false,
 }: {
   stages: Stage[]
   current: Stage | null
@@ -49,6 +51,8 @@ export function Dock({
   shift: { from: number; to: number }
   /** the object's forecast, when the server has one */
   weather: Weather | null
+  readOnly?: boolean
+  planRestricted?: boolean
 }) {
   const dock = useRef<HTMLElement>(null)
   const body = useRef<HTMLDivElement>(null)
@@ -111,14 +115,14 @@ export function Dock({
   const layout = useCallback(
     (p: number) => {
       const b = body.current
-      if (!b || !span) return
+      if (!b) return
       const { mob } = limits()
       const gut = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gut')) || 20
       const W = b.clientWidth
       const left = lerp(mob ? gut : gut + 252, mob ? gut : gut + 252, easeOut(p))
       const right = lerp(gut, mob ? gut : gut + 380, easeOut(p))
       const w = W - left - right
-      const x = (d: number) => ((d - span.from) / (span.to - span.from)) * w
+      const x = (d: number) => span ? ((d - span.from) / (span.to - span.from)) * w : 0
       const rowTop = mob ? 92 : 98
       const rowH = mob ? 54 : 44
       const stripTop = mob ? 42 : 2
@@ -293,6 +297,7 @@ export function Dock({
 
   /* drag a stage on the gantt: the ends change dates, the middle moves the whole stage */
   const barDown = (s: Stage) => (e: React.PointerEvent) => {
+    if (readOnly) return
     if (e.button || pRef.current < 0.5 || limits().mob) return
     e.stopPropagation()
     const b = body.current
@@ -460,7 +465,7 @@ export function Dock({
           ) : (
             <>
               <span className="kicker">План работ</span>
-              <strong>Не загружен</strong>
+              <strong>{planRestricted ? 'Вне области доступа' : 'Не загружен'}</strong>
             </>
           )}
         </div>
@@ -484,11 +489,11 @@ export function Dock({
         </span>
         <DayRuler t={t} obs={obs} events={events} onOpenEvent={onOpenEvent} onSeek={onSeek} shift={shift} />
         <div className="dock-note">{obs.mode === 'recording' ? 'Перетащите отметку, чтобы перемотать запись' : 'Архива кадров нет: шкала показывает текущий сеанс'}</div>
-        <div className="plan-full" id="planFull" data-open="false">
+        <div className="plan-full" id="planFull" data-open="false" aria-hidden={!open} inert={!open}>
           <div className="pf-head">
             <div>
-              <span className="kicker">План работ · {stages.length} {stages.length === 1 ? 'этап' : 'этапов'}</span>
-              <h2>{stages.length ? `${fmtDay(stages[0].start)} – ${fmtDay(stages[stages.length - 1].end)}` : 'План не загружен'}</h2>
+              <span className="kicker">План работ{!planRestricted && <> · {stages.length} {stages.length === 1 ? 'этап' : 'этапов'}</>}</span>
+              <h2>{stages.length ? `${fmtDay(stages[0].start)} – ${fmtDay(stages[stages.length - 1].end)}` : planRestricted ? 'План вне области доступа' : 'План не загружен'}</h2>
               <p>Сопоставлено со справочником: {stages.filter((s) => s.catalog).length} из {stages.length}</p>
             </div>
             <div className="pf-actions">
@@ -515,11 +520,11 @@ export function Dock({
                 </span>
               ) : (
                 <>
-                  <label className="btn small">
+                  {!readOnly && <label className="btn small">
                     Загрузить .xlsx или .csv
                     <input type="file" accept=".xlsx,.xls,.csv" hidden onChange={(e) => e.target.files?.[0] && onUploadPlan(e.target.files[0])} />
-                  </label>
-                  {stages.length > 0 && (
+                  </label>}
+                  {!readOnly && stages.length > 0 && (
                     <button type="button" className="btn small ghost" onClick={() => setClearAsk(true)}>
                       Очистить план
                     </button>
@@ -590,7 +595,7 @@ export function Dock({
                       className={`dm-cell ${r ? 'l-' + r.lvl : 'l-load'}${r?.edited ? ' edited' : ''}`}
                       disabled={!r}
                       onClick={(e) => onRule(c, e.currentTarget, s.id)}
-                      title={r ? `${MACH[c].name} · этап ${s.n} · ${LV[r.lvl].label.toLowerCase()} · ${Math.round(r.p * 100)}%` : 'Загружаем профиль'}
+                      title={r ? `${MACH[c].name} · этап ${s.n} · ${LV[r.lvl].label.toLowerCase()} · ${r.basis === 'ppr_conflict' ? 'Конфликт ППР' : r.basis === 'ppr' ? 'ППР' : `${Math.round(r.p * 100)}%`}` : 'Загружаем профиль'}
                       aria-label={r ? `${MACH[c].name}, этап ${s.n}: ${LV[r.lvl].label.toLowerCase()}` : 'Загружаем'}
                     />
                   )
@@ -633,7 +638,7 @@ export function Dock({
                   }}
                 />
                 {weekAhead && <WeekWeather weather={weather!} stage={selStage} prof={prof ?? null} t={t} />}
-                {prof?.edited && (
+                {!readOnly && prof?.edited && (
                   <div className="req-reset">
                     <span>
                       Изменено вручную: {CODES.filter((c) => prof.rules[c].edited).length} из {CODES.length}
@@ -667,7 +672,7 @@ export function Dock({
                                 {MACH[r.code].name}
                                 {r.edited && <small className="edited">изменено вручную · по справочнику {LV[r.base].label.toLowerCase()}</small>}
                               </span>
-                              <span className="r-p">{Math.round(r.p * 100)}%</span>
+                              <span className="r-p">{r.basis === 'ppr_conflict' ? 'Конфликт ППР' : r.basis === 'ppr' ? 'ППР' : `${Math.round(r.p * 100)}%`}</span>
                               <span className="r-bar">
                                 <i style={{ width: `${r.p * 100}%` }} />
                               </span>

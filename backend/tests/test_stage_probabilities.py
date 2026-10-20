@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
-from app.services.detector import MACHINERY_CLASSES
 from app.services.stage_matcher import StageMachineryService
 
 
 def test_stage_machinery_service_earthwork_probabilities() -> None:
     matcher = StageMachineryService()
-    profile = matcher.estimate_machinery_probabilities("Выемка грунта котлована под фундамент")
+    profile = matcher.estimate_machinery_probabilities(
+        "Выемка грунта котлована под фундамент"
+    )
 
     assert profile is not None
     assert profile.query == "Выемка грунта котлована под фундамент"

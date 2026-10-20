@@ -61,13 +61,17 @@ class ScheduleEngine:
         self.stage_matcher = StageMachineryService()
 
     def load_demo_schedule(
-        self, project_id: uuid.UUID | None = None
+        self, project_id: uuid.UUID | None = None, *, commit: bool = True
     ) -> list[ScheduleTask]:
         """Load demo schedule from data/demo_schedule_single_object.xlsx."""
         candidates = [
             Path("/app/data/demo_schedule_single_object.xlsx"),
-            Path(__file__).resolve().parents[2] / "data" / "demo_schedule_single_object.xlsx",
-            Path(__file__).resolve().parents[3] / "data" / "demo_schedule_single_object.xlsx",
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "demo_schedule_single_object.xlsx",
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "demo_schedule_single_object.xlsx",
             Path("data/demo_schedule_single_object.xlsx"),
         ]
         demo_file: Path | None = None
@@ -94,6 +98,7 @@ class ScheduleEngine:
             file_bytes=content,
             filename=demo_file.name,
             project_id=project_id,
+            commit=commit,
         )
 
     def import_schedule_bytes(
@@ -101,6 +106,8 @@ class ScheduleEngine:
         file_bytes: bytes,
         filename: str,
         project_id: uuid.UUID | None = None,
+        *,
+        commit: bool = True,
     ) -> list[ScheduleTask]:
         """Parse uploaded schedule bytes (.xlsx or .csv) and persist ScheduleTasks."""
         # Ensure project exists in database if specified, or create/fallback to default
@@ -148,12 +155,13 @@ class ScheduleEngine:
                 }
                 extracted_rows.append(self._normalize_row(row_dict, i + 1))
 
-        # Clear existing schedule tasks for the project to load fresh schedule
+        # Preserve historical IDs, responsibility links and event sources while
+        # replacing the current schedule projection.
         existing = self.db.scalars(
             select(ScheduleTask).where(ScheduleTask.project_id == project_id)
         ).all()
         for t in existing:
-            self.db.delete(t)
+            t.status = ScheduleTaskStatus.CANCELLED
         self.db.flush()
 
         created_tasks: list[ScheduleTask] = []
@@ -198,9 +206,12 @@ class ScheduleEngine:
             self.db.add(task)
             created_tasks.append(task)
 
-        self.db.commit()
-        for task in created_tasks:
-            self.db.refresh(task)
+        if commit:
+            self.db.commit()
+            for task in created_tasks:
+                self.db.refresh(task)
+        else:
+            self.db.flush()
 
         return created_tasks
 
@@ -257,41 +268,26 @@ class ScheduleEngine:
         }
 
     def cascade_shift(
-        self, delayed_stage_id: uuid.UUID | str, delay_days: int
+        self, delayed_stage_id: uuid.UUID | str, delay_days: int, *, commit: bool = True
     ) -> CascadeShiftResponse:
         """Execute queue-based cascade shift advancing all subsequent stages."""
         target_uuid = None
         if isinstance(delayed_stage_id, uuid.UUID):
             target_uuid = delayed_stage_id
         else:
-            try:
+            with contextlib.suppress(ValueError):
                 target_uuid = uuid.UUID(delayed_stage_id)
-            except ValueError:
-                pass
-
         target_stage = self.db.get(ScheduleTask, target_uuid) if target_uuid else None
-        if not target_stage:
-            all_stages = self.db.scalars(
-                select(ScheduleTask).order_by(ScheduleTask.order_index)
-            ).all()
-            if all_stages:
-                idx_match = re.search(r"\d+", str(delayed_stage_id))
-                if idx_match:
-                    target_idx = int(idx_match.group())
-                    for s in all_stages:
-                        if s.order_index == target_idx:
-                            target_stage = s
-                            break
-                if not target_stage:
-                    target_stage = all_stages[0]
-
         if not target_stage:
             raise ValueError(f"Stage with ID {delayed_stage_id} not found")
 
         # Get all stages of the same project ordered by order_index
         stages = self.db.scalars(
             select(ScheduleTask)
-            .where(ScheduleTask.project_id == target_stage.project_id)
+            .where(
+                ScheduleTask.project_id == target_stage.project_id,
+                ScheduleTask.status != ScheduleTaskStatus.CANCELLED,
+            )
             .order_by(ScheduleTask.order_index)
         ).all()
 
@@ -302,9 +298,12 @@ class ScheduleEngine:
                 s.planned_end = s.planned_end + timedelta(days=delay_days)
                 shifted_stages.append(s)
 
-        self.db.commit()
-        for s in stages:
-            self.db.refresh(s)
+        if commit:
+            self.db.commit()
+            for s in stages:
+                self.db.refresh(s)
+        else:
+            self.db.flush()
 
         stage_items = [
             StageItem(

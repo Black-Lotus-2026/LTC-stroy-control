@@ -32,7 +32,6 @@ from app.models import (
     RuleSet,
     ScheduleTask,
     User,
-    UserRole,
     WorkRequirement,
     Zone,
 )
@@ -53,19 +52,24 @@ def aware(value: datetime) -> datetime:
 
 
 def require_project(
-    db: Session, project_id: uuid.UUID, user: User, *, write=False, lock=False
+    db: Session,
+    project_id: uuid.UUID,
+    user: User,
+    *,
+    write=False,
+    lock=False,
+    permission: str | None = None,
 ) -> Project:
-    query = select(Project).where(Project.id == project_id)
-    if lock:
-        query = query.with_for_update()
-    project = db.scalars(query).first()
-    if not project or (
-        user.role != UserRole.ADMIN and project.owner_username != user.username
-    ):
-        raise HTTPException(404, "Объект недоступен")
-    if write and user.role == UserRole.VIEWER:
-        raise HTTPException(403, "Роль наблюдателя не разрешает изменение данных")
-    return project
+    from app.services.access_policy import resolve_context
+
+    return resolve_context(
+        db,
+        project_id,
+        user,
+        permission=permission or ("project.manage" if write else "project.read"),
+        write=write,
+        lock=lock,
+    ).project
 
 
 def _owned(db: Session, model, raw_id: str, project_id: uuid.UUID):

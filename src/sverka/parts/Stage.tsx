@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Engine } from '../engine'
 import type { Evaluation, Observation, Profile, SourceView, ViewCheck } from '../model'
-import { mediaUrl } from '../api'
+import { CameraViewImage } from './CameraViewImage'
 import { toCode } from '../lib/machinery'
 import { PROBLEM_WORD, turnWords } from '../lib/view'
 import { OBSERVATION_LABELS } from '../../domain/constructionObservations'
@@ -48,12 +48,12 @@ export function Stage({
   const [aspect, setAspect] = useState(16 / 9)
   // the approved view laid over the live frame: what moved is seen at once
   const [ghost, setGhost] = useState(false)
+  const mediaElement = src ? engine.element(src.id) : null
 
   // adopt the source's live media element into the visible frame; it keeps streaming either way
   useLayoutEffect(() => {
-    if (!src || !host.current) return
-    const el = engine.element(src.id)
-    if (!el) return
+    const el = mediaElement
+    if (!el || !host.current) return
     host.current.prepend(el)
     const measure = () => {
       const w = el instanceof HTMLVideoElement ? el.videoWidth : (el as HTMLImageElement).naturalWidth
@@ -68,7 +68,7 @@ export function Stage({
       el.removeEventListener('loadedmetadata', measure)
       engine.release(el)
     }
-  }, [engine, src?.id, src?.status === 'unsupported'])
+  }, [engine, mediaElement])
 
   // a frame that stopped updating loses its colour, gradually, as it ages
   useEffect(() => {
@@ -116,7 +116,7 @@ export function Stage({
         <div className="frame" ref={frame} data-boxes={boxes ? 'on' : 'off'} data-focus={focus || undefined} style={{ aspectRatio: String(aspect) }}>
           <div ref={host} className="f-host" style={{ position: 'absolute', inset: 0 }} />
           <div className="f-shade" />
-          {ghost && src.view?.refUrl && <img className="f-ref" src={mediaUrl(src.view.refUrl)} alt="" aria-hidden="true" />}
+          {ghost && src.view?.refUrl && <CameraViewImage className="f-ref" url={src.view.refUrl} alt="" aria-hidden="true" />}
           <Boxes dets={dets} prof={prof} focus={focus} sourceId={src.id} />
           <div className="ticks" />
           <div className="f-top">
@@ -323,7 +323,7 @@ function Strip({
         <span>
           Окно сверки {settings.window} с · порог {settings.conf}%
         </span>
-        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Анализ идёт, пока открыта эта вкладка' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
+        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Кадры в плеере анализируются в этой вкладке; сохранённые записи также обрабатываются сервером.' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
       </div>
       <div className="frame-tools">
         <button type="button" className="toggle" role="switch" aria-checked={boxes} onClick={() => setBoxes(!boxes)}>

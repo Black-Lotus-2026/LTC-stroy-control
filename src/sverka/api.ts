@@ -2,9 +2,10 @@
  * API client for the new interface. Unlike the legacy client it never substitutes demo data:
  * a failed request throws, and the screen shows what went wrong.
  */
-import { API_BASE_URL, API_PREFIX, getStoredToken, setStoredToken } from '../api/stroyControlApi'
+import { API_BASE_URL, API_PREFIX, getAuthHeaders, getStoredToken, setStoredToken } from '../api/stroyControlApi'
 import type { AdminRecipient, AlertNotificationItem, CameraItem, IncidentEventItem, ProjectAlertSettings, ProjectItem, StageItem, UserProfile, ZoneItem } from '../api/stroyControlApi'
 import type { CostBasis, InactionCurve, InactionPoint } from '../api/managementApi'
+import type { PprCitation } from './pprApi'
 
 export type { AdminRecipient, CameraItem, CostBasis, InactionCurve, InactionPoint, ProjectItem, StageItem, UserProfile, ZoneItem }
 export type ApiAlert = AlertNotificationItem
@@ -13,35 +14,41 @@ export type AlertSettings = ProjectAlertSettings
 
 export class ApiError extends Error {
   status: number
-  constructor(message: string, status: number) {
+  code?: string
+  constructor(message: string, status: number, code?: string) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
 function authHeaders(): Record<string, string> {
-  const t = getStoredToken()
-  return t ? { Authorization: `Bearer ${t}` } : {}
+  return getAuthHeaders()
 }
 
 export async function req<T>(path: string, init: RequestInit = {}, fallbackMessage = 'Сервер не ответил'): Promise<T> {
   let res: Response
   try {
     res = await fetch(`${API_PREFIX}${path}`, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw new ApiError('Нет связи с сервером. Проверьте, что API запущен.', 0)
   }
   if (!res.ok) {
     let msg = fallbackMessage
+    let code: string | undefined
     try {
       const body = await res.json()
       const d = body?.detail ?? body?.error?.message
+      if (typeof body?.error?.code === 'string') code = body.error.code
+      else if (typeof d?.code === 'string') code = d.code
       if (typeof d === 'string') msg = d
+      else if (typeof d?.message === 'string') msg = d.message
       else if (Array.isArray(d) && d[0]?.msg) msg = d[0].msg
     } catch {
       // body is not JSON
     }
-    throw new ApiError(msg, res.status)
+    throw new ApiError(msg, res.status, code)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
@@ -113,58 +120,55 @@ export const deleteZone = (projectId: string, zoneId: string) => req<void>(`/pro
 export const cameras = (projectId: string) => req<CameraItem[]>(`/projects/${projectId}/cameras`)
 export const createCamera = (projectId: string, data: { name: string; code?: string; stream_url: string; zone_id?: string | null }) =>
   req<CameraItem>(`/projects/${projectId}/cameras`, json('POST', data), 'Не удалось сохранить камеру')
-export const updateCamera = (projectId: string, cameraId: string, data: { name: string; code?: string; stream_url: string; zone_id: string | null }) =>
+export const updateCamera = (projectId: string, cameraId: string, data: { name: string; code?: string; stream_url?: string; zone_id: string | null }) =>
   req<CameraItem>(`/projects/${projectId}/cameras/${cameraId}`, json('PATCH', data), 'Не удалось сохранить камеру')
 export const deleteCamera = (projectId: string, cameraId: string) =>
   req<void>(`/projects/${projectId}/cameras/${cameraId}`, { method: 'DELETE' }, 'Не удалось удалить камеру')
 
 export interface StreamCheck { status: 'online' | 'offline' | 'warning' | 'unknown'; protocol?: string; message?: string; error?: string; suggestion?: string }
-export const checkStream = (url: string) => req<StreamCheck>(`/videos/check-stream?url=${encodeURIComponent(url)}`)
-export const proxyUrl = (url: string) => `${API_PREFIX}/videos/proxy-stream?url=${encodeURIComponent(url)}`
-/**
- * One frame from an HTTP camera through the existing proxy: load the stream, take the first
- * frame, close the connection. Holding MJPEG streams open would use up the browser's six
- * connections per host and stall every other request to the API.
- */
-export function grabFrame(url: string, timeoutMs = 6000): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.decoding = 'async'
-    const timer = window.setTimeout(() => {
-      img.onload = img.onerror = null
-      img.removeAttribute('src')
-      reject(new ApiError('Камера не прислала кадр за 6 секунд', 0))
-    }, timeoutMs)
-    img.onload = () => {
-      window.clearTimeout(timer)
-      img.onload = img.onerror = null
-      resolve(img)
-    }
-    img.onerror = () => {
-      window.clearTimeout(timer)
-      img.onload = img.onerror = null
-      reject(new ApiError('Камера не ответила через сервер', 0))
-    }
-    img.src = `${proxyUrl(url)}&_=${Date.now()}`
-  })
-}
-
-/** Check a camera before saving it. HTTP: try to get a frame; RTSP: the server checks the port. */
-export async function probeCamera(url: string): Promise<{ ok: boolean; message: string }> {
-  const u = url.trim()
-  if (/^https?:\/\//i.test(u)) {
+export const checkStream = (cameraId: string) => req<StreamCheck>(`/videos/check-stream?camera_id=${encodeURIComponent(cameraId)}`)
+export const proxyUrl = (cameraId: string) => `${API_PREFIX}/videos/proxy-stream?camera_id=${encodeURIComponent(cameraId)}`
+/** Read one bounded frame from an authorized persisted camera and close MJPEG immediately. */
+export async function grabFrame(cameraId: string, timeoutMs = 6000): Promise<HTMLImageElement> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let imageUrl = ''
+  try {
+    const response = await fetch(proxyUrl(cameraId), { signal: controller.signal, headers: authHeaders() })
+    if (!response.ok) throw new ApiError('Кадр камеры недоступен в текущем назначении.', response.status)
+    const reader = response.body?.getReader()
+    if (!reader) throw new ApiError('Камера не прислала изображение.', 0)
+    let bytes = new Uint8Array(0)
+    let payload: Uint8Array | null = null
+    let jpegStart = -1
     try {
-      const img = await grabFrame(u)
-      const msg = `Кадр получен · ${img.naturalWidth}×${img.naturalHeight}`
-      img.removeAttribute('src')
-      return { ok: true, message: msg }
-    } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : 'Камера не ответила' }
-    }
-  }
-  const r = await checkStream(u)
-  return { ok: r.status === 'online', message: r.status === 'online' ? r.message || 'Порт отвечает' : r.error || r.suggestion || 'Не отвечает' }
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) { if (response.headers.get('Content-Type')?.startsWith('image/')) payload = bytes; break }
+        const previous = bytes.length
+        const joined = new Uint8Array(previous + chunk.value.length); joined.set(bytes); joined.set(chunk.value, previous); bytes = joined
+        if (bytes.length > 8 * 1024 * 1024) throw new ApiError('Кадр камеры превышает 8 МБ.', 0)
+        for (let offset = Math.max(0, previous - 1); offset + 1 < bytes.length; offset++) {
+          if (jpegStart < 0 && bytes[offset] === 0xff && bytes[offset + 1] === 0xd8) jpegStart = offset
+          if (jpegStart >= 0 && bytes[offset] === 0xff && bytes[offset + 1] === 0xd9) { payload = bytes.slice(jpegStart, offset + 2); break }
+        }
+        if (payload) break
+      }
+    } finally { await reader.cancel().catch(() => undefined) }
+    if (!payload?.length) throw new ApiError('Камера не прислала полный кадр.', 0)
+    imageUrl = URL.createObjectURL(new Blob([payload.slice().buffer], { type: jpegStart >= 0 ? 'image/jpeg' : response.headers.get('Content-Type') || 'image/jpeg' }))
+    const image = new Image(); image.decoding = 'async'
+    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new ApiError('Изображение камеры не удалось прочитать.', 0)); image.src = imageUrl })
+    return image
+  } catch (error) {
+    if (controller.signal.aborted) throw new ApiError('Камера не прислала кадр за 6 секунд.', 0)
+    throw error
+  } finally { clearTimeout(timer); if (imageUrl) URL.revokeObjectURL(imageUrl) }
+}
+/** Connection probes use the saved camera identity and server network policy. */
+export async function probeCamera(cameraId: string): Promise<{ ok: boolean; message: string }> {
+  const result = await checkStream(cameraId)
+  return { ok: result.status === 'online', message: result.message || result.error || 'Кадр не получен.' }
 }
 
 /* schedule */
@@ -183,6 +187,8 @@ export interface ApiMachinery {
   probability: number
   classification: 'MANDATORY' | 'RECOMMENDED' | 'NEUTRAL' | 'UNCHARACTERISTIC'
   requirement_level: string
+  basis?: 'ppr' | 'ppr_conflict' | null
+  ppr_requirements?: PprCitation[]
 }
 export interface ApiProfile {
   stage_id: string
@@ -191,12 +197,14 @@ export interface ApiProfile {
   similarity_confidence: number
   probabilities: ApiMachinery[]
   has_custom_override?: boolean
+  ppr_revision?: string | null
 }
 export const updateStage = (stageId: string, data: { planned_start: string; planned_end: string; duration_days: number }) =>
   req<StageItem>(`/schedule/stages/${stageId}`, json('PUT', data), 'Не удалось сохранить сроки этапа')
 /** Always scoped to the object: without project_id the server clears the plans of every object. */
 export const clearPlan = (projectId: string) => req<{ deleted_count: number }>(`/schedule/clear?project_id=${projectId}`, { method: 'POST' }, 'Не удалось очистить план')
 export const profile = (stageId: string) => req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`)
+export const pprControlRevision = (projectId: string, signal?: AbortSignal) => req<{ revision: string }>(`/projects/${encodeURIComponent(projectId)}/ppr-control-revision`, { signal })
 export const putOverrides = (stageId: string, overrides: Record<string, unknown>) =>
   req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`, json('PUT', { overrides }), 'Не удалось сохранить правило')
 
@@ -226,10 +234,13 @@ export interface DetectorStatus { compliance_enabled?: boolean; evaluable_classe
 export const detectorStatus = () => req<DetectorStatus>('/videos/detector-status')
 
 export interface VideoAsset { video_id: string; filename: string; start_timestamp: string; duration_seconds: number }
-export function uploadVideo(projectId: string, file: File, startIso: string) {
+export interface SavedVideo extends VideoAsset { media_url: string; camera_id: string | null; analysis_status?: 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'; analysis_error?: string | null; analyzed_at?: string | null }
+export const savedVideos = (projectId: string) => req<SavedVideo[]>(`/videos?project_id=${encodeURIComponent(projectId)}`, {}, 'Не удалось загрузить сохранённые записи')
+export function uploadVideo(projectId: string, file: File, startIso: string, areaId?: string) {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('start_timestamp', startIso)
+  if (areaId) fd.append('area_id', areaId)
   return req<VideoAsset>(`/videos/upload?project_id=${projectId}`, { method: 'POST', body: fd }, 'Не удалось сохранить запись на сервере')
 }
 
@@ -238,6 +249,7 @@ export interface ApiIncident {
   id: string
   code: string
   project_id: string
+  ppr_requirements?: PprCitation[]
   stage_id?: string | null
   stage_name?: string | null
   zone_name?: string | null
@@ -280,6 +292,7 @@ export interface ApiIncident {
 }
 export interface IncidentCreate {
   project_id: string
+  ppr_revision?: string | null
   stage_id?: string | null
   stage_name?: string | null
   zone_id?: string | null
@@ -339,7 +352,7 @@ export const setIncidentConfig = (seconds: number) =>
   req<{ violation_evaluation_window_seconds: number }>('/incidents/config', json('PATCH', { violation_evaluation_window_seconds: seconds }), 'Не удалось сохранить окно сверки')
 
 /* camera view: the approved reference, proposals of a new view, agreed moves. The administrator decides. */
-export interface ViewPhoto { url: string; at?: string | null; by?: string | null; by_id?: string | null; note?: string | null }
+export interface ViewPhoto { url: string; sha256?: string | null; at?: string | null; by?: string | null; by_id?: string | null; note?: string | null }
 export interface ViewMove { status: 'requested' | 'approved'; until: string; reason: string; by?: string | null; by_id?: string | null; at?: string | null; approved_by?: string | null; approved_at?: string | null }
 export interface ViewHistoryItem { kind: string; at: string; by?: string | null; note?: string | null; url?: string | null; until?: string | null }
 export interface CameraViewState {
@@ -357,7 +370,7 @@ export const cameraViews = (projectId: string) => req<CameraViewState[]>(`/proje
 /** An administrator approves at once; anyone else sends the view for approval. */
 export const submitView = (projectId: string, cameraId: string, snapshot: string, note?: string) =>
   req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference`, json('PUT', { snapshot_base64: snapshot, note: note || null }), 'Ракурс не сохранён')
-export const approveView = (projectId: string, cameraId: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference/approve`, { method: 'POST' }, 'Ракурс не утверждён')
+export const approveView = (projectId: string, cameraId: string, sha256: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference/approve`, { method: 'POST', headers: { 'If-Match': sha256 } }, 'Ракурс не утверждён')
 export const rejectView = (projectId: string, cameraId: string, note?: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/reference/reject`, json('POST', { note: note || null }), 'Не удалось отклонить')
 export const requestMove = (projectId: string, cameraId: string, until: string, reason: string) =>
   req<CameraViewState>(`${viewPath(projectId, cameraId)}/move`, json('POST', { until, reason }), 'Перенос не сохранён')
@@ -366,7 +379,18 @@ export const rejectMove = (projectId: string, cameraId: string, note?: string) =
 export const cancelMove = (projectId: string, cameraId: string) => req<CameraViewState>(`${viewPath(projectId, cameraId)}/move`, { method: 'DELETE' }, 'Перенос не отменён')
 /** The approved frame itself, to compare against in this browser. */
 export async function viewImage(url: string) {
-  const res = await fetch(mediaUrl(url)!)
+  return createImageBitmap(await viewAsset(url))
+}
+/** Authenticated same-server assets; credentials never follow external image links. */
+export async function viewAsset(url: string, signal?: AbortSignal): Promise<Blob> {
+  const apiPath = new URL(API_PREFIX, 'https://view.invalid').pathname.replace(/\/$/, '')
+  const suffix = url.startsWith(`${apiPath}/`) ? url.slice(apiPath.length) : ''
+  const protectedAsset = /^\/projects\/[a-zA-Z0-9_-]+\/cameras\/[a-zA-Z0-9_-]+\/view\/assets\/[a-fA-F0-9]{64}$/.test(suffix)
+  const mediaPath = url.startsWith('/media/') ? url : API_BASE_URL && url.startsWith(`${API_BASE_URL}/media/`) ? url.slice(API_BASE_URL.length) : ''
+  const protectedMedia = /^\/media\/[a-zA-Z0-9_./-]+$/.test(mediaPath) && !mediaPath.split('/').some(part => part === '..' || part === '.')
+  if (mediaPath && !protectedMedia) throw new ApiError('Ссылка на материал недопустима', 0)
+  if (url.includes('/view/assets/') && !protectedAsset) throw new ApiError('Ссылка на утверждённый кадр недопустима', 0)
+  const res = await fetch(protectedAsset ? `${API_PREFIX}${suffix}` : mediaUrl(url)!, { signal, headers: protectedAsset || protectedMedia ? authHeaders() : {} })
   if (!res.ok) throw new ApiError('Утверждённый кадр не загрузился', res.status)
-  return createImageBitmap(await res.blob())
+  return res.blob()
 }

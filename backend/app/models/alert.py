@@ -37,5 +37,7 @@ class AlertNotification(UUIDPrimaryKeyMixin, Base):
     recipient: Mapped[User] = relationship()
 
     __table_args__ = (
-        UniqueConstraint("incident_id", "recipient_user_id", "kind", name="uq_alert_delivery"),
+        UniqueConstraint(
+            "incident_id", "recipient_user_id", "kind", name="uq_alert_delivery"
+        ),
     )

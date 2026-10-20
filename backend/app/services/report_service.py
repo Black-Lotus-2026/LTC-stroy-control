@@ -152,6 +152,11 @@ def run_due_report_schedules(
         select(ReportSchedule)
         .where(
             ReportSchedule.enabled.is_(True),
+            ReportSchedule.project_id.in_(
+                select(Project.id).where(
+                    Project.kind != "shared_demo", Project.lifecycle == "active"
+                )
+            ),
             ReportSchedule.next_run_at <= current,
         )
         .with_for_update(skip_locked=True)

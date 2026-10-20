@@ -29,6 +29,25 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "projects"
 
+    customer_organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16), default="production", server_default="production"
+    )
+    # No legacy upload becomes public merely because the project is a shared demo.
+    # Only an operator-published, validated set of known fixture IDs is exposed.
+    demo_manifest: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    lifecycle: Mapped[str] = mapped_column(
+        String(16), default="active", server_default="active"
+    )
+    authorization_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1"
+    )
+    row_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(256))
     address: Mapped[str | None] = mapped_column(Text, default=None)
@@ -46,7 +65,9 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     object_kind: Mapped[str | None] = mapped_column(String(64), default=None)
 
     status: Mapped[str] = mapped_column(String(32), default="active")
-    owner_username: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
+    owner_username: Mapped[str | None] = mapped_column(
+        String(64), default=None, nullable=True
+    )
     alert_error_deadline_minutes: Mapped[int] = mapped_column(
         Integer, default=120, server_default="120"
     )
@@ -196,28 +217,39 @@ class Camera(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Утверждённый ракурс: кадр, с которым сверяется камера. Утверждает
     # администратор; ответственный только предлагает (view_proposal_*).
     view_reference_key: Mapped[str | None] = mapped_column(String(512), default=None)
-    view_reference_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_reference_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     view_reference_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
     view_proposal_key: Mapped[str | None] = mapped_column(String(512), default=None)
-    view_proposal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_proposal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     view_proposal_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
     view_proposal_note: Mapped[str | None] = mapped_column(Text, default=None)
-    # Перенос камеры: requested — ждёт администратора, approved — согласован до view_move_until.
+    # Перенос камеры: requested — ждёт согласования управляющим,
+    # approved — согласован до view_move_until.
     view_move_status: Mapped[str | None] = mapped_column(String(16), default=None)
-    view_move_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_move_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     view_move_reason: Mapped[str | None] = mapped_column(Text, default=None)
     view_move_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
-    view_move_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_move_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
     view_move_approved_by: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None
     )
-    view_move_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    view_move_approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
     project: Mapped[Project] = relationship(back_populates="cameras")
     zone: Mapped[Zone | None] = relationship(back_populates="cameras")

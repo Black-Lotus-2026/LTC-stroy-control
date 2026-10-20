@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,9 +15,17 @@ from app.models.project import Camera, Project
 
 
 class VideoAsset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Загруженный видеофайл или архив видеопотока с точной временной меткой старта съёмки."""
+    """Видеофайл или архив потока с точной временной меткой старта съёмки."""
 
     __tablename__ = "video_assets"
+    analysis_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    owner_participation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("project_organizations.id", ondelete="RESTRICT")
+    )
+    area_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("responsibility_areas.id", ondelete="RESTRICT")
+    )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), index=True
@@ -38,6 +47,18 @@ class VideoAsset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # UPLOADED, EXTRACTING, READY, FAILED
     status: Mapped[str] = mapped_column(
         String(32), default="UPLOADED", server_default="UPLOADED"
+    )
+
+    # Playback readiness and background analysis are independent states.
+    analysis_status: Mapped[str] = mapped_column(
+        String(32), default="PENDING", server_default="PENDING", index=True
+    )
+    analysis_error: Mapped[str | None] = mapped_column(Text, default=None)
+    analyzed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    analysis_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
     )
 
     project: Mapped[Project] = relationship()

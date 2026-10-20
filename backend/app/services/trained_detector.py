@@ -76,9 +76,7 @@ def as_detection(row: dict) -> DetectionResult:
 
 class TrainedConstructionDetector:
     profile = "construction_trained"
-    policy = "presence"
-    # A diagnostic result does not establish exhaustive absence or unique counts.
-    compliance_enabled = False
+    policy = "shadow"
     quality_verified = False
     unsupported_classes = ["grader"]
     supported_classes = [name for name in SEMANTIC_NAMES if name != "grader"]
@@ -88,7 +86,24 @@ class TrainedConstructionDetector:
     }
     sha256 = MODEL_SHA256
 
-    def __init__(self, weights, *, device=None, confidence=0.5, imgsz=960):
+    def __init__(
+        self,
+        weights,
+        *,
+        device=None,
+        confidence=0.5,
+        imgsz=960,
+        policy="shadow",
+        approved_classes=(),
+    ):
+        from app.services.construction_semantics import CANONICAL13
+
+        if policy not in {"shadow", "enforce"}:
+            raise ValueError("Unknown construction policy")
+        self.policy = policy
+        self.approved_classes = frozenset(approved_classes)
+        if not self.approved_classes <= set(CANONICAL13) - {"grader"}:
+            raise ValueError("Unsupported class in construction rule allowlist")
         self.weights_path = Path(weights).resolve()
         self.weight_paths = {"trained": self.weights_path.name}
         self.conf_threshold, self.imgsz = confidence, imgsz
@@ -165,6 +180,14 @@ class TrainedConstructionDetector:
     @property
     def is_ready(self):
         return self.model is not None
+
+    @property
+    def compliance_enabled(self):
+        return self.is_ready and self.policy == "enforce" and bool(self.approved_classes)
+
+    @property
+    def evaluable_classes(self):
+        return sorted(self.approved_classes) if self.compliance_enabled else []
 
     def detect_frame(self, frame, stage_name=None, enable_slicing=True):
         del stage_name, enable_slicing
@@ -261,7 +284,45 @@ class TrainedConstructionDetector:
         return rows
 
     def can_evaluate(self, machinery_name):
-        return False
+        return self.compliance_enabled and self._rule_class(machinery_name) is not None
+
+    def _rule_class(self, name):
+        from app.services.rule_engine import to_russian_machinery_name
+
+        clean = (name or "").strip().casefold()
+        for code in self.approved_classes:
+            aliases = {
+                code,
+                "MACHINERY_" + code.upper(),
+                LABELS_RU[code],
+                to_russian_machinery_name(code),
+            }
+            if clean in {alias.casefold() for alias in aliases}:
+                return code
+        return None
 
     def evaluate_rules(self, probabilities, detections):
-        return []
+        from app.services.rule_engine import RuleEngine, to_russian_machinery_name
+
+        if not self.compliance_enabled:
+            return []
+        # Normalize aliases once: duplicate Russian/raw keys must not produce
+        # duplicate incidents, and unrelated detections cannot satisfy a rule.
+        normalized = {}
+        for name, probability in probabilities.items():
+            code = self._rule_class(name)
+            if code is not None and (code not in normalized or name == code):
+                normalized[code] = probability
+        observed = {
+            d.raw_label
+            for d in detections
+            if d.raw_label in self.approved_classes
+            and d.confidence >= self.conf_threshold
+        }
+        engine = RuleEngine()
+        return [
+            engine.evaluate_single_equipment(
+                to_russian_machinery_name(code), probability, int(code in observed)
+            )
+            for code, probability in normalized.items()
+        ]

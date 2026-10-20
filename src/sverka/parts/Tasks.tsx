@@ -9,7 +9,8 @@ const SHOWN = 8
 
 /** Where a task stands, in a few words: the deadline while it is open, the outcome once closed. */
 export function taskState(a: ApiAlert, now: number): { text: string; late: boolean } {
-  if (a.incident_status === 'resolved') return { text: 'закрыто после проверки камер', late: false }
+  if (a.incident_status === 'resolved') return { text: 'дело закрыто · основание в истории', late: false }
+  if (a.incident_status === 'remediation_submitted') return { text: 'устранение заявлено · ожидает приёмки заказчиком', late: false }
   if (a.incident_status === 'false_positive') return { text: 'закрыто как ложное', late: false }
   if (a.verification_status === 'requested') return { text: 'проверка исправления запрошена', late: false }
   if (!a.sla_deadline) return { text: 'срок не задан', late: false }
@@ -26,7 +27,7 @@ export function TaskList({ alerts, projects, current, onOpen }: { alerts: ApiAle
   return (
     <>
       <div className="m-k tasks-head">
-        <span className="kicker">Задачи</span>
+        <span className="kicker">Уведомления</span>
         {both && (
           <Seg
             label="Какие задачи показать"
@@ -58,7 +59,7 @@ export function TaskList({ alerts, projects, current, onOpen }: { alerts: ApiAle
           </button>
         )
       })}
-      {!shown.length && <div className="m-note">Задач нет.</div>}
+      {!shown.length && <div className="m-note">Уведомлений нет.</div>}
       {shown.length > SHOWN && <div className="m-note">Показаны последние {SHOWN} из {shown.length}.</div>}
     </>
   )

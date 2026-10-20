@@ -1,9 +1,11 @@
-import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { UserProfile } from '../api'
 import { fmtDayLong } from '../lib/format'
 import { LetterRing } from '../lib/ring'
 import { SUBJECTS, WireScene } from '../lib/wire'
-import { ROLE_LABEL } from '../model'
+import type { CustomerAccess } from './CustomerWorkspace'
+import { contextKey, roleName } from '../customerContext'
+import { introPresentation } from '../introContext'
 import { SideSwitch, Sides, useSide, type Side } from './IntroSides'
 
 const SceneCtx = createContext<WireScene | null>(null)
@@ -65,7 +67,9 @@ const WORDS = ['СТРОЙ', 'КОНТРОЛЬ']
  * picked in the header. Elsewhere the name is set huge and flat.
  * Continuing mounts the workspace underneath while the Showcase leaves off the top.
  */
-export function Intro({ user, leaving, onContinue }: { user: UserProfile; leaving: boolean; onContinue: () => void }) {
+export function Intro({ user, access, leaving, onContinue }: { user: UserProfile; access: CustomerAccess; leaving: boolean; onContinue: () => void }) {
+  const presentation = introPresentation(access)
+  const proceed = useCallback(() => { if (presentation.disabled || leaving) return; if (presentation.action === 'retry') access.onRefreshAccess(); else onContinue() }, [presentation.disabled, presentation.action, leaving, access.onRefreshAccess, onContinue])
   const scene = useContext(SceneCtx)
   const type = useRef<HTMLDivElement>(null)
   const fills = useRef<(HTMLElement | null)[]>([])
@@ -115,11 +119,11 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
   useEffect(() => {
     if (leaving) return
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onContinue()
+      if (e.key === 'Escape') proceed()
     }
     addEventListener('keydown', key)
     return () => removeEventListener('keydown', key)
-  }, [leaving, onContinue])
+  }, [leaving, proceed])
 
   return (
     <>
@@ -142,7 +146,7 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
           </p>
         </div>
       </div>
-      <Sides side={side} user={user} scene={scene} aim={aim} subject={SUBJECTS[idx]?.title ?? ''} switched={switched} />
+      <Sides key={access.context ? `${access.context.assignment_id}:${access.context.authorization_version}` : 'no-context'} side={side} context={access.context} scene={scene} aim={aim} subject={SUBJECTS[idx]?.title ?? ''} switched={switched} />
       <canvas className="intro-ring" ref={ringCanvas} data-ready={ringReady || undefined} aria-hidden="true" />
 
       <header className="intro-top">
@@ -158,8 +162,10 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
       <footer className="intro-foot">
         <div className="it-role">
           <span className="kicker">Ваша роль</span>
-          <b>{ROLE_LABEL}</b>
-          <small>{user.username}</small>
+          <b>{presentation.role}</b>
+          <small>{access.context ? `${access.context.organization_name} / ${access.context.project_name}` : user.username}</small>
+          <small className="it-task" role={access.accessError ? 'alert' : 'status'}>{presentation.task}</small>
+          {access.contexts.length > 1 && <select className="it-context-select" aria-label="Назначение на заставке" value={access.context ? contextKey(access.context) : ''} onChange={event => access.onContextChange(event.target.value)}><option value="" disabled>Выберите назначение</option>{access.contexts.map(item => <option key={contextKey(item)} value={contextKey(item)}>{item.organization_name} / {item.project_name} / {roleName(item)}</option>)}</select>}
         </div>
         <ol className="it-steps" aria-label="Что на заставке">
           {SUBJECTS.map((s, i) => (
@@ -180,8 +186,8 @@ export function Intro({ user, leaving, onContinue }: { user: UserProfile; leavin
             </li>
           ))}
         </ol>
-        <button type="button" className="btn plan it-go" onClick={onContinue} disabled={leaving} autoFocus>
-          Начать работу
+        <button type="button" className="btn plan it-go" onClick={proceed} disabled={leaving || presentation.disabled} autoFocus>
+          {presentation.cta}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M3 8h10M9 4l4 4-4 4" />
           </svg>

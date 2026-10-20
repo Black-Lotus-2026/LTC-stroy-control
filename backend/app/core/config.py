@@ -56,6 +56,23 @@ class Settings(BaseSettings):
     # Базовый URL, по которому отдаются файлы хранилища наружу.
     storage_public_url: str = "http://localhost:8000/media"
 
+    # Original PPR documents must never be mounted as public media.
+    ppr_storage_root: Path = Path("./var/documents")
+    ppr_provider: Literal["openrouter", "ollama"] = "openrouter"
+    ppr_ollama_url: str = "http://ppr_llm:11434"
+    ppr_analysis_model: str = ""
+    camera_allow_rtsp_capture: bool = False
+    camera_allowed_networks: list[str] = []
+    camera_view_storage_root: Path = Path("./var/camera-views-private")
+    # Explicitly published live demo; credentials never leave the backend.
+    myvms_demo_enabled: bool = False
+    myvms_base_url: str = ""
+    myvms_username: str = ""
+    myvms_password: SecretStr = SecretStr("")
+    myvms_demo_channels: list[int] = [1, 2]
+    ppr_renderer_executable: str = "libreoffice"
+    max_ppr_upload_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+
     # --- Часовой пояс проекта по умолчанию ---
     default_timezone: str = "Europe/Moscow"
 
@@ -91,7 +108,8 @@ class Settings(BaseSettings):
 
     # --- Контроль нарушений спецтехники ---
     # Период проверки и фиксации нарушений (в секундах).
-    # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
+    # Если за это время не появилась обязательная/рекомендованная техника
+    # или обнаружена лишняя — фиксируется нарушение.
     violation_evaluation_window_seconds: int = 30
 
     # Production always uses the one pinned trained checkpoint. Historical profile

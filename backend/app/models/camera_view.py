@@ -19,7 +19,8 @@ class CameraViewEvent(UUIDPrimaryKeyMixin, Base):
         PgUUID(as_uuid=True), ForeignKey("cameras.id", ondelete="CASCADE"), index=True
     )
     # reference_set | reference_proposed | reference_rejected |
-    # move_requested | move_approved | move_rejected | move_cancelled | move_completed | move_expired
+    # move_requested | move_approved | move_rejected | move_cancelled | move_completed |
+    # move_expired
     kind: Mapped[str] = mapped_column(String(32))
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), default=None

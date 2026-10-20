@@ -9,6 +9,9 @@ from PIL import Image
 
 from app.services import detector_provider as provider
 from app.services.construction_semantics import EQUIPMENT17, MOCS13
+from tests import test_customer_control_http
+
+customer_http = test_customer_control_http.customer_http
 
 
 def make_detector(tmp_path, *, rows=None, policy="shadow", approved=()):
@@ -176,13 +179,19 @@ def test_numpy_rgb_input_is_not_mutated(tmp_path):
 def test_worker_shadow_does_not_evaluate_or_write_incidents(monkeypatch):
     from app.workers import cv_tasks
 
-    calls = []
-    detector = SimpleNamespace(
-        compliance_enabled=False, detect_frame=lambda frame: calls.append(frame) or []
-    )
-    monkeypatch.setattr(cv_tasks, "get_detector", lambda: detector)
+    # Unauthenticated legacy single frames have no capture-time provenance.
+    # They cannot enter the compliance pipeline, even under an approved model.
     monkeypatch.setattr(
-        cv_tasks, "RuleEngine", lambda: pytest.fail("shadow must not evaluate")
+        cv_tasks,
+        "get_detector",
+        lambda: pytest.fail("untrusted frame inference"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cv_tasks,
+        "RuleEngine",
+        lambda: pytest.fail("shadow must not evaluate"),
+        raising=False,
     )
     stage = SimpleNamespace(project_id="project")
     db = SimpleNamespace(
@@ -190,7 +199,6 @@ def test_worker_shadow_does_not_evaluate_or_write_incidents(monkeypatch):
         commit=lambda: pytest.fail("shadow must not write"),
     )
     assert cv_tasks.process_video_frame_sync(b"frame", "stage", "project", db=db) == []
-    assert calls == [b"frame"]
 
 
 def test_shadow_recheck_never_passes_or_fails_incident(monkeypatch):
@@ -201,7 +209,16 @@ def test_shadow_recheck_never_passes_or_fails_incident(monkeypatch):
     monkeypatch.setattr(
         alert_service, "_detector", lambda: SimpleNamespace(compliance_enabled=False)
     )
-    db = SimpleNamespace(scalars=lambda query: SimpleNamespace(all=lambda: [object()]))
+    camera = SimpleNamespace(
+        id=uuid.uuid4(),
+        view_move_status=None,
+        view_move_until=None,
+        view_reference_key=None,
+    )
+    db = SimpleNamespace(
+        scalars=lambda query: SimpleNamespace(all=lambda: [camera]),
+        scalar=lambda query: None,
+    )
     incident = SimpleNamespace(
         project_id=uuid.uuid4(),
         discrepancy_type="MISSING_MANDATORY",
@@ -274,8 +291,15 @@ def test_enforce_recheck_inference_failure_is_unavailable(monkeypatch):
     )
     monkeypatch.setattr(alert_service, "_capture_frame", lambda camera: b"frame")
     monkeypatch.setattr(alert_service.time, "sleep", lambda seconds: None)
+    camera = SimpleNamespace(
+        id=uuid.uuid4(),
+        view_move_status=None,
+        view_move_until=None,
+        view_reference_key=None,
+    )
     db = SimpleNamespace(
-        scalars=lambda query: SimpleNamespace(all=lambda: [SimpleNamespace(id="cam")])
+        scalars=lambda query: SimpleNamespace(all=lambda: [camera]),
+        scalar=lambda query: None,
     )
     incident = SimpleNamespace(
         project_id=uuid.uuid4(),
@@ -287,11 +311,10 @@ def test_enforce_recheck_inference_failure_is_unavailable(monkeypatch):
     assert result.details["reason"] == "construction_inference_failed"
 
 
-def test_compat_api_preserves_semantics_without_physical_count_or_vlm(monkeypatch):
-    import asyncio
+def test_compat_api_preserves_semantics_without_physical_count_or_vlm(
+    monkeypatch, customer_http
+):
     from io import BytesIO
-
-    from fastapi import UploadFile
 
     from app.api.v1 import videos
     from app.services.detector import DetectionResult
@@ -326,9 +349,14 @@ def test_compat_api_preserves_semantics_without_physical_count_or_vlm(monkeypatc
     image = BytesIO()
     Image.new("RGB", (100, 80)).save(image, format="PNG")
     image.seek(0)
-    result = asyncio.run(
-        videos.construction_frame(UploadFile(file=image, filename="frame.png"))
+    response = customer_http.client.post(
+        "/api/v1/videos/construction-frame",
+        params={"project_id": str(customer_http.projects["a"].id)},
+        headers=customer_http.headers("manager"),
+        files={"file": ("frame.png", image, "image/png")},
     )
+    assert response.status_code == 200, response.text
+    result = response.json()
     assert result["physical_machine_count"] is None
     assert result["confidence_calibrated"] is False
     assert result["profile"] == "construction_trained"
