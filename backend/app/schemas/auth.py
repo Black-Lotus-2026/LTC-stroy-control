@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -72,7 +73,12 @@ class UserEmailUpdate(BaseModel):
         if value is None or not value.strip():
             return None
         clean = value.strip().lower()
-        if "@" not in clean or " " in clean or clean.startswith("@") or clean.endswith("@"):
+        if (
+            "@" not in clean
+            or " " in clean
+            or clean.startswith("@")
+            or clean.endswith("@")
+        ):
             raise ValueError("Введите корректный email")
         return clean
 

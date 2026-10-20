@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "review_status": "reviewed_by_root",
+  "canonical12": [
+    "excavator",
+    "bulldozer",
+    "dump_truck",
+    "truck_crane",
+    "tower_crane",
+    "concrete_mixer",
+    "loader",
+    "roller",
+    "grader",
+    "backhoe_loader",
+    "concrete_pump",
+    "pile_driving"
+  ],
+  "semantic_labels_ru": {
+    "excavator": "Экскаватор",
+    "bulldozer": "Бульдозер",
+    "dump_truck": "Самосвал",
+    "truck_crane": "Автокран",
+    "tower_crane": "Башенный кран",
+    "concrete_mixer": "Бетоносмеситель",
+    "loader": "Ковшовый погрузчик",
+    "roller": "Дорожный каток",
+    "grader": "Автогрейдер",
+    "backhoe_loader": "Экскаватор-погрузчик",
+    "concrete_pump": "Бетононасос / система подачи бетона",
+    "pile_driving": "Буровая / сваебойная установка",
+    "mobile_crane": "Мобильный кран (шасси не определено)",
+    "crane_manipulator": "Кран-манипулятор",
+    "gazelle": "Малотоннажный автомобиль (gazelle)",
+    "forklift_standart": "Вилочный погрузчик (исходный класс)",
+    "forklift_giraffe": "Погрузчик с выдвижной стрелой (исходный класс)",
+    "tanker": "Автоцистерна",
+    "cleaning_equipment": "Уборочная техника",
+    "truck": "Грузовик (тип кузова не определён)",
+    "trailer": "Прицеп",
+    "worker": "Работник",
+    "hanging_head": "Крюк / подвесной элемент крана",
+    "other_vehicle": "Прочее транспортное средство"
+  },
+  "experts": {
+    "equipment17": [
+      {
+        "raw_class": "dump_truck",
+        "semantic_class": "dump_truck",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "excavator",
+        "semantic_class": "excavator",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "motor_grader",
+        "semantic_class": "grader",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "roller",
+        "semantic_class": "roller",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "crane_manipulator",
+        "semantic_class": "crane_manipulator",
+        "canonical": false,
+        "caveats": [
+          "distinct source class; do not collapse into truck_crane"
+        ]
+      },
+      {
+        "raw_class": "gazelle",
+        "semantic_class": "gazelle",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "forklift_standart",
+        "semantic_class": "forklift_standart",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "bucket_loader_big",
+        "semantic_class": "loader",
+        "canonical": true,
+        "caveats": [
+          "coarse loader source visibly includes backhoe-style machines; subtype unresolved"
+        ]
+      },
+      {
+        "raw_class": "mixer",
+        "semantic_class": "concrete_mixer",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "tanker",
+        "semantic_class": "tanker",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "bulldozer",
+        "semantic_class": "bulldozer",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "cleaning_equipment",
+        "semantic_class": "cleaning_equipment",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "truck",
+        "semantic_class": "truck",
+        "canonical": false,
+        "caveats": [
+          "generic truck; do not infer dump_truck"
+        ],
+        "training_class": "equipment_truck"
+      },
+      {
+        "raw_class": "trailer",
+        "semantic_class": "trailer",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "forklift_giraffe",
+        "semantic_class": "forklift_giraffe",
+        "canonical": false,
+        "caveats": [
+          "source terminology retained; do not infer bucket loader or backhoe"
+        ]
+      },
+      {
+        "raw_class": "bucket_loader_standart",
+        "semantic_class": "loader",
+        "canonical": true,
+        "caveats": [
+          "coarse loader source; do not infer or exclude a separate backhoe subtype"
+        ]
+      },
+      {
+        "raw_class": "autocran",
+        "semantic_class": "truck_crane",
+        "canonical": true,
+        "caveats": []
+      }
+    ],
+    "mocs13": [
+      {
+        "raw_class": "worker",
+        "semantic_class": "worker",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "static_crane",
+        "semantic_class": "tower_crane",
+        "canonical": true,
+        "caveats": [
+          "presence_only: source may box mast and jib separately; boxes are not machine counts"
+        ]
+      },
+      {
+        "raw_class": "hanging_head",
+        "semantic_class": "hanging_head",
+        "canonical": false,
+        "caveats": []
+      },
+      {
+        "raw_class": "crane",
+        "semantic_class": "mobile_crane",
+        "canonical": false,
+        "caveats": [
+          "broad_mobile_crane: truck/crawler subtype unresolved; source label conflicts may exist"
+        ]
+      },
+      {
+        "raw_class": "roller",
+        "semantic_class": "roller",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "bulldozer",
+        "semantic_class": "bulldozer",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "excavator",
+        "semantic_class": "excavator",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "truck",
+        "semantic_class": "truck",
+        "canonical": false,
+        "caveats": [
+          "generic truck; do not infer dump_truck"
+        ],
+        "training_class": "mocs_truck"
+      },
+      {
+        "raw_class": "loader",
+        "semantic_class": "loader",
+        "canonical": true,
+        "caveats": [
+          "loader subtype not established globally; do not infer backhoe_loader"
+        ]
+      },
+      {
+        "raw_class": "pump_truck",
+        "semantic_class": "concrete_pump",
+        "canonical": true,
+        "caveats": [
+          "presence_only: source can box boom or delivery hose without visible pump vehicle"
+        ]
+      },
+      {
+        "raw_class": "concrete_mixer",
+        "semantic_class": "concrete_mixer",
+        "canonical": true,
+        "caveats": []
+      },
+      {
+        "raw_class": "pile_driving",
+        "semantic_class": "pile_driving",
+        "canonical": true,
+        "caveats": [
+          "foundation rig; exact drilling/piling mechanism unresolved"
+        ]
+      },
+      {
+        "raw_class": "other_vehicle",
+        "semantic_class": "other_vehicle",
+        "canonical": false,
+        "caveats": []
+      }
+    ]
+  },
+  "nms_policy": "identical semantic class only; retain raw_detections and suppression provenance",
+  "parent_narrow_policy": "IoU review proposals only; retain both, never automatic narrowing",
+  "confidence_policy": "uncalibrated expert scores, not fused probabilities",
+  "unsupported_canonical_classes": [
+    "backhoe_loader"
+  ],
+  "machine_count_warning": "MOCS tower_crane/concrete_pump boxes can be components, not complete machines",
+  "review": {
+    "reviewer": "Codex root",
+    "date": "2026-10-17",
+    "scope": "Research presence semantics using source class definitions and37object visual sample audit; not a full relabel or physical instance count approval",
+    "evidence": "data/construction/taxonomy-review.json",
+    "conditions": [
+      "Generic truck remains truck, generic crane remains mobile_crane",
+      "Towercrane and pump extents may represent components; no unit count guarantee",
+      "Backhoe and crawler subtypes are not inferred from coarse sources",
+      "Raw labels, source expert and caveats must be retained",
+      "Missing instances within otherwise annotated categories remain a dataset limitation"
+    ]
+  }
+}

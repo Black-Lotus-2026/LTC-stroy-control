@@ -19,6 +19,8 @@ celerybeat-schedule*
 node_modules/
 dist/
 dist-ssr/
+test-results/
+playwright-report/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts

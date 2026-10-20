@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Spring, VelocityTracker, capture, clamp, lerp, project, reducedMotion } from '../lib/spring'
 import { CloseIcon } from './common'
+import { CameraViewImage } from './CameraViewImage'
 
 interface Photo { url: string; camera: string }
 
@@ -127,7 +128,7 @@ export function Lightbox({ photos, index, caption, source, onIndex, onClose }: {
     <div className="lightbox" role="dialog" aria-modal="true" aria-label={`Кадр: ${ph.camera}`}>
       <div className="lb-scrim" ref={scrim} onClick={() => close()} style={{ opacity: 0 }} />
       <div className="lb-frame" ref={frame} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onDoubleClick={() => close()}>
-        <img ref={img} src={ph.url} alt={`Кадр: ${ph.camera}`} draggable={false} onLoad={(e) => e.currentTarget.naturalWidth && setAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} />
+        <CameraViewImage imageRef={img} url={ph.url} alt={`Кадр: ${ph.camera}`} draggable={false} onLoad={(e) => e.currentTarget.naturalWidth && setAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)} />
       </div>
       <div className="lb-chrome" ref={chrome} style={{ opacity: 0 }}>
         <div className="lb-cap">

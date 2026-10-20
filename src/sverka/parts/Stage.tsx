@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Engine } from '../engine'
-import type { Evaluation, Observation, Profile, SourceView } from '../model'
+import type { Evaluation, Observation, Profile, SourceView, ViewCheck } from '../model'
+import { CameraViewImage } from './CameraViewImage'
 import { toCode } from '../lib/machinery'
+import { PROBLEM_WORD, turnWords } from '../lib/view'
 import { OBSERVATION_LABELS } from '../../domain/constructionObservations'
-import { conf2, durShort, hhmmss, plural } from '../lib/format'
+import { atTime, conf2, durShort, hhmm, hhmmss, plural } from '../lib/format'
 import { Spring, clamp, lerp, reducedMotion } from '../lib/spring'
 
 const STATUS_WORD: Record<SourceView['status'], string> = {
@@ -44,12 +46,14 @@ export function Stage({
   const host = useRef<HTMLDivElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const [aspect, setAspect] = useState(16 / 9)
+  // the approved view laid over the live frame: what moved is seen at once
+  const [ghost, setGhost] = useState(false)
+  const mediaElement = src ? engine.element(src.id) : null
 
   // adopt the source's live media element into the visible frame; it keeps streaming either way
   useLayoutEffect(() => {
-    if (!src || !host.current) return
-    const el = engine.element(src.id)
-    if (!el) return
+    const el = mediaElement
+    if (!el || !host.current) return
     host.current.prepend(el)
     const measure = () => {
       const w = el instanceof HTMLVideoElement ? el.videoWidth : (el as HTMLImageElement).naturalWidth
@@ -64,7 +68,7 @@ export function Stage({
       el.removeEventListener('loadedmetadata', measure)
       engine.release(el)
     }
-  }, [engine, src?.id, src?.status === 'unsupported'])
+  }, [engine, mediaElement])
 
   // a frame that stopped updating loses its colour, gradually, as it ages
   useEffect(() => {
@@ -112,6 +116,7 @@ export function Stage({
         <div className="frame" ref={frame} data-boxes={boxes ? 'on' : 'off'} data-focus={focus || undefined} style={{ aspectRatio: String(aspect) }}>
           <div ref={host} className="f-host" style={{ position: 'absolute', inset: 0 }} />
           <div className="f-shade" />
+          {ghost && src.view?.refUrl && <CameraViewImage className="f-ref" url={src.view.refUrl} alt="" aria-hidden="true" />}
           <Boxes dets={dets} prof={prof} focus={focus} sourceId={src.id} />
           <div className="ticks" />
           <div className="f-top">
@@ -119,6 +124,12 @@ export function Stage({
               <i className="dot" />
               <span>{obs.mode === 'recording' && src.status === 'live' ? 'Запись' : STATUS_WORD[src.status]}</span>
             </span>
+            {src.status === 'live' && src.loop?.looped && <span className="chip-mat loop-chip">Повтор записи</span>}
+            {src.status === 'live' && src.view && src.view.state !== 'none' && (
+              <span className="chip-mat view-chip" data-state={src.view.state}>
+                {viewChip(src.view)}
+              </span>
+            )}
             <span className="chip-mat f-count">
               {obs.model === 'down'
                 ? 'Распознавание недоступно'
@@ -127,6 +138,12 @@ export function Stage({
                   : `${dets.length} ${plural(dets.length, 'объект', 'объекта', 'объектов')} на кадре`}
             </span>
           </div>
+          {src.status === 'live' && (src.view?.state === 'changed' || src.view?.state === 'move') && (
+            <div className="f-view" data-state={src.view.state}>
+              <strong>{src.view.state === 'move' ? `Перенос камеры согласован до ${atTime(src.view.moveUntil ?? Date.now())}` : `Ракурс изменён: ${PROBLEM_WORD[src.view.problem ?? 'different']}${src.view.problem === 'turned' && turnWords(src.view) ? ` ${turnWords(src.view)}` : ''}`}</strong>
+              <span>{src.view.state === 'move' ? 'Пока новый ракурс не утверждён, кадры камеры не сверяются.' : `С ${hhmmss(src.view.since ?? obs.t)} кадры этой камеры не учитываются в сверке техники.`}</span>
+            </div>
+          )}
           <div className="f-meta">
             <div>
               <div className="cam-name">{src.name}</div>
@@ -134,6 +151,12 @@ export function Stage({
             </div>
             <span className="mono">{hhmmss(obs.t)}</span>
           </div>
+          {src.status === 'live' && src.loop?.looped && (
+            <div className="f-loop">
+              <strong>Камера повторяет запись{src.loop.period ? `: период около ${durShort(src.loop.period)}` : ''}</strong>
+              <span>{src.loop.since ? `С ${hhmm(src.loop.since)} ` : ''}кадры возвращаются кадр в кадр. Пока повтор идёт, они не учитываются в сверке техники.</span>
+            </div>
+          )}
           <div className="f-state" data-on={String(!!overlay)}>
             <div className="hatch" />
             {overlay && (
@@ -161,7 +184,7 @@ export function Stage({
           )}
         </div>
       </div>
-      <Strip obs={obs} selected={src.id} onSelect={onSelect} frame={frame} settings={settings} boxes={boxes} setBoxes={setBoxes} covered={ev.covered} />
+      <Strip obs={obs} selected={src.id} onSelect={onSelect} frame={frame} settings={settings} boxes={boxes} setBoxes={setBoxes} covered={ev.covered} ghost={src.view?.refUrl ? ghost : null} setGhost={setGhost} />
     </section>
   )
 }
@@ -221,6 +244,8 @@ function Strip({
   boxes,
   setBoxes,
   covered,
+  ghost,
+  setGhost,
 }: {
   obs: Observation
   selected: string
@@ -230,6 +255,9 @@ function Strip({
   boxes: boolean
   setBoxes: (b: boolean) => void
   covered: boolean
+  /** null: the selected camera has no approved view to lay over */
+  ghost: boolean | null
+  setGhost: (b: boolean) => void
 }) {
   const live = obs.sources.filter((s) => s.status === 'live').length
   const pick = (s: SourceView, tile: HTMLElement) => {
@@ -295,14 +323,27 @@ function Strip({
         <span>
           Окно сверки {settings.window} с · порог {settings.conf}%
         </span>
-        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Анализ идёт, пока открыта эта вкладка' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
+        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Кадры в плеере анализируются в этой вкладке; сохранённые записи также обрабатываются сервером.' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
       </div>
       <div className="frame-tools">
         <button type="button" className="toggle" role="switch" aria-checked={boxes} onClick={() => setBoxes(!boxes)}>
           <span className="sw" />
           Рамки
         </button>
+        {ghost != null && (
+          <button type="button" className="toggle" role="switch" aria-checked={ghost} onClick={() => setGhost(!ghost)} aria-label="Эталон поверх кадра" title="Наложить утверждённый ракурс на живой кадр">
+            <span className="sw" />
+            Эталон
+          </button>
+        )}
       </div>
     </div>
   )
+}
+
+function viewChip(v: ViewCheck) {
+  if (v.state === 'ok') return `Ракурс ${Math.round((v.match ?? 0) * 100)} %`
+  if (v.state === 'changed') return 'Ракурс изменён'
+  if (v.state === 'move') return `Перенос до ${hhmm(v.moveUntil ?? Date.now())}`
+  return 'Сверка ракурса'
 }

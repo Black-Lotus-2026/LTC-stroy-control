@@ -11,6 +11,7 @@ redis>=5.2.0
 python-multipart>=0.0.17
 openpyxl>=3.1.0
 pillow>=11.0.0
+numpy>=1.26
 rapidfuzz>=3.9.0
 ultralytics==8.3.203
 pyjwt>=2.8
@@ -25,3 +26,9 @@ mypy>=1.13.0
 
 # Authentication (also declared in pyproject.toml)
 pyjwt>=2.8
+
+# Strict validation of original PDF documents
+pypdf>=5,<7
+
+# Bounded page rendering for image-only PPR documents
+pypdfium2>=4.30,<6

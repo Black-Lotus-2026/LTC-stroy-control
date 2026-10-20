@@ -8,15 +8,23 @@
  * - detections count only when the model answered model_ready=true;
  * - "coverage" is the time we really analysed frames; absence is never inferred outside it.
  *
+ * A camera whose frames repeat a recording (lib/loop.ts) is "looped": its frames stop counting
+ * for the site until the repetition ends.
+ * Camera view: every frame of a camera with an approved view is compared with it (lib/view.ts).
+ * A camera that looks away for VIEW_BAD_FRAMES frames in a row is "changed", and its frames stop
+ * counting for the site until it matches again; an agreed move pauses the comparison.
+ *
  * Analysis runs in this browser tab. The UI says so; continuous server-side collection is a
  * separate backend task.
  *
  */
 import * as api from './api'
 import { toObservationCode } from '../domain/constructionObservations'
-import type { CameraItem } from './api'
+import type { CameraItem, CameraViewState } from './api'
 import { CODES, toCode, type Code } from './lib/machinery'
-import type { Det, Observation, SourceView } from './model'
+import { LOOP_H, LOOP_W, LoopDetector, loopGray } from './lib/loop'
+import { SHARP_H, SHARP_W, VIEW_H, VIEW_W, compareViews, judgeView, viewBlocked, viewFeatures, type ViewFeatures, type ViewMatch, type ViewProblem } from './lib/view'
+import type { Det, Observation, SourceView, ViewCheck } from './model'
 
 const CAPTURE_EVERY = 2000
 const OFFLINE_AFTER_FAILS = 3
@@ -24,6 +32,8 @@ const STALE_AFTER_SAME = 15 // identical frames in a row (~30 s)
 const COVER_GAP = 10_000 // frames closer than this (at ×1) belong to one continuous watch
 const RETRY_OFFLINE = 10_000
 const MAX_DETS = 20_000
+const VIEW_BAD_FRAMES = 8 // ~16 s of a different picture: a truck that stops in front of the camera drives on sooner
+const VIEW_GOOD_FRAMES = 3
 
 interface Rt {
   view: SourceView
@@ -37,15 +47,40 @@ interface Rt {
   retryAt: number
 }
 interface Sight { at: number; src: string; c: number }
+/** What the server says about a camera's view, and the reference prepared for comparison. */
+interface ViewRef {
+  url: string | null
+  at?: number
+  by?: string | null
+  ref?: ViewFeatures
+  failed?: boolean
+  loading?: boolean
+  moveUntil?: number
+  moveBy?: string | null
+}
+interface ViewTrack {
+  state: ViewCheck['state']
+  since?: number
+  bad: number
+  good: number
+  firstBad?: number
+  problem?: ViewProblem
+  last?: ViewMatch
+  before?: string
+  beforeAt?: number
+  url?: string | null
+}
 
 export class Engine {
   mode: 'live' | 'recording' = 'live'
   model: 'unknown' | 'ready' | 'down' = 'unknown'
   complianceEnabled = false
+  inferenceEnabled = true
   evaluableClasses: Code[] = []
   modelMessage?: string
   modelSince?: number
   frames = 0
+  evaluationRevision = 0
   conf = 60
   windowMs = 30_000
   stageName?: string
@@ -65,10 +100,160 @@ export class Engine {
   private statusTimer = 0
   private emitPending = 0
   private cameras: CameraItem[] = []
+  private loops = new Map<string, LoopDetector>()
+  /** small copies of past frames: the evidence of what a looped camera repeats */
+  private thumb = document.createElement('canvas')
+  private viewRefs = new Map<string, ViewRef>()
+  private viewTracks = new Map<string, ViewTrack>()
+  private vBig = document.createElement('canvas')
+  private vSmall = document.createElement('canvas')
+  viewOk = 0.6
+  viewBad = 0.45
 
   constructor() {
-    this.tiny.width = 96
-    this.tiny.height = 54
+    this.tiny.width = LOOP_W
+    this.tiny.height = LOOP_H
+    this.thumb.width = 320
+    this.thumb.height = 180
+    this.vBig.width = SHARP_W
+    this.vBig.height = SHARP_H
+    this.vSmall.width = VIEW_W
+    this.vSmall.height = VIEW_H
+  }
+
+  /** A camera frame against the last half hour of the same camera: does it replay a recording? */
+  private watchLoop(rt: Rt, el: CanvasImageSource, px: Uint8ClampedArray, at: number) {
+    const wasBlocked = !!rt.view.loop?.looped
+    let det = this.loops.get(rt.view.id)
+    if (!det) this.loops.set(rt.view.id, (det = new LoopDetector()))
+    const t = this.thumb.getContext('2d')!
+    t.drawImage(el, 0, 0, 320, 180)
+    const s = det.push(at, loopGray(px), this.thumb.toDataURL('image/jpeg', 0.6))
+    rt.view.loop = s.looped ? { looped: true, period: s.period, since: s.since, thenAt: s.then?.at, thenSnap: s.then?.snap, closeness: s.closeness } : undefined
+    if (wasBlocked !== !!rt.view.loop?.looped) this.resetEvaluationWindow()
+  }
+
+  /* camera views: the approved reference of each camera and agreed moves, as the server has them */
+  setViews(states: CameraViewState[]) {
+    const seen = new Set<string>()
+    for (const st of states) {
+      seen.add(st.camera_id)
+      const old = this.viewRefs.get(st.camera_id)
+      const url = st.reference?.url ?? null
+      const move = st.move?.status === 'approved' ? st.move : null
+      const next: ViewRef = {
+        url,
+        at: st.reference?.at ? new Date(st.reference.at).getTime() : undefined,
+        by: st.reference?.by,
+        ref: old && old.url === url ? old.ref : undefined,
+        failed: old && old.url === url ? old.failed : false,
+        loading: old && old.url === url ? old.loading : false,
+        moveUntil: move ? new Date(move.until).getTime() : undefined,
+        moveBy: move ? move.approved_by || move.by : undefined,
+      }
+      this.viewRefs.set(st.camera_id, next)
+      // Polling retries a failed reference fetch; concurrent polls share the pending load.
+      if (url && !next.ref && !next.loading) this.loadRef(st.camera_id, url)
+      if (old?.url !== url) this.viewTracks.delete(st.camera_id)
+      if (st.match_ok) this.viewOk = st.match_ok
+      if (st.match_bad) this.viewBad = st.match_bad
+    }
+    for (const id of [...this.viewRefs.keys()]) if (!seen.has(id)) this.viewRefs.delete(id)
+    for (const rt of this.rts.values()) this.showView(rt)
+    this.emit()
+  }
+  private async loadRef(id: string, url: string) {
+    const initial = this.viewRefs.get(id)
+    if (initial?.url === url) { initial.loading = true; initial.failed = false }
+    let bmp: ImageBitmap | undefined
+    try {
+      bmp = await api.viewImage(url)
+      const r = this.viewRefs.get(id)
+      if (!r || r.url !== url) return
+      r.ref = this.featuresOf(bmp, bmp.width, bmp.height)
+    } catch {
+      const r = this.viewRefs.get(id)
+      if (r && r.url === url) r.failed = true
+    } finally {
+      bmp?.close()
+      const r = this.viewRefs.get(id)
+      if (r && r.url === url) r.loading = false
+    }
+    const rt = this.rts.get(id)
+    if (rt) this.showView(rt)
+    this.emit()
+  }
+  private featuresOf(el: CanvasImageSource, w: number, h: number) {
+    const big = this.vBig.getContext('2d', { willReadFrequently: true })!
+    big.imageSmoothingQuality = 'high'
+    big.drawImage(el, 0, 0, w, h, 0, 0, SHARP_W, SHARP_H)
+    const small = this.vSmall.getContext('2d', { willReadFrequently: true })!
+    small.imageSmoothingQuality = 'high'
+    small.drawImage(this.vBig, 0, 0, VIEW_W, VIEW_H)
+    return viewFeatures(small.getImageData(0, 0, VIEW_W, VIEW_H).data, big.getImageData(0, 0, SHARP_W, SHARP_H).data)
+  }
+  /** One frame of a camera against its approved view. */
+  private judgeFrame(rt: Rt, el: CanvasImageSource, w: number, h: number, snapshot: string, at: number) {
+    const id = rt.view.id
+    const r = this.viewRefs.get(id)
+    let tr = this.viewTracks.get(id)
+    if (!tr || tr.url !== r?.url) this.viewTracks.set(id, (tr = { state: 'none', bad: 0, good: 0, url: r?.url }))
+    if (!r?.url || !r.ref || (r.moveUntil != null && r.moveUntil > Date.now())) return
+    const cur = this.featuresOf(el, w, h)
+    const m = compareViews(r.ref, cur)
+    const j = judgeView(r.ref, cur, m, this.viewOk, this.viewBad)
+    tr.last = m
+    if (j.verdict === 'ok') {
+      tr.good++
+      tr.bad = 0
+      tr.firstBad = undefined
+      tr.before = snapshot
+      tr.beforeAt = at
+      if (tr.state !== 'ok' && (tr.state !== 'changed' || tr.good >= VIEW_GOOD_FRAMES)) {
+        tr.state = 'ok'
+        tr.since = at
+      }
+    } else if (j.verdict === 'bad') {
+      tr.bad++
+      tr.good = 0
+      tr.firstBad ??= at
+      tr.problem = j.problem
+      if (tr.state !== 'changed' && tr.bad >= VIEW_BAD_FRAMES) {
+        tr.state = 'changed'
+        tr.since = tr.firstBad
+      }
+    } else if (tr.state === 'none') tr.state = 'pending'
+  }
+  private showView(rt: Rt) {
+    if (rt.view.kind !== 'camera') return
+    const wasBlocked = viewBlocked(rt.view)
+    const previousReference = rt.view.view?.refUrl
+    const r = this.viewRefs.get(rt.view.id)
+    const tr = this.viewTracks.get(rt.view.id)
+    if (!r) {
+      rt.view.view = undefined
+      if (wasBlocked || previousReference) this.resetEvaluationWindow()
+      return
+    }
+    const moving = r.moveUntil != null && r.moveUntil > Date.now()
+    const state: ViewCheck['state'] = !r.url ? 'none' : moving ? 'move' : !r.ref || !tr || tr.state === 'none' ? 'pending' : tr.state
+    const shifted = tr?.last && tr.last.best >= 0.7 ? tr.last : undefined
+    rt.view.view = {
+      state,
+      refUrl: r.url ?? undefined,
+      refAt: r.at,
+      refBy: r.by,
+      problem: state === 'changed' ? tr?.problem : undefined,
+      match: !moving ? tr?.last?.match : undefined,
+      dx: shifted?.dx,
+      dy: shifted?.dy,
+      since: state === 'ok' || state === 'changed' ? tr?.since : undefined,
+      before: tr?.before,
+      beforeAt: tr?.beforeAt,
+      moveUntil: moving ? r.moveUntil : undefined,
+      moveBy: moving ? r.moveBy : undefined,
+    }
+    if (wasBlocked !== viewBlocked(rt.view) || previousReference !== rt.view.view.refUrl) this.resetEvaluationWindow()
   }
 
   /* lifecycle (idempotent, StrictMode-safe) */
@@ -87,6 +272,7 @@ export class Engine {
     }
   }
   stop() {
+    this.generation++
     clearInterval(this.timer)
     clearInterval(this.statusTimer)
     this.timer = 0
@@ -100,12 +286,17 @@ export class Engine {
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.cameras = []
+    this.loops.clear()
+    this.viewRefs.clear()
+    this.viewTracks.clear()
     this.clearSession()
     this.emit()
   }
   dispose() {
     this.stop()
     this.reset()
+    clearTimeout(this.emitPending)
+    this.emitPending = 0
     this.pool?.remove()
     this.pool = null
   }
@@ -154,16 +345,10 @@ export class Engine {
   }
   private addCamera(c: CameraItem, n: number) {
     const url = (c.stream_url || '').trim()
-    const protocol: SourceView['protocol'] = /^https?:\/\//i.test(url) ? 'http' : /^rtsp:\/\//i.test(url) ? 'rtsp' : 'other'
+    const protocol: SourceView['protocol'] = 'http'
     const view: SourceView = { id: c.id, n, name: c.name, kind: 'camera', url, protocol, status: 'connecting', since: Date.now(), dets: [] }
     const rt: Rt = { view, el: null, inFlight: false, lastCapture: 0, lastAnalyzed: 0, fails: 0, same: 0, hash: 0, retryAt: 0 }
-    if (protocol === 'rtsp') {
-      view.status = 'unsupported'
-      view.message = 'RTSP не воспроизводится в браузере. Нужен шлюз в MJPEG/HLS или серверный сбор кадров.'
-    } else if (protocol === 'other') {
-      view.status = 'unsupported'
-      view.message = url ? 'Неизвестный тип адреса потока.' : 'У камеры не указан адрес потока.'
-    } else {
+    {
       // frames are fetched one at a time through the server; the stream is never held open
       const img = new Image()
       img.decoding = 'async'
@@ -174,6 +359,7 @@ export class Engine {
       this.pool?.appendChild(img)
     }
     this.rts.set(c.id, rt)
+    this.showView(rt)
   }
   private removeSource(id: string) {
     const rt = this.rts.get(id)
@@ -181,6 +367,7 @@ export class Engine {
     if (rt.el instanceof HTMLImageElement) rt.el.removeAttribute('src')
     rt.el?.remove()
     this.rts.delete(id)
+    this.loops.delete(id)
   }
   private setStatus(rt: Rt, status: SourceView['status'], message?: string) {
     if (rt.view.status !== status) rt.view.since = Date.now()
@@ -200,28 +387,33 @@ export class Engine {
 
   /* recording mode: the observation clock follows the video */
   startRecording(file: File, start: number) {
+    this.startRecordingUrl(URL.createObjectURL(file), file.name, start)
+  }
+  /** Stream a saved recording directly; its original clock drives the existing analysis. */
+  startRecordingUrl(url: string, name: string, start: number, options?: { credentials?: boolean; onPlaybackError?: () => void; onPlaybackReady?: () => void }) {
     this.safetySession = Math.random().toString(36).slice(2)
     this.generation++
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.clearSession()
-    const url = URL.createObjectURL(file)
     const el = document.createElement('video')
+    el.crossOrigin = options?.credentials ? 'use-credentials' : 'anonymous'
     el.src = url
     el.muted = true
     el.playsInline = true
     el.preload = 'auto'
     el.className = 'f-media'
-    this.rec = { name: file.name, start, url, el, duration: 0, ended: false }
+    this.rec = { name, start, url, el, duration: 0, ended: false }
     this.mode = 'recording'
-    const view: SourceView = { id: 'recording', n: 1, name: file.name, kind: 'video', protocol: 'file', status: 'connecting', since: Date.now(), dets: [] }
+    const view: SourceView = { id: 'recording', n: 1, name, url, kind: 'video', protocol: 'file', status: 'connecting', since: Date.now(), dets: [] }
     const rt: Rt = { view, el, inFlight: false, lastCapture: 0, lastAnalyzed: 0, fails: 0, same: 0, hash: 0, retryAt: 0 }
     el.onloadeddata = () => {
+      options?.onPlaybackReady?.()
       if (this.rec) this.rec.duration = el.duration * 1000
       this.setStatus(rt, 'live')
       el.play().catch(() => this.emit())
     }
-    el.onerror = () => this.setStatus(rt, 'offline', 'Браузер не может воспроизвести этот файл.')
+    el.onerror = () => { this.setStatus(rt, 'offline', 'Запись временно недоступна для воспроизведения.'); options?.onPlaybackError?.() }
     el.onended = () => {
       if (this.rec) this.rec.ended = true
       this.emit()
@@ -235,12 +427,19 @@ export class Engine {
     this.pool?.appendChild(el)
     this.emit()
   }
+  refreshRecordingSession() {
+    const element = this.rec?.el
+    if (!element) return
+    const position = element.currentTime; const paused = element.paused
+    element.addEventListener('loadedmetadata', () => { element.currentTime = position; if (!paused) void element.play().catch(() => this.emit()) }, { once: true })
+    element.load()
+  }
   stopRecording(resume = true) {
     if (!this.rec) return
     this.rec.el.pause()
     this.rec.el.removeAttribute('src')
     this.rec.el.load()
-    URL.revokeObjectURL(this.rec.url)
+    if (this.rec.url.startsWith('blob:')) URL.revokeObjectURL(this.rec.url)
     this.removeSource('recording')
     this.rec = null
     this.mode = 'live'
@@ -276,6 +475,15 @@ export class Engine {
     this.frames = 0
   }
 
+  /** New PPR rules must never borrow coverage or sightings from before their activation. */
+  resetEvaluationWindow() {
+    this.generation++
+    this.evaluationRevision++
+    this.clearSession()
+    // Publish the cleared observation before React receives the new rule profile.
+    for (const listener of this.listeners) listener()
+  }
+
   /* loop */
   private tick() {
     const wall = Date.now()
@@ -302,15 +510,21 @@ export class Engine {
 
   /** Camera: take one frame from the stream through the server proxy, show it, analyse it. */
   private async pullFrame(rt: Rt) {
+    const generation = this.generation
     rt.inFlight = true
     rt.lastCapture = Date.now()
     try {
-      const frame = await api.grabFrame(rt.view.url!)
+      const frame = await api.grabFrame(rt.view.id)
       rt.inFlight = false
-      this.capture(rt, frame)
-      frame.removeAttribute('src') // closes the stream connection
+      try {
+        if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+        this.capture(rt, frame)
+      } finally {
+        frame.removeAttribute('src') // closes the stream connection, including a discarded frame
+      }
     } catch (e) {
       rt.inFlight = false
+      if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
       rt.fails++
       if (rt.fails >= OFFLINE_AFTER_FAILS || rt.view.status !== 'live') {
         this.setStatus(rt, 'offline', e instanceof Error ? e.message : 'Камера не отдала кадр.')
@@ -351,8 +565,8 @@ export class Engine {
     // a frozen stream keeps returning the same picture; that is not a live camera
     // fine enough that an on-screen camera clock changes it; a truly frozen stream does not
     const tctx = this.tiny.getContext('2d', { willReadFrequently: true })!
-    tctx.drawImage(el, 0, 0, 96, 54)
-    const px = tctx.getImageData(0, 0, 96, 54).data
+    tctx.drawImage(el, 0, 0, LOOP_W, LOOP_H)
+    const px = tctx.getImageData(0, 0, LOOP_W, LOOP_H).data
     let hash = 0
     for (let i = 0; i < px.length; i += 4) hash = (Math.imul(hash, 31) + px[i] + px[i + 1] * 3 + px[i + 2] * 7) >>> 0
     const playing = !isVideo || !el.paused
@@ -371,17 +585,29 @@ export class Engine {
     rt.fails = 0
     // the visible picture is the analysed frame itself
     if (source && rt.el instanceof HTMLImageElement) rt.el.src = snapshot
+    if (!isVideo) {
+      this.watchLoop(rt, el, px, at)
+      this.judgeFrame(rt, el, w0, h0, snapshot, at)
+      this.showView(rt)
+    }
+    // a camera that replays a recording, looks away or is being moved says nothing about the site
+    if (!this.inferenceEnabled || rt.view.loop?.looped || viewBlocked(rt.view)) {
+      rt.view.dets = []
+      rt.lastAnalyzed = Date.now()
+      this.emit()
+      return
+    }
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {
-        if (!blob || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
+        if (!blob || !this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
           rt.inFlight = false
           return
         }
         api
           .detectFrame(blob, this.stageName, safety)
           .then((res) => {
-            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             if (!res.model_ready) {
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
@@ -403,7 +629,7 @@ export class Engine {
             this.addCoverage(at)
           })
           .catch((e: unknown) => {
-            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             const msg = e instanceof Error ? e.message : 'сервис не ответил'
             rt.view.dets = []
             this.setModel('down', msg)
@@ -443,12 +669,15 @@ export class Engine {
   }
 
   private async pollStatus() {
+    const generation = this.generation
     try {
       const s = await api.detectorStatus()
+      if (generation !== this.generation) return
       this.setCompliance(s)
       if (!s.ready) this.setModel('down', s.message || 'модель не загружена')
       else if (this.model !== 'ready') this.setModel('ready')
     } catch (e) {
+      if (generation !== this.generation) return
       this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил')
     }
   }
@@ -503,14 +732,15 @@ export class Engine {
   }
 
   liveSnapshots() {
-    return [...this.rts.values()].filter((r) => r.view.status === 'live' && r.view.snapshot).map((r) => ({ name: r.view.name, snapshot: r.view.snapshot!, id: r.view.id }))
+    return [...this.rts.values()].filter((r) => r.view.status === 'live' && !r.view.loop?.looped && !viewBlocked(r.view) && r.view.snapshot).map((r) => ({ name: r.view.name, snapshot: r.view.snapshot!, id: r.view.id }))
   }
 
   snapshot(): Observation {
     const rec = this.rec
     const sources = [...this.rts.values()].map((r) => ({ ...r.view, dets: [...r.view.dets] })).sort((a, b) => a.n - b.n)
-    const dets = this.dets
-    const cov = this.cov.map((x) => [...x] as [number, number])
+    const healthy = new Set(sources.filter(source => source.status === 'live' && !source.loop?.looped && !viewBlocked(source)).map(source => source.id))
+    const dets = new Map([...this.dets].map(([code, sightings]) => [code, sightings.filter(sighting => healthy.has(sighting.src))]))
+    const cov = healthy.size ? this.cov.map((x) => [...x] as [number, number]) : []
     const lastIdx = (arr: Sight[], t: number) => this.lastIndexAtOrBefore(arr, t)
     const windowMs = this.windowMs
     const gap = this.coverGap()
@@ -524,6 +754,7 @@ export class Engine {
       modelMessage: this.modelMessage,
       modelSince: this.modelSince,
       frames: this.frames,
+      evaluationRevision: this.evaluationRevision,
       recording: rec ? { name: rec.name, start: rec.start, duration: rec.duration, paused: rec.el.paused, ended: rec.ended } : undefined,
       seenWithin: (code, t, win) => {
         const arr = dets.get(code)

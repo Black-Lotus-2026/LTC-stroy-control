@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession
+from app.models.enums import ScheduleTaskStatus
 from app.models.schedule import ScheduleTask
 from app.schemas.stroy_control import (
     CascadeShiftRequest,
@@ -21,6 +22,7 @@ from app.schemas.stroy_control import (
     StageUpdateRequest,
 )
 from app.services.detector import MACHINERY_CLASSES
+from app.services.legacy_access import require_full_project_read
 from app.services.management.context import require_project
 from app.services.schedule_engine import ScheduleEngine
 from app.services.stage_matcher import StageMachineryService
@@ -43,7 +45,9 @@ def _project_scope(db, project_id, user, *, write=False):
     parsed = _parse_uuid(project_id)
     if parsed is None:
         raise HTTPException(422, "Выберите объект строительства")
-    require_project(db, parsed, user, write=write)
+    require_project(
+        db, parsed, user, write=True, lock=True
+    ) if write else require_full_project_read(db, parsed, user)
     return parsed
 
 
@@ -53,7 +57,11 @@ def get_stages(
 ) -> list[StageItem]:
     """Получить список этапов СМР для отображения на диаграмме Ганта."""
     parsed_id = _project_scope(db, project_id, user)
-    query = select(ScheduleTask).order_by(ScheduleTask.order_index)
+    query = (
+        select(ScheduleTask)
+        .where(ScheduleTask.status != ScheduleTaskStatus.CANCELLED)
+        .order_by(ScheduleTask.order_index)
+    )
     if parsed_id:
         query = query.where(ScheduleTask.project_id == parsed_id)
 
@@ -81,15 +89,24 @@ def clear_stages(
     db: DbSession, user: CurrentUser, project_id: str | None = None
 ) -> dict[str, Any]:
     """Очистить календарный план (все этапы или конкретного объекта)."""
-    from sqlalchemy import delete
-
     parsed_id = _project_scope(db, project_id, user, write=True)
-    stmt = delete(ScheduleTask)
-    if parsed_id:
-        stmt = stmt.where(ScheduleTask.project_id == parsed_id)
-    res = db.execute(stmt)
+    rows = list(
+        db.scalars(
+            select(ScheduleTask).where(
+                ScheduleTask.project_id == parsed_id,
+                ScheduleTask.status != ScheduleTaskStatus.CANCELLED,
+            )
+        )
+    )
+    for stage in rows:
+        stage.status = ScheduleTaskStatus.CANCELLED
+    _audit_schedule(db, parsed_id, user, "schedule.archived", len(rows))
     db.commit()
-    return {"message": "Календарный план успешно очищен", "deleted_count": res.rowcount}
+    return {
+        "message": "Календарный план архивирован; исторические этапы сохранены",
+        "deleted_count": 0,
+        "archived_count": len(rows),
+    }
 
 
 @router.post("/load-demo", response_model=ScheduleImportResponse)
@@ -99,7 +116,9 @@ def load_demo(
     """Загрузить эталонный демо-файл календарного плана 'Многоквартирный жилой дом'."""
     parsed_id = _project_scope(db, project_id, user, write=True)
     engine = ScheduleEngine(db)
-    stages = engine.load_demo_schedule(parsed_id)
+    stages = engine.load_demo_schedule(parsed_id, commit=False)
+    _audit_schedule(db, parsed_id, user, "schedule.imported", len(stages))
+    db.commit()
     items = [
         StageItem(
             id=s.id,
@@ -145,7 +164,11 @@ async def upload_schedule(
     parsed_id = _project_scope(db, project_id, user, write=True)
     engine = ScheduleEngine(db)
     try:
-        stages = engine.import_schedule_bytes(content, file.filename, parsed_id)
+        stages = engine.import_schedule_bytes(
+            content, file.filename, parsed_id, commit=False
+        )
+        _audit_schedule(db, parsed_id, user, "schedule.imported", len(stages))
+        db.commit()
     except Exception as e:
         raise HTTPException(
             status_code=422, detail=f"Ошибка разбора файла графика: {e}"
@@ -193,6 +216,7 @@ def update_stage(
     if payload.duration_days is not None:
         stage.duration_days = payload.duration_days
 
+    _audit_schedule(db, stage.project_id, user, "schedule.changed", stage.id)
     db.commit()
     db.refresh(stage)
 
@@ -222,7 +246,15 @@ def cascade_shift(
     _owned_stage(str(payload.delayed_stage_id), db, user, write=True)
     engine = ScheduleEngine(db)
     try:
-        return engine.cascade_shift(payload.delayed_stage_id, payload.delay_days)
+        result = engine.cascade_shift(
+            payload.delayed_stage_id, payload.delay_days, commit=False
+        )
+        stage = _owned_stage(str(payload.delayed_stage_id), db, user, write=True)
+        _audit_schedule(
+            db, stage.project_id, user, "schedule.shifted", payload.delay_days
+        )
+        db.commit()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -236,12 +268,15 @@ def _owned_stage(stage_id, db, user, *, write=False):
     stage = _find_stage(stage_id, db)
     if stage is None:
         raise HTTPException(404, "Этап не найден")
-    require_project(db, stage.project_id, user, write=write)
+    require_project(
+        db, stage.project_id, user, write=True
+    ) if write else require_full_project_read(db, stage.project_id, user)
     return stage
 
 
 def _build_stage_probability_response(
     stage: ScheduleTask | None,
+    db=None,
 ) -> StageProbabilityResponse:
     matcher = StageMachineryService()
     stage_name = stage.name if stage else "Общестроительные работы"
@@ -306,11 +341,58 @@ def _build_stage_probability_response(
             )
         )
 
+    ppr_revision = ""
+    if db is not None and stage is not None:
+        from app.services.ppr_rules import resolve_ppr_rules
+        from app.services.rule_engine import to_russian_machinery_name
+
+        rules, ppr_revision = resolve_ppr_rules(db, stage.project_id, stage)
+        for code in rules:
+            label = to_russian_machinery_name(code)
+            if not any(item.machinery_name_ru == label for item in items):
+                items.append(
+                    MachineryProbabilityItem(
+                        machinery_code="MACHINERY_" + code.upper(),
+                        machinery_name_ru=label,
+                        probability=0.5,
+                        classification="NEUTRAL",
+                        requirement_level="Допустимая",
+                    )
+                )
+        for item in items:
+            rule = next(
+                (
+                    value
+                    for code, value in rules.items()
+                    if to_russian_machinery_name(code) == item.machinery_name_ru
+                ),
+                None,
+            )
+            if rule:
+                item.probability = rule["probability"]
+                item.basis = "ppr_conflict" if rule["conflict"] else "ppr"
+                item.ppr_requirements = rule["citations"]
+                item.classification = (
+                    "NEUTRAL"
+                    if rule["conflict"]
+                    else ("MANDATORY" if rule["probability"] == 1 else "UNCHARACTERISTIC")
+                )
+                item.requirement_level = (
+                    "Конфликт ППР · требуется проверка"
+                    if rule["conflict"]
+                    else (
+                        "Обязательная по ППР"
+                        if rule["probability"] == 1
+                        else "Запрещена по ППР"
+                    )
+                )
+
     # Sort items by probability descending
     items.sort(key=lambda x: x.probability, reverse=True)
     top_machinery = [it.machinery_name_ru for it in items if it.probability >= 0.6]
 
     return StageProbabilityResponse(
+        ppr_revision=ppr_revision,
         stage_id=stage.id if stage else uuid.uuid4(),
         stage_name=stage.name if stage else stage_name,
         matched_catalog_stage=stage.matched_catalog_name
@@ -331,7 +413,7 @@ def get_stage_probabilities(
 ) -> StageProbabilityResponse:
     """Получить распределение вероятностей техники для детального экрана этапа."""
     stage = _owned_stage(stage_id, db, user)
-    return _build_stage_probability_response(stage)
+    return _build_stage_probability_response(stage, db)
 
 
 @router.put("/stages/{stage_id}/probabilities", response_model=StageProbabilityResponse)
@@ -347,9 +429,10 @@ def update_stage_probabilities(
     current_overrides = dict(stage.machinery_probabilities or {})
     current_overrides.update(payload.overrides)
     stage.machinery_probabilities = current_overrides
+    _audit_schedule(db, stage.project_id, user, "schedule.changed", stage.id)
     db.commit()
     db.refresh(stage)
-    return _build_stage_probability_response(stage)
+    return _build_stage_probability_response(stage, db)
 
 
 @router.delete(
@@ -364,6 +447,15 @@ def reset_stage_probabilities(
     stage = _owned_stage(stage_id, db, user, write=True)
 
     stage.machinery_probabilities = {}
+    _audit_schedule(db, stage.project_id, user, "schedule.changed", stage.id)
     db.commit()
     db.refresh(stage)
-    return _build_stage_probability_response(stage)
+    return _build_stage_probability_response(stage, db)
+
+
+def _audit_schedule(db, project_id, user, event_type, detail):
+    from app.services.access_policy import resolve_context
+    from app.services.incident_workflow import audit
+
+    ctx = resolve_context(db, project_id, user, "project.manage", write=True, lock=True)
+    return audit(db, ctx, event_type, project_id, str(detail))

@@ -367,6 +367,7 @@ def test_partial_provider_concurrent_cache_single_model(tmp_path, monkeypatch):
 
     bundle, initialized, _ = make_bundle(tmp_path)
     from app.services import trained_detector
+
     sole = SimpleNamespace(is_ready=True)
     calls = []
     monkeypatch.setattr(provider.settings, "detector_profile", "construction_partial")
@@ -379,10 +380,18 @@ def test_partial_provider_concurrent_cache_single_model(tmp_path, monkeypatch):
         ("construction_approved_classes", []),
     ]:
         monkeypatch.setattr(provider.settings, key, value)
-    monkeypatch.setattr(trained_detector, 'TrainedConstructionDetector',
-                        lambda *args, **kwargs: calls.append(True) or sole)
-    monkeypatch.setattr(provider, 'ConstructionPartialDetector',
-                        lambda *args, **kwargs: pytest.fail('Historical partial profile must not select a model'))
+    monkeypatch.setattr(
+        trained_detector,
+        "TrainedConstructionDetector",
+        lambda *args, **kwargs: calls.append(True) or sole,
+    )
+    monkeypatch.setattr(
+        provider,
+        "ConstructionPartialDetector",
+        lambda *args, **kwargs: pytest.fail(
+            "Historical partial profile must not select a model"
+        ),
+    )
     provider._cached_detector.cache_clear()
     try:
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -446,7 +455,12 @@ def test_partial_worker_and_recheck_support_real_fine_head_after_explicit_review
     image = BytesIO()
     Image.new("RGB", (64, 64)).save(image, format="PNG")
     frame = image.getvalue()
-    monkeypatch.setattr(cv_tasks, "get_detector", lambda: detector)
+    monkeypatch.setattr(
+        cv_tasks,
+        "get_detector",
+        lambda: pytest.fail("untrusted legacy frame inference"),
+        raising=False,
+    )
     stage = SimpleNamespace(
         project_id="project",
         machinery_probabilities={"crawler_crane": 1.0, "backhoe_loader": 1.0},
@@ -456,9 +470,10 @@ def test_partial_worker_and_recheck_support_real_fine_head_after_explicit_review
         get=lambda model, identity: stage if identity == "stage" else object(),
         commit=lambda: commits.append(True),
     )
-    assert cv_tasks.process_video_frame_sync(
-        frame, "stage", "project", db=db
-    ) == [] and commits == [True]
+    assert (
+        cv_tasks.process_video_frame_sync(frame, "stage", "project", db=db) == []
+        and commits == []
+    )
     monkeypatch.setattr(alert_service, "_detector", lambda: detector)
     monkeypatch.setattr(alert_service, "_capture_frame", lambda camera: frame)
     monkeypatch.setattr(alert_service.time, "sleep", lambda seconds: None)
@@ -467,8 +482,15 @@ def test_partial_worker_and_recheck_support_real_fine_head_after_explicit_review
         discrepancy_type="MISSING_MANDATORY",
         machinery_type="Гусеничный кран",
     )
+    camera = SimpleNamespace(
+        id=uuid.uuid4(),
+        view_move_status=None,
+        view_move_until=None,
+        view_reference_key=None,
+    )
     db = SimpleNamespace(
-        scalars=lambda query: SimpleNamespace(all=lambda: [SimpleNamespace(id="camera")])
+        scalars=lambda query: SimpleNamespace(all=lambda: [camera]),
+        scalar=lambda query: None,
     )
     assert alert_service.verify_incident(db, incident).outcome == "passed"
     incident.machinery_type = "backhoe_loader"

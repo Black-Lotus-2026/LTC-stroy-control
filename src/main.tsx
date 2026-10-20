@@ -28,7 +28,10 @@ if (legacy) {
       </React.StrictMode>,
     )
     const back = document.createElement('a')
-    back.href = '#'
+    const newInterface = new URL(location.href)
+    newInterface.searchParams.delete('legacy')
+    newInterface.hash = ''
+    back.href = newInterface.href
     back.textContent = 'Новый интерфейс →'
     Object.assign(back.style, { position: 'fixed', right: '16px', bottom: '16px', zIndex: '2000', padding: '8px 14px', borderRadius: '18px', background: '#f2efe9', color: '#121315', font: '500 13px/1.2 system-ui, sans-serif', textDecoration: 'none', boxShadow: '0 10px 30px -10px rgba(0,0,0,.6)' })
     document.body.appendChild(back)

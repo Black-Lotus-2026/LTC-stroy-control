@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
@@ -24,7 +25,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Аутентификация и пользователи"])
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
+)
 def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
     """Регистрация нового пользователя по логину и паролю.
 
@@ -43,9 +46,8 @@ def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
             detail=f"Пользователь с логином «{clean_username}» уже существует",
         )
 
-    # Проверяем, есть ли уже пользователи: если это первый пользователь, делаем его администратором
-    user_count = db.scalar(select(func.count(User.id))) or 0
-    role = UserRole.ADMIN if user_count == 0 else UserRole.MANAGER
+    # Registration does not grant project or organization authority.
+    role = UserRole.VIEWER
 
     new_user = User(
         username=clean_username,
@@ -58,10 +60,20 @@ def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
     db.commit()
     db.refresh(new_user)
 
-    logger.info("Зарегистрирован новый пользователь: %s (роль: %s)", new_user.username, new_user.role)
+    logger.info(
+        "Зарегистрирован новый пользователь: %s (роль: %s)",
+        new_user.username,
+        new_user.role,
+    )
 
     # Генерируем JWT токен
-    token = create_access_token(data={"sub": new_user.username, "uid": str(new_user.id), "role": str(new_user.role.value)})
+    token = create_access_token(
+        data={
+            "sub": new_user.username,
+            "uid": str(new_user.id),
+            "role": str(new_user.role.value),
+        }
+    )
 
     return TokenResponse(
         access_token=token,
@@ -70,7 +82,9 @@ def register_user(data: UserRegisterRequest, db: DbSession) -> TokenResponse:
             id=new_user.id,
             username=new_user.username,
             name=new_user.name,
-            role=str(new_user.role.value) if hasattr(new_user.role, "value") else str(new_user.role),
+            role=str(new_user.role.value)
+            if hasattr(new_user.role, "value")
+            else str(new_user.role),
             email=new_user.email,
             created_at=new_user.created_at,
         ),
@@ -99,7 +113,9 @@ def login_user(data: UserLoginRequest, db: DbSession) -> TokenResponse:
             detail="Учетная запись отключена",
         )
 
-    token = create_access_token(data={"sub": user.username, "uid": str(user.id), "role": str(user.role.value)})
+    token = create_access_token(
+        data={"sub": user.username, "uid": str(user.id), "role": str(user.role.value)}
+    )
 
     return TokenResponse(
         access_token=token,
@@ -122,16 +138,22 @@ def get_current_user_profile(current_user: CurrentUser) -> UserResponse:
         id=current_user.id,
         username=current_user.username or current_user.name,
         name=current_user.name,
-        role=str(current_user.role.value) if hasattr(current_user.role, "value") else str(current_user.role),
+        role=str(current_user.role.value)
+        if hasattr(current_user.role, "value")
+        else str(current_user.role),
         email=current_user.email,
         created_at=current_user.created_at,
     )
 
 
 @router.patch("/me/email", response_model=UserResponse)
-def update_email(data: UserEmailUpdate, current_user: CurrentUser, db: DbSession) -> UserResponse:
+def update_email(
+    data: UserEmailUpdate, current_user: CurrentUser, db: DbSession
+) -> UserResponse:
     if data.email:
-        duplicate = db.scalar(select(User).where(User.email == data.email, User.id != current_user.id))
+        duplicate = db.scalar(
+            select(User).where(User.email == data.email, User.id != current_user.id)
+        )
         if duplicate:
             raise HTTPException(status_code=409, detail="Этот email уже используется")
     current_user.email = data.email
@@ -141,8 +163,14 @@ def update_email(data: UserEmailUpdate, current_user: CurrentUser, db: DbSession
 
 
 @router.get("/admins", response_model=list[AdminRecipient])
-def list_admin_recipients(current_user: CurrentUser, db: DbSession) -> list[AdminRecipient]:
-    users = db.scalars(
-        select(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True)).order_by(User.name)
-    ).all()
-    return [AdminRecipient(id=user.id, username=user.username or user.name, name=user.name) for user in users]
+def list_admin_recipients(
+    current_user: CurrentUser, db: DbSession
+) -> list[AdminRecipient]:
+    """Legacy global directory was a cross-tenant disclosure path."""
+    raise HTTPException(
+        409,
+        detail={
+            "code": "WORKFLOW_UPGRADE_REQUIRED",
+            "message": "Выберите ответственного из назначений объекта",
+        },
+    )

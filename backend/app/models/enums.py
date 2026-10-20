@@ -124,6 +124,7 @@ class IncidentStatus(StrEnum):
     PENDING = "pending"  # требует проверки
     CONFIRMED = "confirmed"  # подтверждено человеком
     IN_PROGRESS = "in_progress"  # взято в работу
+    REMEDIATION_SUBMITTED = "remediation_submitted"
     RESOLVED = "resolved"  # устранено
     FALSE_POSITIVE = "false_positive"  # отклонено как ошибка распознавания
 

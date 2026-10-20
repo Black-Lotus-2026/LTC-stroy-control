@@ -1,5 +1,10 @@
 node_modules/
 dist/
+test-results/
+playwright-report/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 .git/
 .venv/
 venv/

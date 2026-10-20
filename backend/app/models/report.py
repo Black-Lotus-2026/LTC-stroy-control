@@ -99,6 +99,13 @@ class GeneratedReport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "generated_reports"
 
+    requester_assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey('project_assignments.id', ondelete='RESTRICT')
+    )
+    scope_authorization_version: Mapped[int | None] = mapped_column(Integer)
+    report_kind: Mapped[str | None] = mapped_column(String(16))
+    source_scope: Mapped[dict | None] = mapped_column(JSONB)
+
     project_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )

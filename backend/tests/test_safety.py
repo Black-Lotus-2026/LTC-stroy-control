@@ -1,6 +1,7 @@
 """Safety integration tests: real ASGI/multipart/db, synthetic local detector only."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 
 import pytest
@@ -20,6 +21,7 @@ from app.main import app
 from app.models import Camera, Project, User, UserRole
 from app.services.detector import DetectionResult
 from app.services.safety_catalog import seed_catalog
+from tests.customer_control_fixtures import contractor, customer
 
 
 @compiles(JSONB, "sqlite")
@@ -53,6 +55,10 @@ def env(monkeypatch):
         db.flush()
         camera = Camera(project_id=project.id, code="C", name="Camera")
         db.add(camera)
+        db.flush()
+        customer(db, project, owner)
+        responsible_grant = contractor(db, project, responsible)
+        ids_responsible_membership = responsible_grant.membership.id
         seed_catalog(db)
         db.commit()
         ids = dict(
@@ -61,8 +67,26 @@ def env(monkeypatch):
             responsible=responsible.id,
             project=project.id,
             camera=camera.id,
+            responsible_membership=ids_responsible_membership,
         )
     state["actor"] = "owner"
+    state["server_position"] = 0
+    state["server_raw"] = None
+    base = datetime.now(UTC) + timedelta(seconds=1)
+
+    class SyntheticServerClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = base + timedelta(milliseconds=state["server_position"])
+            return current if tz else current.replace(tzinfo=None)
+
+    monkeypatch.setattr("app.api.v1.safety.datetime", SyntheticServerClock)
+    monkeypatch.setattr(
+        "app.services.camera_view.capture_frame", lambda camera: state["server_raw"]
+    )
+    monkeypatch.setattr(
+        "app.services.observation_basis.camera_frame_quality", lambda *args: True
+    )
 
     def session():
         with Session(engine) as db:
@@ -99,6 +123,7 @@ def env(monkeypatch):
             ]
 
     monkeypatch.setattr(videos, "get_machinery_detector", lambda: Detector())
+    app.state.safety_test_state = state
     with TestClient(app) as client:
         yield client, ids, state, engine
     app.dependency_overrides.pop(get_db, None)
@@ -131,6 +156,10 @@ def create(client, ids, **overrides):
 def frame(client, ids, position, color=1, source="source", **extra):
     stream = BytesIO()
     Image.new("RGB", (40, 30), (color, 30, 70)).save(stream, format="PNG")
+    # Only the mocked server capture/clock selects authoritative pixels and time.
+    state = client.app.state.safety_test_state
+    state["server_raw"] = stream.getvalue()
+    state["server_position"] = position
     return client.post(
         f"/api/v1/safety/projects/{ids['project']}/analyze-frame",
         data=dict(
@@ -167,7 +196,7 @@ def test_candidate_evidence_review_snapshot_and_audit(env):
             f"/api/v1/safety/events/{event['id']}/review",
             json={"decision": "confirmed", "comment": "Проверено по схеме площадки"},
         ).status_code
-        == 200
+        == 409
     )
     assert (
         client.post(
@@ -184,7 +213,9 @@ def test_candidate_evidence_review_snapshot_and_audit(env):
     )
     saved = event_list(client, ids)[0]
     assert saved["snapshot"]["zone"]["name"] == "Опасная зона"
-    assert saved["reviewed_by"] == str(ids["owner"])
+    assert (
+        saved["reviewed_by"] is None
+    )  # Review belongs to the linked canonical Incident.
 
 
 @pytest.mark.parametrize(
@@ -242,7 +273,11 @@ def test_non_continuous_evidence_never_creates_candidate(env, mode):
         state["label"] = None
     response = frame(client, ids, position, color, source)
     assert response.status_code == 200, response.text
-    assert event_list(client, ids) == []
+    if mode == "other_source":
+        # A caller cannot split a real camera timeline by inventing a source ID.
+        assert len(event_list(client, ids)) == 1
+    else:
+        assert event_list(client, ids) == []
 
 
 def test_clear_then_reentry_creates_second_candidate(env):
@@ -268,7 +303,7 @@ def test_allowed_vehicle_worker_hook_no_unsafe_alias(env):
     assert event_list(client, ids) == []
 
 
-def test_project_rbac_and_assigned_inspector_review(env):
+def test_project_rbac_and_assigned_inspector_cannot_review(env):
     client, ids, state, _ = env
     zone = create(client, ids)
     frame(client, ids, 0)
@@ -276,27 +311,23 @@ def test_project_rbac_and_assigned_inspector_review(env):
     event = event_list(client, ids)[0]
     state["actor"] = "other"
     assert (
-        client.get(f"/api/v1/safety/projects/{ids['project']}/events").status_code == 403
+        client.get(f"/api/v1/safety/projects/{ids['project']}/events").status_code == 404
     )
-    assert client.get(event["evidence_url"]).status_code == 403
-    assert (
-        client.post(
-            f"/api/v1/safety/events/{event['id']}/review",
-            json={"decision": "confirmed", "comment": "Проверено"},
-        ).status_code
-        == 403
-    )
+    assert client.get(event["evidence_url"]).status_code == 404
     state["actor"] = "responsible"
     assert (
-        client.get(f"/api/v1/safety/projects/{ids['project']}/events").status_code == 200
+        client.get(f"/api/v1/safety/projects/{ids['project']}/events").status_code == 403
     )
     assert client.delete(f"/api/v1/safety/zones/{zone['id']}").status_code == 403
     assert (
         client.post(
             f"/api/v1/safety/events/{event['id']}/review",
-            json={"decision": "rejected", "comment": "Рабочий допущен по наряду"},
+            json={
+                "decision": "rejected",
+                "comment": "Не могу принять собственное событие",
+            },
         ).status_code
-        == 200
+        == 403
     )
 
 
@@ -340,6 +371,7 @@ def test_model_failure_invalid_image_and_client_boxes(env):
     state["error"] = True
     assert frame(client, ids, 0).status_code == 502
     state["error"] = False
+    state["server_raw"] = b"broken server source"
     assert (
         client.post(
             f"/api/v1/safety/projects/{ids['project']}/analyze-frame",
@@ -406,57 +438,40 @@ def test_authentication_is_required(env):
         app.dependency_overrides[get_current_user] = override
 
 
-def test_historical_responsible_retains_evidence_and_can_review(env):
-    client, ids, state, _ = env
+def test_historical_responsible_and_revoked_membership_never_grant_access(env):
+    from app.models.customer_control import OrganizationMembership
+
+    client, ids, state, engine = env
     zone = create(client, ids)
     frame(client, ids, 0)
     frame(client, ids, 4000, 2)
     event = event_list(client, ids)[0]
-    assert event["can_review"] is True
-    updated = zone_payload(ids, responsible_user_id=str(ids["owner"]))
+    assert event["can_review"] is False
     assert (
-        client.patch(f"/api/v1/safety/zones/{zone['id']}", json=updated).status_code
+        client.patch(
+            f"/api/v1/safety/zones/{zone['id']}",
+            json=zone_payload(ids, responsible_user_id=str(ids["owner"])),
+        ).status_code
         == 200
     )
-    frame(client, ids, 8000, 3)
-    new_event = frame(client, ids, 12000, 4).json()["safety"]["events"][0]
     state["actor"] = "responsible"
-    assert client.get(f"/api/v1/safety/events/{new_event['id']}").status_code == 403
-    assert client.get(new_event["evidence_url"]).status_code == 403
+    assert client.get(event["evidence_url"]).status_code == 403
+    assert client.get(f"/api/v1/safety/events/{event['id']}").status_code == 403
+    with Session(engine) as db:
+        db.get(OrganizationMembership, ids["responsible_membership"]).status = "revoked"
+        db.commit()
+    assert client.get(event["evidence_url"]).status_code == 404
+    assert client.get(f"/api/v1/safety/events/{event['id']}").status_code == 404
     assert (
         client.post(
-            f"/api/v1/safety/events/{new_event['id']}/review",
-            json={"decision": "confirmed", "comment": "Нельзя менять чужое событие"},
+            f"/api/v1/safety/events/{event['id']}/review",
+            json={
+                "decision": "confirmed",
+                "comment": "Старое назначение не является правом",
+            },
         ).status_code
-        == 403
+        == 404
     )
-    historical = client.get(f"/api/v1/safety/events/{event['id']}")
-    assert historical.status_code == 200
-    assert historical.json()["can_review"] is True
-    assert (
-        client.get(f"/api/v1/safety/projects/{ids['project']}/events").status_code == 403
-    )
-    assert (
-        client.get(f"/api/v1/safety/projects/{ids['project']}/configuration").status_code
-        == 403
-    )
-    assert (
-        client.get(f"/api/v1/safety/projects/{ids['project']}/zones").status_code == 403
-    )
-    assert frame(client, ids, 8000, 3).status_code == 403
-    assert (
-        client.post(
-            f"/api/v1/safety/projects/{ids['project']}/zones", json=zone_payload(ids)
-        ).status_code
-        == 403
-    )
-    assert client.get(event["evidence_url"]).status_code == 200
-    reviewed = client.post(
-        f"/api/v1/safety/events/{event['id']}/review",
-        json={"decision": "confirmed", "comment": "Проверены основания события"},
-    )
-    assert reviewed.status_code == 200
-    assert reviewed.json()["can_review"] is False
 
 
 def test_valid_concave_polygon_is_accepted(env):

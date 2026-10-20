@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
@@ -123,6 +123,8 @@ class VideoSyncStatusResponse(BaseModel):
 
 
 class MachineryProbabilityItem(BaseModel):
+    basis: str | None = None
+    ppr_requirements: list[dict[str, Any]] = Field(default_factory=list)
     machinery_code: str
     machinery_name_ru: str
     probability: float = Field(..., ge=0.0, le=1.0)
@@ -135,6 +137,7 @@ class MachineryProbabilityItem(BaseModel):
 
 
 class StageProbabilityResponse(BaseModel):
+    ppr_revision: str = ""
     stage_id: uuid.UUID
     stage_name: str
     matched_catalog_stage: str | None = None
@@ -164,12 +167,14 @@ class IncidentPhotoItem(BaseModel):
 
 
 class IncidentResponse(BaseModel):
+    ppr_requirements: list[dict[str, Any]] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     code: str
     project_id: uuid.UUID
     zone_id: uuid.UUID | None = None
+    camera_id: uuid.UUID | None = None
     first_seen_at: datetime | None = None
     confidence: float = 0
     stage_id: uuid.UUID | None = None
@@ -211,11 +216,15 @@ class IncidentAlbumResponse(BaseModel):
 class IncidentStatusUpdateRequest(BaseModel):
     status: str = Field(
         ...,
-        description="Статус инцидента: pending / confirmed / false_positive или русские эквиваленты",
+        description=(
+            "Статус инцидента: pending / confirmed / false_positive "
+            "или русские эквиваленты"
+        ),
     )
 
 
 class IncidentCreateRequest(BaseModel):
+    ppr_revision: str | None = None
     project_id: uuid.UUID
     zone_id: uuid.UUID | None = None
     camera_id: uuid.UUID | None = None

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime, timedelta
 import hashlib
 import hmac
 import json
 import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.core.config import settings
@@ -63,13 +63,19 @@ def create_access_token(
     if expires_delta:
         expire_ts = int((datetime.now(UTC) + expires_delta).timestamp())
     else:
-        expire_ts = int((datetime.now(UTC) + timedelta(days=settings.jwt_access_token_expire_days)).timestamp())
+        expire_ts = int(
+            (
+                datetime.now(UTC) + timedelta(days=settings.jwt_access_token_expire_days)
+            ).timestamp()
+        )
 
     to_encode.update({"exp": expire_ts, "iat": now_ts})
 
     header = {"alg": "HS256", "typ": "JWT"}
     header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
-    payload_b64 = _b64url_encode(json.dumps(to_encode, separators=(",", ":")).encode("utf-8"))
+    payload_b64 = _b64url_encode(
+        json.dumps(to_encode, separators=(",", ":")).encode("utf-8")
+    )
 
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     signature = hmac.new(

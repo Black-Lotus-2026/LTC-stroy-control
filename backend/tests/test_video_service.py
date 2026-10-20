@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,7 +13,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.models.project import Project
 from app.models.schedule import ScheduleTask
-from app.models.video import VideoAsset
 from app.services.video_service import VideoService
 
 
@@ -40,15 +40,15 @@ def test_video_registration_and_sync(
     sqlite_session.add(project)
     sqlite_session.commit()
 
-    base_time = datetime(2026, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+    base_time = datetime(2026, 6, 15, 10, 0, 0, tzinfo=UTC)
 
     # Schedule stage active on 2026-06-15
     stage = ScheduleTask(
         project_id=project.id,
         name="Выемка грунта котлована",
         order_index=1,
-        planned_start=datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc),
-        planned_end=datetime(2026, 6, 20, 23, 59, 59, tzinfo=timezone.utc),
+        planned_start=datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC),
+        planned_end=datetime(2026, 6, 20, 23, 59, 59, tzinfo=UTC),
         duration_days=6,
     )
     sqlite_session.add(stage)
@@ -56,6 +56,7 @@ def test_video_registration_and_sync(
 
     import cv2
     import numpy as np
+
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "storage_local_root", tmp_path / "media")

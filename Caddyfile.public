@@ -1,0 +1,45 @@
+{
+    # Browsers connecting to an IP address may omit SNI.
+    default_sni 176.109.108.234
+}
+
+176.109.108.234 {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+
+    encode gzip zstd
+
+    @backend path /api/* /docs* /redoc* /openapi.json /media/*
+    handle @backend {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+stroycontrol.pro {
+    encode gzip zstd
+
+    @backend path /api/* /docs* /redoc* /openapi.json /media/*
+    handle @backend {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+www.stroycontrol.pro {
+    redir https://stroycontrol.pro{uri} permanent
+}

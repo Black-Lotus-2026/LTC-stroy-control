@@ -6,20 +6,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+
+from app.api.protected_media import router as protected_media_router
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import setup_logging
-from app.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +57,8 @@ app.add_middleware(
 register_exception_handlers(app)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
-# Кадры и доказательства отдаются как статика
-if settings.storage_backend == "local":
-    get_storage()
-    app.mount(
-        "/media",
-        StaticFiles(directory=settings.storage_local_root),
-        name="media",
-    )
-
+# Every private byte, including legacy URLs, rechecks current DB authorization.
+app.include_router(protected_media_router)
 
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:

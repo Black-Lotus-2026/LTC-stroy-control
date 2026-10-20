@@ -8,9 +8,9 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 
-from app.api.deps import DbSession
+from app.api.deps import CurrentUser, DbSession
 from app.core.errors import NotFoundError
-from app.models import GeneratedReport, Project, ReportSchedule
+from app.models import GeneratedReport, ReportSchedule
 from app.schemas.report import (
     GeneratedReportResponse,
     ReportGenerateRequest,
@@ -18,6 +18,8 @@ from app.schemas.report import (
     ReportScheduleResponse,
     ReportScheduleUpdate,
 )
+from app.services.legacy_access import require_full_project_read
+from app.services.management.context import require_project
 from app.services.report_service import (
     calculate_next_run,
     default_period_for_frequency,
@@ -33,7 +35,13 @@ router = APIRouter(prefix="/reports", tags=["Отчёты"])
     status_code=status.HTTP_201_CREATED,
     summary="Сформировать отчёт за час, день, неделю или заданный интервал",
 )
-def create_report(payload: ReportGenerateRequest, db: DbSession) -> GeneratedReport:
+def create_report(
+    payload: ReportGenerateRequest, db: DbSession, user: CurrentUser
+) -> GeneratedReport:
+    require_full_project_read(db, payload.project_id, user)
+    require_project(
+        db, payload.project_id, user, permission="report.create", write=True, lock=True
+    )
     report = generate_report(
         db,
         project_id=payload.project_id,
@@ -43,6 +51,7 @@ def create_report(payload: ReportGenerateRequest, db: DbSession) -> GeneratedRep
     )
     db.commit()
     db.refresh(report)
+    require_full_project_read(db, report.project_id, user)
     return report
 
 
@@ -53,9 +62,11 @@ def create_report(payload: ReportGenerateRequest, db: DbSession) -> GeneratedRep
 )
 def list_reports(
     db: DbSession,
+    user: CurrentUser,
     project_id: Annotated[uuid.UUID, Query()],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[GeneratedReport]:
+    require_full_project_read(db, project_id, user)
     query = (
         select(GeneratedReport)
         .where(GeneratedReport.project_id == project_id)
@@ -71,8 +82,12 @@ def list_reports(
     status_code=status.HTTP_201_CREATED,
     summary="Настроить автоматический отчёт",
 )
-def create_schedule(payload: ReportScheduleCreate, db: DbSession) -> ReportSchedule:
-    project = db.get(Project, payload.project_id)
+def create_schedule(
+    payload: ReportScheduleCreate, db: DbSession, user: CurrentUser
+) -> ReportSchedule:
+    project = require_project(
+        db, payload.project_id, user, permission="project.manage", write=True, lock=True
+    )
     if project is None:
         raise NotFoundError(
             "Строительный объект не найден", {"project_id": str(payload.project_id)}
@@ -109,8 +124,9 @@ def create_schedule(payload: ReportScheduleCreate, db: DbSession) -> ReportSched
     summary="Расписания автоматических отчётов",
 )
 def list_schedules(
-    db: DbSession, project_id: Annotated[uuid.UUID, Query()]
+    db: DbSession, user: CurrentUser, project_id: Annotated[uuid.UUID, Query()]
 ) -> list[ReportSchedule]:
+    require_project(db, project_id, user, permission="project.manage")
     query = (
         select(ReportSchedule)
         .where(ReportSchedule.project_id == project_id)
@@ -128,10 +144,14 @@ def update_schedule(
     schedule_id: uuid.UUID,
     payload: ReportScheduleUpdate,
     db: DbSession,
+    user: CurrentUser,
 ) -> ReportSchedule:
     schedule = db.get(ReportSchedule, schedule_id)
     if schedule is None:
         raise NotFoundError("Расписание отчёта не найдено", {"id": str(schedule_id)})
+    require_project(
+        db, schedule.project_id, user, permission="project.manage", write=True, lock=True
+    )
     if payload.enabled is not None:
         schedule.enabled = payload.enabled
     if payload.run_at_local is not None:
@@ -154,8 +174,9 @@ def update_schedule(
     response_model=GeneratedReportResponse,
     summary="Получить сформированный отчёт",
 )
-def get_report(report_id: uuid.UUID, db: DbSession) -> GeneratedReport:
+def get_report(report_id: uuid.UUID, db: DbSession, user: CurrentUser) -> GeneratedReport:
     report = db.get(GeneratedReport, report_id)
     if report is None:
         raise NotFoundError("Отчёт не найден", {"id": str(report_id)})
+    require_full_project_read(db, report.project_id, user)
     return report

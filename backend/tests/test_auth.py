@@ -1,17 +1,18 @@
 """Tests for authentication: registration, login, and JWT verification."""
 
 import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-from app.main import app
 from app.db.base import Base
 from app.db.session import get_db
+from app.main import app
 
 
 @compiles(JSONB, "sqlite")
