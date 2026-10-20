@@ -1543,10 +1543,6 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
                 <span />
                 <span><b>Заставка</b><small>Стартовый экран с ролью</small></span>
               </button>
-              <a className="m-item" role="menuitem" href="#legacy" onClick={() => setTimeout(() => location.reload(), 0)}>
-                <span />
-                <span><b>Старый интерфейс</b><small>Для сравнения</small></span>
-              </a>
               <div className="m-sep" />
               <ThemeRow />
               <div className="m-sep" />

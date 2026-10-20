@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import * as api from '../api'
 import type { CameraItem } from '../api'
 import type { ContextDTO } from '../customerApi'
@@ -6,8 +6,6 @@ import { loadIntroSite, type IntroSite as Site } from '../introData'
 import { dayStart, durShort, fmtDay, hhmm, hhmmss, plural } from '../lib/format'
 import { CODES, MACH, SIL, type Code } from '../lib/machinery'
 import { RING_MEDIA } from '../lib/ring'
-import { palette, rgba, theme } from '../lib/theme'
-import { PARALLAX, type WireScene } from '../lib/wire'
 import { awaitsDecision, stageDay, type UiEvent } from '../model'
 
 /*
@@ -17,13 +15,11 @@ import { awaitsDecision, stageDay, type UiEvent } from '../model'
  * plan column says so. Narrow and portrait screens have no room for sides and show none.
  */
 
-export type Side = 'cams' | 'mach' | 'site' | 'data' | 'draw'
+export type Side = 'cams' | 'mach' | 'data'
 export const SIDES: { id: Side; label: string }[] = [
   { id: 'cams', label: 'Камеры' },
   { id: 'mach', label: 'Техника этапа' },
-  { id: 'site', label: 'Площадка' },
   { id: 'data', label: 'Данные объекта' },
-  { id: 'draw', label: 'Чертёж' },
 ]
 const SIDE_KEY = 'sverka:intro-side'
 const FRAME_EVERY = 15000
@@ -273,113 +269,6 @@ function Machinery({ site, switched }: { site: Site; switched: boolean }) {
   )
 }
 
-/* ── the site round the drawing: a dashed ground grid, floodlights, a tower crane, cabins, fences ── */
-
-function SiteLayer({ aim, switched }: { aim: RefObject<{ x: number; y: number }>; switched: boolean }) {
-  const ref = useRef<HTMLCanvasElement>(null)
-  useEffect(() => {
-    const cv = ref.current!, sx = cv.getContext('2d')!
-    let raf = 0, drawn = ''
-    const frame = () => {
-      raf = requestAnimationFrame(frame)
-      const w = cv.clientWidth, h = cv.clientHeight, dpr = Math.min(2, devicePixelRatio || 1)
-      const a = aim.current ?? { x: 0, y: 0 }
-      const th = theme(), pal = palette(th), ink = rgba(pal.ink, 1)
-      const key = `${w}x${h}:${a.x.toFixed(4)}:${a.y.toFixed(4)}:${th}`
-      if (key === drawn || !w || !h) return
-      drawn = key
-      cv.width = Math.round(w * dpr)
-      cv.height = Math.round(h * dpr)
-      sx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      // the drawing's camera, intro layout
-      const unit = Math.min(w * 0.36, h * 0.45), D = 5, f = unit * D, cx = w * 0.62, cy = h * 0.47
-      const yaw = a.x * PARALLAX.yaw, pitch = 0.3 + a.y * PARALLAX.pitch
-      const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch)
-      const P = (x: number, y: number, z: number) => {
-        const xr = x * cyw - z * syw, zr = x * syw + z * cyw, y2 = y * cp + zr * sp, z2 = -y * sp + zr * cp, d = f / (D + z2)
-        return [cx + xr * d, cy - y2 * d, z2]
-      }
-      const G = -0.75 // the ground the drawing and the letters stand on
-      const fade = (z: number) => Math.max(0, Math.min(1, 1 - (z - 0.5) / 5.5))
-      type V3 = [number, number, number]
-      const seg = (a1: V3, b1: V3, alpha: number) => {
-        const p = P(...a1), q = P(...b1)
-        sx.globalAlpha = alpha * fade((p[2] + q[2]) / 2)
-        sx.beginPath()
-        sx.moveTo(p[0], p[1])
-        sx.lineTo(q[0], q[1])
-        sx.stroke()
-      }
-      const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, al: number) => {
-        const v: V3[] = [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]]
-        for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) seg(v[i], v[j], al)
-      }
-      sx.lineWidth = 1
-      sx.setLineDash([3, 5])
-      sx.strokeStyle = ink
-      // ground grid
-      for (let x = -8; x <= 8; x += 0.5) for (let z = -1.5; z < 6; z += 0.75) seg([x, G, z], [x, G, z + 0.75], 0.09)
-      for (let z = -1.5; z <= 6; z += 0.5) for (let x = -8; x < 8; x += 1) seg([x, G, z], [x + 1, G, z], 0.09)
-      // floodlights: the light first, then the masts
-      for (const [x, z, h2] of [[-2.2, 0.3, 1.5], [2.5, 2.4, 1.9], [-1.4, 4.2, 1.8], [3.2, -0.2, 1.3]]) {
-        const top = P(x, G + h2, z), g1 = P(x - 0.9, G, z - 0.4), g2 = P(x + 0.9, G, z - 0.4)
-        const grad = sx.createLinearGradient(top[0], top[1], (g1[0] + g2[0]) / 2, g1[1])
-        grad.addColorStop(0, rgba(pal.beam, 0.085))
-        grad.addColorStop(1, rgba(pal.beam, 0))
-        sx.globalAlpha = fade(top[2])
-        sx.fillStyle = grad
-        sx.beginPath()
-        sx.moveTo(top[0], top[1])
-        sx.lineTo(g1[0], g1[1])
-        sx.lineTo(g2[0], g2[1])
-        sx.closePath()
-        sx.fill()
-        const pool = P(x, G, z - 0.3), rg = sx.createRadialGradient(pool[0], pool[1], 0, pool[0], pool[1], (160 * 5) / (D + pool[2]))
-        rg.addColorStop(0, rgba(pal.beam, 0.07))
-        rg.addColorStop(1, rgba(pal.beam, 0))
-        sx.fillStyle = rg
-        sx.fillRect(pool[0] - 400, pool[1] - 200, 800, 400)
-        seg([x, G, z], [x, G + h2, z], 0.4)
-        box(x - 0.12, G + h2, z - 0.05, x + 0.12, G + h2 + 0.1, z + 0.05, 0.5)
-        const lamp = P(x, G + h2, z - 0.05)
-        sx.globalAlpha = 0.9 * fade(lamp[2])
-        sx.fillStyle = pal.lamp
-        sx.beginPath()
-        sx.arc(lamp[0], lamp[1], 2.2, 0, 7)
-        sx.fill()
-      }
-      // a tower crane far left, in the plan's gold
-      sx.strokeStyle = rgba(pal.gold, 1)
-      const mx = -3.1, mz = 2.2, mh = 2.2
-      for (const [dx, dz] of [[-0.06, -0.06], [0.06, -0.06], [0.06, 0.06], [-0.06, 0.06]]) seg([mx + dx, G, mz + dz], [mx + dx, G + mh, mz + dz], 0.45)
-      for (let y = 0; y < mh; y += 0.18) seg([mx - 0.06, G + y, mz - 0.06], [mx + 0.06, G + y + 0.18, mz - 0.06], 0.3)
-      seg([mx - 0.5, G + mh, mz], [mx + 1.8, G + mh, mz], 0.45)
-      seg([mx, G + mh + 0.3, mz], [mx + 1.8, G + mh, mz], 0.3)
-      seg([mx, G + mh + 0.35, mz], [mx - 0.6, G + mh, mz], 0.3)
-      seg([mx + 1.2, G + mh, mz], [mx + 1.2, G + mh - 0.8, mz], 0.3)
-      box(mx - 0.5, G + mh - 0.2, mz - 0.08, mx - 0.3, G + mh, mz + 0.08, 0.4)
-      // cabins and a fence on the right, a fence and stacks of material on the left
-      sx.strokeStyle = ink
-      for (const [x, y] of [[1.9, 0], [2.55, 0], [1.9, 0.32]]) box(x, G + y, 1.1, x + 0.6, G + y + 0.3, 1.35, 0.42)
-      for (let x = 1.7; x <= 5; x += 0.3) seg([x, G, -0.5], [x, G + 0.24, -0.5], 0.32)
-      seg([1.7, G + 0.22, -0.5], [5, G + 0.22, -0.5], 0.32)
-      seg([1.7, G + 0.07, -0.5], [5, G + 0.07, -0.5], 0.32)
-      for (let x = -5; x <= -1.6; x += 0.3) seg([x, G, -0.7], [x, G + 0.24, -0.7], 0.32)
-      seg([-5, G + 0.22, -0.7], [-1.6, G + 0.22, -0.7], 0.32)
-      for (const [x, z] of [[-2.4, 1.2], [-2.0, 1.3]]) for (let k = 0; k < 3; k++) box(x, G + k * 0.06, z, x + 0.3, G + k * 0.06 + 0.05, z + 0.5, 0.36)
-      sx.globalAlpha = 1
-      sx.setLineDash([])
-    }
-    raf = requestAnimationFrame(frame)
-    return () => cancelAnimationFrame(raf)
-  }, [aim])
-  return (
-    <div className="it-side" data-switched={switched || undefined}>
-      <canvas className="it-site" ref={ref} aria-hidden="true" />
-    </div>
-  )
-}
-
 /* ── the object's own numbers in the corners ── */
 
 function ObjectData({ site, feeds, switched }: { site: Site; feeds: Feed[]; switched: boolean }) {
@@ -446,87 +335,10 @@ function ObjectData({ site, feeds, switched }: { site: Site; feeds: Feed[]; swit
   )
 }
 
-/* ── the page as a drawing sheet: grid axes, elevation marks, the title block ── */
-
-function DrawingSheet({ site, scene, subject, switched }: { site: Site | null; scene: WireScene | null; subject: string; switched: boolean }) {
-  const [size, setSize] = useState(() => ({ w: innerWidth, h: innerHeight }))
-  const [turn, setTurn] = useState(0)
-  useEffect(() => {
-    const resize = () => setSize({ w: innerWidth, h: innerHeight })
-    addEventListener('resize', resize)
-    const t = window.setInterval(() => setTurn(Math.round((((scene?.turn ?? 0) * 180) / Math.PI % 360 + 360) % 360)), 250)
-    return () => {
-      removeEventListener('resize', resize)
-      clearInterval(t)
-    }
-  }, [scene])
-  const { w, h } = size
-  // the column axes start right of the title block in the upper left
-  const cols = 8, x0 = Math.round(Math.min(420, w * 0.25)), x1 = w - 110, y0 = 150, y1 = h - 150
-  const top = 120, bottom = h - 120, marks = 48
-  return (
-    <div className="it-side" data-switched={switched || undefined}>
-      <svg className="it-axes" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-        {Array.from({ length: cols }, (_, i) => {
-          const x = x0 + ((x1 - x0) * i) / (cols - 1)
-          return (
-            <g key={i}>
-              <line className="ax" x1={x} y1={104} x2={x} y2={h - 96} />
-              <circle cx={x} cy={92} r={11} />
-              <text x={x} y={92}>
-                {i + 1}
-              </text>
-            </g>
-          )
-        })}
-        {[...'АБВГ'].map((ch, i) => {
-          const y = y0 + ((y1 - y0) * i) / 3
-          return (
-            <g key={ch}>
-              <line className="ax" x1={34} y1={y} x2={w - 96} y2={y} />
-              <circle cx={22} cy={y} r={11} />
-              <text x={22} y={y}>
-                {ch}
-              </text>
-            </g>
-          )
-        })}
-      </svg>
-      <div className="it-elev" aria-hidden="true">
-        {Array.from({ length: marks + 1 }, (_, k) => {
-          const y = bottom - top - ((bottom - top) * k) / marks
-          return (
-            <span key={k}>
-              <i style={{ top: y, width: k % 4 ? 6 : 12 }} />
-              {k % 8 === 0 && <b style={{ top: y }}>+{((k / 4) * 3.3).toFixed(3).replace('.', ',')}</b>}
-            </span>
-          )
-        })}
-      </div>
-      <dl className="it-stamp">
-        <dt>Объект</dt>
-        <dd>{site?.project?.name ?? '—'}</dd>
-        <dt>Этап</dt>
-        <dd>{site?.stage?.name ?? (!site || !site.planAvailable ? '—' : site.stages.length ? 'вне этапов' : 'нет плана')}</dd>
-        <dt>Показано</dt>
-        <dd>{subject}</dd>
-        <dt>Поворот</dt>
-        <dd>{turn}°</dd>
-      </dl>
-      <i className="it-corner tl" />
-      <i className="it-corner tr" />
-      <i className="it-corner bl" />
-      <i className="it-corner br" />
-    </div>
-  )
-}
-
 /** The chosen side. `switched` drops the entrance delay once someone picks a side by hand. */
-export function Sides({ side, context, scene, aim, subject, switched }: { side: Side; context: ContextDTO | null; scene: WireScene | null; aim: RefObject<{ x: number; y: number }>; subject: string; switched: boolean }) {
+export function Sides({ side, context, switched }: { side: Side; context: ContextDTO | null; scene?: unknown; aim?: unknown; subject?: string; switched: boolean }) {
   const { site, error } = useSite(context)
   const feeds = useFeeds(site?.camerasAvailable ? site.project.cameras : undefined)
-  if (side === 'site') return <SiteLayer key="site" aim={aim} switched={switched} />
-  if (side === 'draw') return <DrawingSheet key="draw" site={site} scene={scene} subject={subject} switched={switched} />
   if (error) return <div className="it-side"><section className="it-panel tl"><span className="kicker">Данные объекта недоступны</span><p>{error}</p></section></div>
   if (!site) return null
   if ((side === 'mach' && !site.planAvailable) || (side === 'cams' && !site.camerasAvailable)) return <div className="it-side"><section className="it-panel tl"><span className="kicker">Область назначения</span><p>{side === 'mach' ? 'План работ вне текущей области доступа.' : 'Камеры вне текущей области доступа.'}</p></section></div>

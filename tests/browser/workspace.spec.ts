@@ -188,12 +188,12 @@ test('a superseded session check cannot hide an already authenticated screen', a
   await expect(page.getByRole('button', { name: 'Перейти к решениям', exact: true })).toBeVisible()
 })
 
-test('legacy query entry can return to the new interface', async ({ page }) => {
+test('legacy query entry opens the standard interface without legacy controls', async ({ page }) => {
   await mockApi(page)
   await page.goto('/?legacy=1')
-  await page.getByRole('link', { name: 'Новый интерфейс →' }).click()
   await expect(page.getByRole('button', { name: 'Перейти к решениям', exact: true })).toBeVisible()
   expect(new URL(page.url()).searchParams.has('legacy')).toBe(false)
+  await expect(page.getByRole('link', { name: 'Новый интерфейс →' })).toHaveCount(0)
 })
 
 for (const width of [1280, 390]) {
