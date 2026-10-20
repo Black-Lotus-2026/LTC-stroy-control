@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from app.services.detector import MACHINERY_CLASSES
 from app.services.rule_engine import RuleEngine
 
@@ -27,7 +26,9 @@ def test_machinery_classes_count_and_mapping() -> None:
 def test_rule_threshold_tier1_mandatory_missing() -> None:
     engine = RuleEngine()
     # P > 0.8: Missing excavator
-    res = engine.evaluate_single_equipment("Экскаватор", probability=0.92, observed_count=0)
+    res = engine.evaluate_single_equipment(
+        "Экскаватор", probability=0.92, observed_count=0
+    )
     assert res.is_violation is True
     assert res.severity == "ERROR"
     assert res.discrepancy_type == "MISSING_MANDATORY"
@@ -36,7 +37,9 @@ def test_rule_threshold_tier1_mandatory_missing() -> None:
 def test_rule_threshold_tier1_mandatory_present() -> None:
     engine = RuleEngine()
     # P > 0.8: Present excavator
-    res = engine.evaluate_single_equipment("Экскаватор", probability=0.92, observed_count=1)
+    res = engine.evaluate_single_equipment(
+        "Экскаватор", probability=0.92, observed_count=1
+    )
     assert res.is_violation is False
     assert res.severity == "NEUTRAL"
 
@@ -44,7 +47,9 @@ def test_rule_threshold_tier1_mandatory_present() -> None:
 def test_rule_threshold_tier2_recommended_missing() -> None:
     engine = RuleEngine()
     # 0.6 <= P <= 0.8: Missing loader
-    res = engine.evaluate_single_equipment("Погрузчик", probability=0.70, observed_count=0)
+    res = engine.evaluate_single_equipment(
+        "Погрузчик", probability=0.70, observed_count=0
+    )
     assert res.is_violation is True
     assert res.severity == "WARNING"
     assert res.discrepancy_type == "MISSING_RECOMMENDED"
@@ -53,7 +58,9 @@ def test_rule_threshold_tier2_recommended_missing() -> None:
 def test_rule_threshold_tier3_prohibited_present() -> None:
     engine = RuleEngine()
     # P < 0.15: Uncharacteristic grader present
-    res = engine.evaluate_single_equipment("Автогрейдер", probability=0.05, observed_count=1)
+    res = engine.evaluate_single_equipment(
+        "Автогрейдер", probability=0.05, observed_count=1
+    )
     assert res.is_violation is True
     assert res.severity == "ERROR"
     assert res.discrepancy_type == "UNCHARACTERISTIC_PRESENT"

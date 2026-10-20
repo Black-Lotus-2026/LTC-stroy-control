@@ -1,0 +1,59 @@
+{
+  "purpose": "Actual analyze_recording entry point with bounded read-only original inputs",
+  "max_duration_seconds": 90,
+  "sample_seconds": 30,
+  "window_seconds": 60,
+  "checkpoint_sha256": "ce1195cb295534a08b3cdbba9ccf8c7a0c962875437ba49c4c6e68bbe3a4fb40",
+  "quality_verified": false,
+  "compliance_enabled": false,
+  "no_quality_override": true,
+  "notice": "Shadow/uncalibrated compliance is expected to stop before inference; separate direct YOLO smoke covers decoding.",
+  "videos": [
+    {
+      "filename": "Camera 2_20261019_101926.mp4",
+      "sha256_before": "be28c5aab3d1778a41c2fa50e08308bb428ce1a7715b58ace4bc533fe030067c",
+      "sha256_after": "be28c5aab3d1778a41c2fa50e08308bb428ce1a7715b58ace4bc533fe030067c",
+      "size_bytes": 1555935601,
+      "original_unchanged": true,
+      "application_result": {
+        "video_id": "803b8f15-606b-4f2a-98ef-f291d7a8b4bd",
+        "status": "disabled",
+        "samples": 0,
+        "failed_samples": 0,
+        "insufficient_samples": 0,
+        "created": 0,
+        "incident_ids": [],
+        "analyzed_until_seconds": 0,
+        "prefix_only": true,
+        "technical_observations": []
+      }
+    },
+    {
+      "filename": "Camera 3_20261019_101926.mp4",
+      "sha256_before": "82a2d647d60c077ed6cbfe72a22567b554b53f8250506a23b11ab4f1910369ff",
+      "sha256_after": "82a2d647d60c077ed6cbfe72a22567b554b53f8250506a23b11ab4f1910369ff",
+      "size_bytes": 919586831,
+      "original_unchanged": true,
+      "application_result": {
+        "video_id": "70e11c7d-5a1d-4d7e-90f1-7143a2ce2168",
+        "status": "disabled",
+        "samples": 0,
+        "failed_samples": 0,
+        "insufficient_samples": 0,
+        "created": 0,
+        "incident_ids": [],
+        "analyzed_until_seconds": 0,
+        "prefix_only": true,
+        "technical_observations": []
+      }
+    }
+  ],
+  "business_rows_before": {
+    "incidents": 3,
+    "evidence": 3
+  },
+  "business_rows_after": {
+    "incidents": 3,
+    "evidence": 3
+  }
+}

@@ -21,7 +21,15 @@ celery_app = Celery(
     "stroy_control",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.workers.tasks", "app.workers.cv_tasks", "app.workers.management_tasks", "app.workers.document_tasks"],
+    include=[
+        "app.workers.tasks",
+        "app.workers.cv_tasks",
+        "app.workers.management_tasks",
+        "app.workers.document_tasks",
+        "app.workers.recording_tasks",
+        "app.workers.ppr_tasks",
+        "app.workers.safety_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -39,6 +47,8 @@ celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "cv.*": {"queue": "cv"},
+        "recording.*": {"queue": "cv"},
+        "ppr.*": {"queue": "ppr"},
     },
     # Аварийный синхронный режим: задачи выполняются прямо в вызывающем
     # процессе. Включается настройкой CELERY_EAGER=true.
@@ -51,6 +61,12 @@ celery_app.conf.update(
 # Периодические задачи. Расписание заполняется по мере появления пайплайна:
 # опрос камер (ingest) и прогон правил (evaluate) живут здесь.
 celery_app.conf.beat_schedule = {
+    "link-pending-safety": {"task": "safety.link_pending", "schedule": 60.0},
+    "analyze-pending-ppr": {"task": "ppr.dispatch_pending", "schedule": 30.0},
+    "analyze-pending-recordings": {
+        "task": "recording.enqueue_pending",
+        "schedule": 60.0,
+    },
     "management-reap-expired": {
         "task": "management.reap_expired",
         "schedule": 60.0,

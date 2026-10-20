@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 class ViewPhoto(BaseModel):
     url: str
+    sha256: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
     at: datetime | None = None
     by: str | None = None
     by_id: uuid.UUID | None = None

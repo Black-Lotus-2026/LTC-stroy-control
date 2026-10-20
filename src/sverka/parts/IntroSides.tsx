@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import * as api from '../api'
-import type { CameraItem, ProjectItem, UserProfile } from '../api'
+import type { CameraItem } from '../api'
+import type { ContextDTO } from '../customerApi'
+import { loadIntroSite, type IntroSite as Site } from '../introData'
 import { dayStart, durShort, fmtDay, hhmm, hhmmss, plural } from '../lib/format'
 import { CODES, MACH, SIL, type Code } from '../lib/machinery'
 import { RING_MEDIA } from '../lib/ring'
 import { palette, rgba, theme } from '../lib/theme'
 import { PARALLAX, type WireScene } from '../lib/wire'
-import { awaitsDecision, loadLocalRules, loadSettings, stageAt, stageDay, toEvent, toProfile, toStages, type Level, type Stage, type UiEvent } from '../model'
+import { awaitsDecision, stageDay, type UiEvent } from '../model'
 
 /*
  * What fills the sides of a wide intro around the drawing; the variants were drawn up on
@@ -64,54 +66,18 @@ export function useSide(): [Side, (s: Side) => void] {
   return [side, choose]
 }
 
-export interface Site {
-  project: ProjectItem | null
-  stages: Stage[]
-  stage: Stage | null
-  levels: Partial<Record<Code, Level>>
-  events: UiEvent[]
-}
-
-/** The object, its plan, the stage of today with its machinery, and the journal; loaded once the
- * screen is wide enough to show them, also when it becomes so later. */
-export function useSite(user: UserProfile) {
-  const [site, setSite] = useState<Site | null>(null)
+/** The sides never choose a project or infer a role independently of the context loader. */
+export function useSite(context: ContextDTO | null) {
+  const [state, setState] = useState<{ key: string; site: Site | null; error: string } | null>(null)
   const isWide = useWide()
-  const loaded = site !== null
+  const key = context ? `${context.assignment_id}:${context.authorization_version}` : ''
   useEffect(() => {
-    if (!isWide || loaded) return
+    if (!isWide || !context) return
     let live = true
-    const load = async (): Promise<Site> => {
-      const ps = await api.projects()
-      const visible = ps.filter((p) => user.role === 'admin' || !p.owner_username || p.owner_username === user.username)
-      const last = read('sverka:project')
-      const project = visible.find((p) => p.id === last) ?? visible[0] ?? null
-      if (!project) return { project: null, stages: [], stage: null, levels: {}, events: [] }
-      const [items, incidents] = await Promise.all([api.stages(project.id).catch(() => []), api.incidents(project.id).catch(() => [])])
-      const stages = toStages(items)
-      const stage = stageAt(stages, Date.now())
-      const events = incidents.map((a) => toEvent(a, api.mediaUrl)).filter((e) => !e.sample)
-      const levels: Partial<Record<Code, Level>> = {}
-      if (stage) {
-        const prof = await api.profile(stage.id).catch(() => null)
-        if (prof) {
-          const rules = toProfile(prof, loadSettings(project.id), loadLocalRules(stage.id)).rules
-          for (const c of CODES) levels[c] = rules[c].lvl
-        }
-      }
-      return { project, stages, stage, levels, events }
-    }
-    load().then(
-      (s) => {
-        if (live) setSite(s)
-      },
-      () => undefined,
-    )
-    return () => {
-      live = false
-    }
-  }, [user, isWide, loaded])
-  return site
+    loadIntroSite(context, () => live).then(site => { if (live) setState({ key, site, error: '' }) }, error => { if (live) setState({ key, site: null, error: error instanceof Error ? error.message : 'Данные объекта недоступны.' }) })
+    return () => { live = false }
+  }, [key, isWide])
+  return state?.key === key ? state : { key, site: null, error: '' }
 }
 
 export interface Feed { id: string; n: number; name: string; state: 'wait' | 'live' | 'off'; note: string; img: HTMLImageElement | null; at: number }
@@ -123,17 +89,14 @@ export interface Feed { id: string; n: number; name: string; state: 'wait' | 'li
 export function useFeeds(cameras: CameraItem[] | undefined) {
   const [feeds, setFeeds] = useState<Feed[]>([])
   useEffect(() => {
-    if (!cameras?.length) return
+    if (!cameras?.length) { setFeeds([]); return }
     let live = true, timer = 0
     const cams = cameras.slice(0, 4)
-    const urls = cams.map((c) => (c.stream_url || '').trim())
-    const http = (i: number) => /^https?:\/\//i.test(urls[i])
     const set = (i: number, patch: Partial<Feed>) => setFeeds((fs) => fs.map((f, j) => (j === i ? { ...f, ...patch } : f)))
     const grab = async () => {
       for (let i = 0; i < cams.length && live; i++) {
-        if (!http(i)) continue
         try {
-          const img = await api.grabFrame(urls[i])
+          const img = await api.grabFrame(cams[i].id)
           if (live) set(i, { state: 'live', note: '', img, at: Date.now() })
         } catch {
           if (live) set(i, { state: 'off', note: 'нет сигнала' })
@@ -143,7 +106,7 @@ export function useFeeds(cameras: CameraItem[] | undefined) {
     }
     Promise.resolve().then(() => {
       if (!live) return
-      setFeeds(cams.map((c, i) => ({ id: c.id, n: i + 1, name: c.name, state: http(i) ? 'wait' : 'off', note: http(i) ? '' : /^rtsp:/i.test(urls[i]) ? 'RTSP' : 'нет адреса', img: null, at: 0 })))
+      setFeeds(cams.map((c, i) => ({ id: c.id, n: i + 1, name: c.name, state: 'wait', note: '', img: null, at: 0 })))
       void grab()
     })
     return () => {
@@ -290,7 +253,7 @@ function Machinery({ site, switched }: { site: Site; switched: boolean }) {
     if ((latest.get(e.mach)?.at ?? 0) < e.at) latest.set(e.mach, e)
   }
   const planned = (c: Code) => site.levels[c] === 'req' || site.levels[c] === 'rec'
-  const stage = site.stage ? site.stage.name : site.stages.length ? 'сегодня вне этапов' : 'план не загружен'
+  const stage = !site.planAvailable ? 'вне области доступа' : site.stage ? site.stage.name : site.stages.length ? 'сегодня вне этапов' : 'план не загружен'
   return (
     <div className="it-side" data-switched={switched || undefined}>
       <div className="it-mcol plan">
@@ -303,7 +266,7 @@ function Machinery({ site, switched }: { site: Site; switched: boolean }) {
         <span className="kicker">Факт · журнал за сегодня</span>
         {CODES.map((c, i) => {
           const e = latest.get(c)
-          return <MRow key={c} code={c} k={i} on={planned(c) || !!e} miss={!!e} note={e ? `${e.kind === 'oop' ? 'не по этапу' : 'не замечен'} · ${hhmm(e.at)}` : 'без отклонений'} />
+          return <MRow key={c} code={c} k={i} on={planned(c) || !!e} miss={!!e} note={e ? `${e.kind === 'oop' ? 'не по этапу' : 'не замечен'} · ${hhmm(e.at)}` : 'нет события в доступном журнале'} />
         })}
       </div>
     </div>
@@ -436,7 +399,7 @@ function ObjectData({ site, feeds, switched }: { site: Site; feeds: Feed[]; swit
       </section>
       <section className="it-panel bl" style={{ '--k': 1 } as CSSProperties}>
         <span className="kicker">{stage ? `Этап ${stage.n} из ${stages.length}` : 'План работ'}</span>
-        <h3>{stage ? stage.name : stages.length ? 'Сегодня вне этапов плана' : 'План не загружен'}</h3>
+        <h3>{!site.planAvailable ? 'Вне области доступа' : stage ? stage.name : stages.length ? 'Сегодня вне этапов плана' : 'План не загружен'}</h3>
         {stage && (
           <>
             <div className="bar">
@@ -468,16 +431,16 @@ function ObjectData({ site, feeds, switched }: { site: Site; feeds: Feed[]; swit
             ))}
           </ul>
         ) : (
-          <p>Камеры не добавлены</p>
+          <p>{site.camerasAvailable ? 'Доступных камер нет' : 'Камеры вне текущего назначения'}</p>
         )}
       </section>
       <section className="it-panel br" style={{ '--k': 3 } as CSSProperties}>
         <span className="kicker">Ждут решения</span>
         <div className="big">
-          {waiting.length}
+          {site.eventsAvailable ? waiting.length : '—'}
           <small>{plural(waiting.length, 'событие', 'события', 'событий')}</small>
         </div>
-        <p>{waiting[0] ? waiting[0].title : 'Все события разобраны'}</p>
+        <p>{!site.eventsAvailable ? 'Дела вне текущего назначения' : waiting[0] ? waiting[0].title : 'В доступном журнале нет ожидающих решений'}</p>
       </section>
     </div>
   )
@@ -544,7 +507,7 @@ function DrawingSheet({ site, scene, subject, switched }: { site: Site | null; s
         <dt>Объект</dt>
         <dd>{site?.project?.name ?? '—'}</dd>
         <dt>Этап</dt>
-        <dd>{site?.stage?.name ?? (site?.stages.length ? 'вне этапов' : 'нет плана')}</dd>
+        <dd>{site?.stage?.name ?? (!site || !site.planAvailable ? '—' : site.stages.length ? 'вне этапов' : 'нет плана')}</dd>
         <dt>Показано</dt>
         <dd>{subject}</dd>
         <dt>Поворот</dt>
@@ -559,12 +522,14 @@ function DrawingSheet({ site, scene, subject, switched }: { site: Site | null; s
 }
 
 /** The chosen side. `switched` drops the entrance delay once someone picks a side by hand. */
-export function Sides({ side, user, scene, aim, subject, switched }: { side: Side; user: UserProfile; scene: WireScene | null; aim: RefObject<{ x: number; y: number }>; subject: string; switched: boolean }) {
-  const site = useSite(user)
-  const feeds = useFeeds(site?.project?.cameras)
+export function Sides({ side, context, scene, aim, subject, switched }: { side: Side; context: ContextDTO | null; scene: WireScene | null; aim: RefObject<{ x: number; y: number }>; subject: string; switched: boolean }) {
+  const { site, error } = useSite(context)
+  const feeds = useFeeds(site?.camerasAvailable ? site.project.cameras : undefined)
   if (side === 'site') return <SiteLayer key="site" aim={aim} switched={switched} />
   if (side === 'draw') return <DrawingSheet key="draw" site={site} scene={scene} subject={subject} switched={switched} />
+  if (error) return <div className="it-side"><section className="it-panel tl"><span className="kicker">Данные объекта недоступны</span><p>{error}</p></section></div>
   if (!site) return null
+  if ((side === 'mach' && !site.planAvailable) || (side === 'cams' && !site.camerasAvailable)) return <div className="it-side"><section className="it-panel tl"><span className="kicker">Область назначения</span><p>{side === 'mach' ? 'План работ вне текущей области доступа.' : 'Камеры вне текущей области доступа.'}</p></section></div>
   if (side === 'cams') return <Cams key="cams" feeds={feeds} switched={switched} />
   if (side === 'mach') return <Machinery key="mach" site={site} switched={switched} />
   return <ObjectData key="data" site={site} feeds={feeds} switched={switched} />

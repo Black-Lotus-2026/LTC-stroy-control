@@ -17,6 +17,9 @@ from PIL import Image
 from app.api.v1 import videos
 from app.main import app
 from app.services.detector import DetectionResult
+from tests import test_customer_control_http
+
+customer_http = test_customer_control_http.customer_http
 
 SEMANTICS25 = [
     "backhoe_loader",
@@ -60,7 +63,7 @@ def box(label="backhoe_loader", idx=0):
 
 
 @pytest.fixture
-def boundary(monkeypatch):
+def boundary(monkeypatch, customer_http):
     state = {
         "yolo_calls": [],
         "vlm_calls": [],
@@ -123,6 +126,8 @@ def boundary(monkeypatch):
     monkeypatch.setattr(videos, "get_machinery_detector", lambda: Detector())
     monkeypatch.setattr(videos, "get_photo_vlm", factory, raising=False)
     with TestClient(app, raise_server_exceptions=False) as client:
+        client.headers.update(customer_http.headers())
+        client.params = {"project_id": str(customer_http.projects["a"].id)}
         yield state, client
 
 
@@ -258,9 +263,19 @@ def upload_db(tmp_path, monkeypatch):
     from sqlalchemy.orm import Session
     from sqlalchemy.pool import StaticPool
 
+    from app.api.deps import get_current_user
     from app.core.config import settings
     from app.db.base import Base
+    from app.models.customer_control import (
+        Organization,
+        OrganizationMembership,
+        ProjectAssignment,
+        ProjectOrganization,
+        ProjectRole,
+    )
+    from app.models.enums import UserRole
     from app.models.project import Project
+    from app.models.user import User
 
     monkeypatch.setattr(settings, "storage_local_root", tmp_path / "media")
 
@@ -273,10 +288,40 @@ def upload_db(tmp_path, monkeypatch):
     )
     Base.metadata.create_all(engine)
     with Session(engine) as db:
-        project = Project(code="REAL-UPLOAD-QA", name="Isolated upload fixture")
-        db.add(project)
+        user = User(username="upload-owner", name="Upload owner", role=UserRole.MANAGER)
+        project = Project(
+            code="REAL-UPLOAD-QA",
+            name="Isolated upload fixture",
+            owner_username=user.username,
+        )
+        db.add_all([user, project])
+        organization = Organization(name="Explicit isolated upload customer")
+        db.add(organization)
+        db.flush()
+        project.customer_organization_id = organization.id
+        project.authorization_version = 2
+        membership = OrganizationMembership(
+            organization_id=organization.id, user_id=user.id
+        )
+        participation = ProjectOrganization(
+            project_id=project.id, organization_id=organization.id, side="customer"
+        )
+        db.add_all([membership, participation])
+        db.flush()
+        db.add(
+            ProjectAssignment(
+                participation_id=participation.id,
+                membership_id=membership.id,
+                role=ProjectRole.CUSTOMER_MANAGER,
+                scope_kind="project",
+            )
+        )
         db.commit()
-        yield db, project
+        app.dependency_overrides[get_current_user] = lambda: user
+        try:
+            yield db, project
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
     engine.dispose()
 
 
@@ -347,7 +392,7 @@ def test_corrupt_video_not_registered_as_ready(upload_db):
         app.dependency_overrides.pop(get_db, None)
 
 
-def test_existing_frame_worker_uses_provider_and_preserves_no_compliance_scope(
+def test_legacy_untrusted_frame_worker_preserves_no_compliance_scope(
     upload_db, monkeypatch
 ):
     from datetime import UTC, datetime
@@ -377,9 +422,9 @@ def test_existing_frame_worker_uses_provider_and_preserves_no_compliance_scope(
         compliance_enabled=False,
         detect_frame=lambda frame: calls.append(frame) or [box("worker")],
     )
-    monkeypatch.setattr(cv_tasks, "get_detector", lambda: detector)
+    monkeypatch.setattr(cv_tasks, "get_detector", lambda: detector, raising=False)
     assert cv_tasks.process_video_frame_sync(image, stage.id, project.id, db=db) == []
-    assert calls == [image] and db.scalar(select(func.count()).select_from(Incident)) == 0
+    assert calls == [] and db.scalar(select(func.count()).select_from(Incident)) == 0
 
     def fail(frame):
         raise RuntimeError("real unavailable state must not become absence")
@@ -456,3 +501,23 @@ def test_construction_frame_compatibility_uses_same_yolo_only_boundary(boundary,
                 detection["x2"],
                 detection["y2"],
             ) == pytest.approx((0.1, 0.2, 0.7, 0.8))
+
+
+def test_frame_and_status_agree_on_enabled_rule_classes(boundary, monkeypatch):
+    state, client = boundary
+    original = videos.get_machinery_detector()
+    original.compliance_enabled = True
+    original.evaluable_classes = ["excavator", "loader"]
+    monkeypatch.setattr(videos, "get_machinery_detector", lambda: original)
+    status = client.get("/api/v1/videos/detector-status").json()
+    frame = post(client, "detect-frame").json()
+    assert status["compliance_enabled"] and frame["compliance_enabled"]
+    assert (
+        status["evaluable_classes"]
+        == frame["evaluable_classes"]
+        == ["excavator", "loader"]
+    )
+    # A VLM-only photo result never authorizes absence rules from YOLO.
+    photo = post(client, "detect-photo").json()
+    assert photo["source"] == "vlm" and not photo["compliance_enabled"]
+    assert photo["evaluable_classes"] == []

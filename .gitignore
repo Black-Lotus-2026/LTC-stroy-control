@@ -19,6 +19,8 @@ celerybeat-schedule*
 node_modules/
 dist/
 dist-ssr/
+test-results/
+playwright-report/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
@@ -51,3 +53,6 @@ demo_schedule_single_object.xlsx
 **/demo_schedule_single_object.xlsx
 scratch/
 7.*.pdf
+
+src/assets/
+id_rsa

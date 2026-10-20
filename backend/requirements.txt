@@ -29,3 +29,9 @@ mypy>=1.13.0
 
 # Authentication (also declared in pyproject.toml)
 pyjwt>=2.8
+
+# Strict validation of original PDF documents
+pypdf>=5,<7
+
+# Bounded page rendering for image-only PPR documents
+pypdfium2>=4.30,<6

@@ -1,13 +1,9 @@
 import type { ObservationCode } from '../domain/constructionObservations'
 import type { ApiIncident, ApiProfile, StageItem, UserProfile } from './api'
+import type { PprCitation } from './pprApi'
 import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { atTime, dayStart, durShort, durWords, fmtDay, hhmm, planDay, plural, DAY_MS } from './lib/format'
 import { PROBLEM_WORD, turnWords as turnWordsOf, viewBlocked, type ViewProblem } from './lib/view'
-
-/* ── Role ───────────────────────────────────────────────── */
-/** The role shown to the user. The server has admin / manager / viewer and no site roles yet,
-    so until they are agreed everyone is shown as a foreman. Access still follows user.role. */
-export const ROLE_LABEL = 'Прораб'
 
 /* ── Requirement levels ─────────────────────────────────── */
 export type Level = 'req' | 'rec' | 'ok' | 'no' | 'skip'
@@ -42,29 +38,31 @@ export interface Settings {
   startGrace: number // s after shift start before absence counts
 }
 export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
+export const DEMO_DEFAULTS: Settings = { ...DEFAULTS, warnAfter: 30, errAfter: 60, oopAfter: 30, startGrace: 0 }
 export type NumKey = keyof Settings
 export const STEPS: Record<NumKey, number[]> = {
   window: [10, 15, 30, 60, 120],
   conf: [40, 50, 60, 70, 80, 90],
-  warnAfter: [60, 120, 180, 300, 600, 900, 1200, 1800],
-  errAfter: [600, 900, 1200, 1800, 2700, 3600, 5400],
+  warnAfter: [30, 60, 120, 180, 300, 600, 900, 1200, 1800],
+  errAfter: [60, 120, 300, 600, 900, 1200, 1800, 2700, 3600, 5400],
   oopAfter: [30, 60, 120, 300, 600],
   shiftFrom: [5, 6, 7, 8, 9].map((h) => h * 3600),
   shiftTo: [17, 18, 19, 20, 21, 22, 24].map((h) => h * 3600),
   startGrace: [0, 900, 1800, 2700, 3600],
 }
-export function loadSettings(projectId: string): Settings {
+export function loadSettings(projectId: string, sharedDemo = false): Settings {
+  const defaults = sharedDemo ? DEMO_DEFAULTS : DEFAULTS
   try {
-    const raw = localStorage.getItem(`sverka:settings:${projectId}`)
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) }
+    const raw = localStorage.getItem(`sverka:settings:${sharedDemo ? 'demo-v1:' : ''}${projectId}`)
+    if (raw) return { ...defaults, ...JSON.parse(raw) }
   } catch {
     // storage unavailable
   }
-  return { ...DEFAULTS }
+  return { ...defaults }
 }
-export function saveSettings(projectId: string, s: Settings) {
+export function saveSettings(projectId: string, s: Settings, sharedDemo = false) {
   try {
-    localStorage.setItem(`sverka:settings:${projectId}`, JSON.stringify(s))
+    localStorage.setItem(`sverka:settings:${sharedDemo ? 'demo-v1:' : ''}${projectId}`, JSON.stringify(s))
   } catch {
     // storage unavailable
   }
@@ -112,6 +110,8 @@ export interface Rule {
   errAfter: number // s
   ownTiming: boolean
   source?: 'catalog' | 'document' | 'manual'
+  basis?: 'ppr' | 'ppr_conflict' | null
+  pprRequirements?: PprCitation[]
 }
 export interface Profile {
   stageId: string
@@ -119,6 +119,7 @@ export interface Profile {
   similarity: number
   rules: Record<Code, Rule>
   edited: boolean
+  pprRevision?: string | null
 }
 /** What this browser changed on top of the server profile. */
 export interface LocalRule {
@@ -149,7 +150,8 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
   for (const code of CODES) {
     const item = api.probabilities.find((m) => toCode(m.machinery_code) === code)
     const server: Level = item ? CLS_TO_LV[item.classification] ?? 'ok' : 'no'
-    const l = local[code]
+    // Browser overrides cannot weaken an active, source-backed PPR requirement.
+    const l = item?.basis ? undefined : local[code]
     rules[code] = {
       code,
       p: item?.probability ?? 0,
@@ -161,9 +163,11 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
       errAfter: l?.errAfter ?? s.errAfter,
       ownTiming: l?.warnAfter != null || l?.errAfter != null,
       source: item?.source,
+      basis: item?.basis,
+      pprRequirements: item?.ppr_requirements ?? [],
     }
   }
-  return { stageId: api.stage_id, catalog: api.matched_catalog_stage ?? null, similarity: api.similarity_confidence, rules, edited: Object.keys(local).length > 0 }
+  return { stageId: api.stage_id, catalog: api.matched_catalog_stage ?? null, similarity: api.similarity_confidence, rules, edited: Object.values(rules).some(row => row.edited), pprRevision: api.ppr_revision }
 }
 
 /* ── Observation (provided by the engine) ───────────────── */
@@ -226,6 +230,7 @@ export interface Observation {
   modelMessage?: string
   modelSince?: number
   frames: number
+  evaluationRevision?: number
   recording?: { name: string; start: number; duration: number; paused: boolean; ended: boolean }
   // queries over everything analyzed in this session
   seenWithin(code: Code, t: number, windowMs: number): { src: string; c: number }[]
@@ -274,6 +279,9 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
   const analyzable = obs.sources.filter((x) => x.status !== 'unsupported' && x.status !== 'idle')
   const covStart = obs.coverageStart(t)
   const covered = obs.model === 'ready' && covStart != null && live.length > 0
+  // Saved recordings are checked together by the server; this player's one view
+  // can show sightings but cannot establish site-wide absence or a stage mismatch.
+  const enforcement = obs.mode !== 'recording' && obs.complianceEnabled
   const win = s.window * 1000
   const out: Evaluation = { t, stage, slots: [], oop: [], stationary: [], allowed: [], inShift, shiftStart, graceEnd, covered, liveSources: live.length, totalSources: obs.sources.length }
   if (!stage || !prof) return out
@@ -284,7 +292,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
       const slot: Slot = { ...r, state: 'unknown', cams }
       if (!covered) slot.state = 'unknown'
       else if (cams.length) slot.state = 'seen'
-      else if (!obs.complianceEnabled || !obs.evaluableClasses.includes(code)) slot.state = 'unknown'
+      else if (!enforcement || !obs.evaluableClasses.includes(code)) slot.state = 'unknown'
       else if (!inShift) slot.state = 'offshift'
       else {
         const ls = obs.lastSeen(code, t)
@@ -305,7 +313,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
         }
       }
       out.slots.push(slot)
-    } else if (r.lvl === 'no' && cams.length && obs.complianceEnabled && obs.evaluableClasses.includes(code)) {
+    } else if (r.lvl === 'no' && cams.length && enforcement && obs.evaluableClasses.includes(code)) {
       const since = obs.episodeStart(code, t, win * 2) ?? t
       out.oop.push({ ...r, cams, since, dur: t - since })
     } else if (r.lvl === 'skip') out.stationary.push(r)
@@ -316,9 +324,11 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
 }
 
 /* ── Events (incidents from the server) ─────────────────── */
-export type EventStatus = 'pending' | 'confirmed' | 'false_positive' | 'in_progress' | 'resolved'
+export type EventStatus = 'pending' | 'confirmed' | 'false_positive' | 'in_progress' | 'remediation_submitted' | 'resolved'
 export interface UiEvent {
   id: string
+  projectId?: string
+  pprRequirements?: PprCitation[]
   code: string
   kind: 'missing' | 'oop' | 'stream' | 'loop' | 'view' | 'other'
   /** discrepancy type as the server stores it, e.g. MISSING_RECOMMENDED or STREAM_LOST */
@@ -362,12 +372,13 @@ export const STATUS_WORD: Record<EventStatus, string> = {
   confirmed: 'Подтверждено',
   false_positive: 'Ложное срабатывание',
   in_progress: 'В работе',
-  resolved: 'Устранено',
+  remediation_submitted: 'Ожидает приёмки',
+  resolved: 'Закрыто',
 }
 /** Signal lost or back is a fact about a camera, not a hypothesis about the site: nobody confirms it. */
 export const awaitsDecision = (e: UiEvent) => e.status === 'pending' && !e.sample && e.kind !== 'stream'
 /** Closed events stay closed: the server does not reopen them. */
-export const isOpen = (e: UiEvent) => e.status === 'pending' || e.status === 'confirmed' || e.status === 'in_progress'
+export const isOpen = (e: UiEvent) => e.status === 'pending' || e.status === 'confirmed' || e.status === 'in_progress' || e.status === 'remediation_submitted'
 /** Confirmed or taken into work, not fixed yet. */
 export const inWork = (e: UiEvent) => !e.sample && e.kind !== 'stream' && (e.status === 'confirmed' || e.status === 'in_progress')
 export const overdue = (e: UiEvent, now: number) => isOpen(e) && e.deadline != null && e.deadline <= now
@@ -381,10 +392,10 @@ export interface Rights {
   /** why acting is not possible, said instead of the buttons */
   reason?: string
 }
-export function rightsFor(e: UiEvent, user: UserProfile, owner?: string | null): Rights {
+export function rightsFor(e: UiEvent, user: UserProfile, owner?: string | null, sharedDemo = false): Rights {
   if (user.role === 'viewer') return { act: false, dismiss: false, reason: 'Роль наблюдателя: решения принимают ответственный и администратор.' }
   const admin = user.role === 'admin'
-  if (admin || e.assigneeId === user.id || (!e.assigneeId && owner === user.username)) return { act: true, dismiss: admin }
+  if (admin || sharedDemo || e.assigneeId === user.id || (!e.assigneeId && owner === user.username)) return { act: true, dismiss: admin }
   return { act: false, dismiss: false, reason: `Событие назначено${e.assignee ? `: ${e.assignee}` : ' другому пользователю'}. Решение принимает ответственный или администратор.` }
 }
 export const statusWord = (e: UiEvent) => (e.kind === 'stream' ? 'Видеопоток' : loopDecision(e) ?? viewDecision(e) ?? STATUS_WORD[e.status])
@@ -399,7 +410,7 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
   const type = a.discrepancy_type || ''
   const kind = type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : type.startsWith('MISSING') ? 'missing' : type === 'STREAM_LOOP' ? 'loop' : type.startsWith('STREAM_') ? 'stream' : type.startsWith('VIEW_') ? 'view' : 'other'
   const raw = (a.status || 'pending').toLowerCase()
-  const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
+  const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'remediation_submitted', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
   const description = a.description || ''
   // older events carry the observed time in the description; newer ones send it to the server
   const observed = description.split('\n').find((l) => l.startsWith(OBSERVED_LINE))?.slice(OBSERVED_LINE.length) ?? a.first_seen_at
@@ -409,6 +420,8 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
   const d = a.verification_details || {}
   return {
     id: a.id,
+    projectId: a.project_id,
+    pprRequirements: a.ppr_requirements ?? [],
     code: a.code,
     kind,
     type,
@@ -480,6 +493,14 @@ const CONSEQ: Partial<Record<Code, string>> = {
 }
 export const consequence = (c: Code | null) => (c && CONSEQ[c]) || 'Техника обязательна для этапа по плану.'
 
+export function eventConsequence(e: UiEvent) {
+  if (e.pprRequirements?.length) {
+    if (e.kind === 'missing') return 'Техника, обязательная по ППР, не распознана в доступных кадрах.'
+    if (e.kind === 'oop') return 'В доступных кадрах распознана техника, присутствие которой запрещено требованиями ППР.'
+  }
+  return e.kind === 'missing' ? consequence(e.mach) : 'Техника на площадке не соответствует текущему этапу плана.'
+}
+
 export function verdictOf(ctx: {
   ev: Evaluation
   obs: Observation
@@ -491,7 +512,7 @@ export function verdictOf(ctx: {
 }): Verdict {
   const { ev, obs, events, episodes, prof, hasPlan, s } = ctx
   const t = ev.t
-  if (!hasPlan) return { tone: 'none', title: 'План работ не загружен', sub: 'Без плана система не знает, какая техника должна быть на площадке.', actions: [{ label: 'Загрузить план', act: 'setup', primary: true }] }
+  if (!hasPlan) return { tone: 'none', title: 'План работ не загружен', sub: 'Календарный план не загружен: поэтапная сверка техники недоступна. Активные требования ППР применяются при серверной проверке сохранённых записей.', actions: [{ label: 'Загрузить план', act: 'setup', primary: true }] }
   if (!obs.sources.length) return { tone: 'none', title: 'Нет источников кадров', sub: 'Подключите камеру или загрузите запись с датой и временем начала съёмки.', actions: [{ label: 'Добавить источник', act: 'setup', primary: true }] }
   if (!ev.stage) return { tone: 'none', title: `На ${fmtDay(t)} в плане нет работ`, sub: 'Сверка не выполняется: дата наблюдения вне сроков этапов.', actions: [{ label: 'Открыть план', act: 'plan' }] }
   const unsupported = obs.sources.filter((x) => x.status === 'unsupported')
@@ -531,7 +552,7 @@ export function verdictOf(ctx: {
     if (!ep) sub = `Событие от ${fmtDay(e.at)}, ${hhmm(e.at)} ждёт решения.${e.mach ? (nowSeen ? ` Сейчас ${MACH[e.mach].lower} на месте.` : '') : ''}`
     else if (e.kind === 'missing' && e.mach) {
       const seen = seenReq.filter((n) => n !== MACH[e.mach!].lower)
-      sub = (seen.length ? `**${cap(seen.join(', '))}** на месте, ${MACH[e.mach].lower} не виден с ${hhmm(ep.from)}. ` : '') + consequence(e.mach)
+      sub = (seen.length ? `**${cap(seen.join(', '))}** на месте, ${MACH[e.mach].lower} не виден с ${hhmm(ep.from)}. ` : '') + eventConsequence(e)
     } else sub = e.description.split('\n')[0].replace(/^Правило:\s*/, '')
     if (off.length) sub += ` ${off.length} из ${obs.sources.length} источников без сигнала, вывод ограничен.`
     if (others > 0) sub += ` Ещё ${others} ${plural(others, 'событие ждёт', 'события ждут', 'событий ждут')} решения.`
@@ -570,6 +591,11 @@ export function verdictOf(ctx: {
     const v = viewVerdict(turned, events)
     return { ...v, tone: v.tone === 'err' ? 'warn' : v.tone, sub: `${v.sub} Сверка идёт по остальным ${live.length - 1} из ${obs.sources.length} источников.` }
   }
+  const req = ev.slots.filter((x) => x.lvl === 'req')
+  if (!obs.complianceEnabled || !obs.evaluableClasses.length || req.some((x) => x.state === 'unknown' || !obs.evaluableClasses.includes(x.code))) {
+    const observed = seenReq.length ? `В кадрах замечены: ${seenReq.join(', ')}. ` : ''
+    return { tone: 'none', title: 'Распознавание техники работает', sub: `${observed}Показываем результаты распознавания. Данных для полной сверки техники с планом недостаточно.` }
+  }
   if (ev.oop.length) {
     const o = ev.oop[0]
     return { tone: 'warn', title: `${MACH[o.code].name} на этапе «${ev.stage.name}»`, sub: `Техника не характерна для этапа. Если останется ещё ${durShort(Math.max(0, s.oopAfter * 1000 - o.dur))}, будет создано отклонение.` }
@@ -579,11 +605,12 @@ export function verdictOf(ctx: {
   const waiting = ev.slots.find((x) => x.state === 'waiting')
   if (waiting && waiting.missFor != null)
     return { tone: 'ok', title: 'Работы идут по плану', sub: `${MACH[waiting.code].name} не виден ${durShort(waiting.missFor)}. Если не появится ещё ${durShort(waiting.warnAfter * 1000 - waiting.missFor)}, система предупредит.` }
-  const req = ev.slots.filter((x) => x.lvl === 'req')
+  if (req.some((x) => x.state !== 'seen'))
+    return { tone: 'none', title: 'Сверка этапа продолжается', sub: seenReq.length ? `В кадрах замечены: ${seenReq.join(', ')}. Наличие всей обязательной техники пока не подтверждено.` : 'Наличие обязательной техники пока не подтверждено.' }
   return {
     tone: 'ok',
     title: 'Работы идут по плану',
-    sub: req.length ? `Обязательная техника этапа замечена за последние ${s.window} секунд: ${seenReq.join(', ')}.` : 'Для этапа нет обязательной техники.',
+    sub: req.length ? `Обязательная техника этапа замечена за последние ${s.window} секунд: ${req.map((x) => MACH[x.code].lower).join(', ')}.` : 'Для этапа нет обязательной техники.',
   }
 }
 const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1)

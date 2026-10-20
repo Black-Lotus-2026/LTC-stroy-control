@@ -9,20 +9,22 @@
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint src --max-warnings=0",
     "preview": "vite preview",
-    "test:ui": "node --test tests/*ui*.test.mjs"
+    "test:ui": "node --test tests/*ui*.test.mjs",
+    "test:browser": "playwright test"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.1.1",
-    "typescript": "^5.9.2",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "@fontsource-variable/inter": "^5.2.8",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
-    "@fontsource-variable/inter": "^5.2.8"
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^6.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
+    "@playwright/test": "^1.64.1",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^6.1.1",
     "globals": "^16.4.0",

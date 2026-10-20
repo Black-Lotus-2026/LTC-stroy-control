@@ -305,3 +305,66 @@ def test_all25_semantics_have_fixed_order_and_actual_dense_projection():
         assert row["xyxy"] == pytest.approx(
             [(1.5 + 2 * i) / 64, 30 / 64, (2.5 + 2 * i) / 64, 34 / 64]
         )
+
+
+def test_explicit_enforcement_uses_allowlist_without_claiming_quality(
+    constructor_fixture,
+):
+    path, _, _, _ = constructor_fixture
+    detector = production.TrainedConstructionDetector(
+        path, device="cpu", policy="enforce", approved_classes=["excavator", "loader"]
+    )
+    assert detector.compliance_enabled and not detector.quality_verified
+    assert detector.evaluable_classes == ["excavator", "loader"]
+    assert all(
+        detector.can_evaluate(n)
+        for n in [
+            "excavator",
+            "Экскаватор",
+            "MACHINERY_EXCAVATOR",
+            "Ковшовый погрузчик",
+            "Погрузчик",
+        ]
+    )
+    assert not any(
+        detector.can_evaluate(n) for n in ["grader", "worker", "truck", "tower_crane"]
+    )
+    rows = [
+        production.as_detection(
+            {"class": "loader", "xyxy": [0.1, 0.1, 0.2, 0.2], "confidence": 0.9}
+        )
+    ]
+    result = detector.evaluate_rules(
+        {
+            "excavator": 0.95,
+            "Экскаватор": 0.95,
+            "loader": 0.05,
+            "grader": 0.99,
+            "worker": 0.99,
+        },
+        rows,
+    )
+    assert len(result) == 2
+    assert {(r.machinery_name, r.discrepancy_type, r.observed_count) for r in result} == {
+        ("Экскаватор", "MISSING_MANDATORY", 0),
+        ("Погрузчик", "UNCHARACTERISTIC_PRESENT", 1),
+    }
+    detector.model = None
+    assert not detector.compliance_enabled and detector.evaluable_classes == []
+    assert detector.evaluate_rules({"excavator": 0.95}, []) == []
+
+
+def test_enforcement_does_not_enable_unsupported_or_unconfigured_classes(
+    constructor_fixture,
+):
+    path, _, _, _ = constructor_fixture
+    for bad in ["grader", "worker", "other_vehicle", "not_a_class"]:
+        with pytest.raises(ValueError):
+            production.TrainedConstructionDetector(
+                path, policy="enforce", approved_classes=[bad]
+            )
+    detector = production.TrainedConstructionDetector(
+        path, device="cpu", policy="enforce"
+    )
+    assert not detector.compliance_enabled
+    assert detector.evaluate_rules({"excavator": 0.99}, []) == []

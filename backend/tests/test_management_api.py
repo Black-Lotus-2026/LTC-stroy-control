@@ -42,12 +42,18 @@ from app.models import (
     WorkType,
     Zone,
 )
+from app.models.customer_control import (
+    ProjectAssignment,
+    ProjectDeadlinePolicy,
+    ProjectRole,
+)
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
-from app.services.alert_service import assign_initial_alert
+from app.services.alert_service import assign_initial_alert, request_verification
 from app.services.management.agents.provider import OpenRouterProvider
 from app.services.management.demo import AS_OF, make_demo_snapshot
 from app.services.management.orchestrator import execute_run
 from app.workers.management_tasks import analyze_management_run
+from tests.customer_control_testdata import customer_grant
 
 
 @compiles(JSONB, "sqlite")
@@ -90,6 +96,21 @@ def api(monkeypatch):
         ]
         db.add_all(projects)
         db.flush()
+        for index, project in enumerate(projects):
+            grant = customer_grant(db, project, owner if index < 2 else outsider)
+            db.add(
+                ProjectDeadlinePolicy(
+                    project_id=project.id,
+                    version=1,
+                    approved_by=grant.user.id,
+                    approved_assignment_id=grant.assignment.id,
+                    effective_from=AS_OF,
+                    reaction_minutes=60,
+                    remediation_minutes=120,
+                    review_minutes=180,
+                    reason="Explicit synthetic policy for isolated tests",
+                )
+            )
         zones, cameras, frames = [], [], []
         for index, project in enumerate(projects):
             zone = Zone(
@@ -369,7 +390,9 @@ def test_case_curve_and_case_card_show_the_saved_responsible_person(api):
         f"/api/v1/incidents/{saved['incident_id']}/inaction-cost"
     ).json()
     assert curve["responsible"] == api.owner.name
-    cases = api.client.get("/api/v1/incidents").json()
+    cases = api.client.get(
+        "/api/v1/incidents", params={"project_id": str(api.projects[0].id)}
+    ).json()
     card = next(case for case in cases if case["id"] == saved["incident_id"])
     assert card["assignee_name"] == api.owner.name
 
@@ -407,7 +430,10 @@ def test_auth_and_foreign_project_profile_run_trace_are_denied(api):
 
 
 def test_viewer_reads_owned_project_but_cannot_mutate(api):
-    api.current_user.role = UserRole.VIEWER
+    with api.factory() as db:
+        for assignment in db.scalars(select(ProjectAssignment)):
+            assignment.role = ProjectRole.PROJECT_VIEWER
+        db.commit()
     assert (
         api.client.get(
             f"/api/v1/projects/{api.projects[0].id}/management/demo"
@@ -584,73 +610,43 @@ def test_empty_evidence_remains_empty_and_requires_input(api):
     assert result["assessment"]["verdict"] == "insufficient_evidence"
 
 
-def test_incident_status_is_persisted_idempotent_and_visible_in_saved_card(api):
+def test_legacy_status_cannot_bypass_versioned_customer_workflow(api):
     saved = start(api)
     incident_id = saved["incident_id"]
     url = f"/api/v1/incidents/{incident_id}/status"
-    response = api.client.patch(url, json={"status": "confirmed"})
-    assert response.status_code == 200
-    assert response.json()["id"] == incident_id
-    assert response.json()["project_id"] == str(api.projects[0].id)
-    assert response.json()["status"] == "confirmed"
-    repeated = api.client.patch(url, json={"status": "confirmed"})
-    assert repeated.status_code == 200
-    assert (
-        api.client.get(f"/api/v1/management/runs/{saved['id']}").json()["incident"][
-            "status"
-        ]
-        == "confirmed"
-    )
+    for status in ("confirmed", "resolved", "typo-status"):
+        response = api.client.patch(url, json={"status": status})
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "WORKFLOW_UPGRADE_REQUIRED"
+    loaded = api.client.get(f"/api/v1/management/runs/{saved['id']}").json()
+    assert loaded["incident"]["status"] == "pending"
     with api.factory() as db:
-        assert db.scalar(select(func.count()).select_from(IncidentEvent)) == 1
+        assert db.scalar(select(func.count()).select_from(IncidentEvent)) == 0
     api.current_user = api.outsider
     assert api.client.patch(url, json={"status": "resolved"}).status_code == 404
     assert api.client.get(f"/api/v1/incidents/{incident_id}/album").status_code == 404
 
 
-def test_unknown_incident_status_cannot_silently_reset_confirmed_state(api):
-    saved = start(api)
-    url = f"/api/v1/incidents/{saved['incident_id']}/status"
-    assert api.client.patch(url, json={"status": "confirmed"}).status_code == 200
-    assert api.client.patch(url, json={"status": "typo-status"}).status_code == 422
-    assert (
-        api.client.get(f"/api/v1/management/runs/{saved['id']}").json()["incident"][
-            "status"
-        ]
-        == "confirmed"
-    )
-
-
-def test_incident_capture_time_dedup_and_unavailable_model(api):
+def test_browser_authored_detection_cannot_create_or_duplicate_a_server_case(api):
+    # Capture time/model success in a browser payload are not server provenance.
     body = {
         "project_id": str(api.projects[0].id),
         "zone_id": str(api.zones[0].id),
         "camera_id": str(api.cameras[0].id),
         "captured_at": (AS_OF - timedelta(minutes=4)).isoformat(),
-        "title": "Test observation",
+        "title": "Synthetic observation",
         "description": "Explicit isolated test",
         "machinery_type": "dump_truck",
         "model_status": "unavailable",
-        "observation_key": "one-observation",
+        "observation_key": "same-receipt",
     }
-    assert api.client.post("/api/v1/incidents", json=body).status_code == 422
-    body["model_status"] = "valid"
-    first_response = api.client.post("/api/v1/incidents", json=body)
-    assert first_response.status_code == 201, first_response.text
-    first = first_response.json()
-    repeated = api.client.post("/api/v1/incidents", json=body).json()
-    assert repeated["id"] == first["id"]
-    assert repeated["observed_count"] == 1
-    body["observation_key"] = "second-observation"
-    body["captured_at"] = (AS_OF - timedelta(minutes=2)).isoformat()
-    next_response = api.client.post("/api/v1/incidents", json=body).json()
-    assert next_response["id"] == first["id"]
-    assert next_response["observed_count"] == 2
+    for model_status in ("unavailable", "valid", "valid"):
+        body["model_status"] = model_status
+        response = api.client.post("/api/v1/incidents", json=body)
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "WORKFLOW_UPGRADE_REQUIRED"
     with api.factory() as db:
-        incident = db.get(Incident, UUID(first["id"]))
-        assert incident.first_seen_at.isoformat() == "2026-10-16T04:56:00"
-        assert incident.last_seen_at.isoformat() == "2026-10-16T04:58:00"
-        assert db.scalar(select(func.count()).select_from(Incident)) == 1
+        assert db.scalar(select(func.count()).select_from(Incident)) == 0
     api.current_user = api.outsider
     assert (
         api.client.get(f"/api/v1/incidents?project_id={api.projects[0].id}").status_code
@@ -914,7 +910,8 @@ def test_schedule_clear_is_scoped_and_viewer_cannot_write(api):
     )
     with api.factory() as db:
         viewer = db.get(User, api.owner.id)
-        viewer.role = UserRole.VIEWER
+        for assignment in db.scalars(select(ProjectAssignment)):
+            assignment.role = ProjectRole.PROJECT_VIEWER
         db.commit()
         api.current_user = viewer
     own_id = str(api.saved_tasks[0].id)
@@ -946,7 +943,9 @@ def test_merged_alert_verification_keeps_case_cost_and_notification_scope(api):
         project = db.get(Project, incident.project_id)
         assign_initial_alert(db, incident, project)
         db.commit()
-    inbox = api.client.get("/api/v1/alerts")
+    inbox = api.client.get(
+        "/api/v1/alerts", params={"project_id": str(api.projects[0].id)}
+    )
     assert inbox.status_code == 200
     alert = inbox.json()[0]
     assert alert["incident_id"] == incident_id
@@ -954,14 +953,23 @@ def test_merged_alert_verification_keeps_case_cost_and_notification_scope(api):
     response = api.client.patch(
         f"/api/v1/incidents/{incident_id}/status", json={"status": "resolved"}
     )
-    assert response.status_code == 200
-    assert response.json()["status"] != "resolved"
-    assert response.json()["verification_status"] == "requested"
+    assert response.status_code == 409
+    with api.factory() as db:
+        incident = db.get(Incident, UUID(incident_id))
+        request_verification(db, incident, db.get(User, api.owner.id))
+        db.commit()
+        assert incident.status.value != "resolved"
+        assert incident.verification_status == "queued"
     after = api.client.get(curve_url).json()
     assert after["points"] == before["points"]
     assert api.client.get(f"/api/v1/incidents/{incident_id}/events").status_code == 200
     assert api.client.patch(f"/api/v1/alerts/{alert['id']}/read").status_code == 200
     api.current_user = api.outsider
-    assert api.client.get("/api/v1/alerts").json() == []
+    assert (
+        api.client.get(
+            "/api/v1/alerts", params={"project_id": str(api.projects[0].id)}
+        ).status_code
+        == 404
+    )
     assert api.client.patch(f"/api/v1/alerts/{alert['id']}/read").status_code == 404
     assert api.client.get(f"/api/v1/incidents/{incident_id}/events").status_code == 404

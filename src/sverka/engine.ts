@@ -54,6 +54,7 @@ interface ViewRef {
   by?: string | null
   ref?: ViewFeatures
   failed?: boolean
+  loading?: boolean
   moveUntil?: number
   moveBy?: string | null
 }
@@ -74,10 +75,12 @@ export class Engine {
   mode: 'live' | 'recording' = 'live'
   model: 'unknown' | 'ready' | 'down' = 'unknown'
   complianceEnabled = false
+  inferenceEnabled = true
   evaluableClasses: Code[] = []
   modelMessage?: string
   modelSince?: number
   frames = 0
+  evaluationRevision = 0
   conf = 60
   windowMs = 30_000
   stageName?: string
@@ -120,12 +123,14 @@ export class Engine {
 
   /** A camera frame against the last half hour of the same camera: does it replay a recording? */
   private watchLoop(rt: Rt, el: CanvasImageSource, px: Uint8ClampedArray, at: number) {
+    const wasBlocked = !!rt.view.loop?.looped
     let det = this.loops.get(rt.view.id)
     if (!det) this.loops.set(rt.view.id, (det = new LoopDetector()))
     const t = this.thumb.getContext('2d')!
     t.drawImage(el, 0, 0, 320, 180)
     const s = det.push(at, loopGray(px), this.thumb.toDataURL('image/jpeg', 0.6))
     rt.view.loop = s.looped ? { looped: true, period: s.period, since: s.since, thenAt: s.then?.at, thenSnap: s.then?.snap, closeness: s.closeness } : undefined
+    if (wasBlocked !== !!rt.view.loop?.looped) this.resetEvaluationWindow()
   }
 
   /* camera views: the approved reference of each camera and agreed moves, as the server has them */
@@ -142,11 +147,13 @@ export class Engine {
         by: st.reference?.by,
         ref: old && old.url === url ? old.ref : undefined,
         failed: old && old.url === url ? old.failed : false,
+        loading: old && old.url === url ? old.loading : false,
         moveUntil: move ? new Date(move.until).getTime() : undefined,
         moveBy: move ? move.approved_by || move.by : undefined,
       }
       this.viewRefs.set(st.camera_id, next)
-      if (url && !next.ref && !next.failed && (!old || old.url !== url)) this.loadRef(st.camera_id, url)
+      // Polling retries a failed reference fetch; concurrent polls share the pending load.
+      if (url && !next.ref && !next.loading) this.loadRef(st.camera_id, url)
       if (old?.url !== url) this.viewTracks.delete(st.camera_id)
       if (st.match_ok) this.viewOk = st.match_ok
       if (st.match_bad) this.viewBad = st.match_bad
@@ -156,15 +163,21 @@ export class Engine {
     this.emit()
   }
   private async loadRef(id: string, url: string) {
+    const initial = this.viewRefs.get(id)
+    if (initial?.url === url) { initial.loading = true; initial.failed = false }
+    let bmp: ImageBitmap | undefined
     try {
-      const bmp = await api.viewImage(url)
+      bmp = await api.viewImage(url)
       const r = this.viewRefs.get(id)
       if (!r || r.url !== url) return
       r.ref = this.featuresOf(bmp, bmp.width, bmp.height)
-      bmp.close()
     } catch {
       const r = this.viewRefs.get(id)
       if (r && r.url === url) r.failed = true
+    } finally {
+      bmp?.close()
+      const r = this.viewRefs.get(id)
+      if (r && r.url === url) r.loading = false
     }
     const rt = this.rts.get(id)
     if (rt) this.showView(rt)
@@ -213,10 +226,13 @@ export class Engine {
   }
   private showView(rt: Rt) {
     if (rt.view.kind !== 'camera') return
+    const wasBlocked = viewBlocked(rt.view)
+    const previousReference = rt.view.view?.refUrl
     const r = this.viewRefs.get(rt.view.id)
     const tr = this.viewTracks.get(rt.view.id)
     if (!r) {
       rt.view.view = undefined
+      if (wasBlocked || previousReference) this.resetEvaluationWindow()
       return
     }
     const moving = r.moveUntil != null && r.moveUntil > Date.now()
@@ -237,6 +253,7 @@ export class Engine {
       moveUntil: moving ? r.moveUntil : undefined,
       moveBy: moving ? r.moveBy : undefined,
     }
+    if (wasBlocked !== viewBlocked(rt.view) || previousReference !== rt.view.view.refUrl) this.resetEvaluationWindow()
   }
 
   /* lifecycle (idempotent, StrictMode-safe) */
@@ -255,6 +272,7 @@ export class Engine {
     }
   }
   stop() {
+    this.generation++
     clearInterval(this.timer)
     clearInterval(this.statusTimer)
     this.timer = 0
@@ -277,6 +295,8 @@ export class Engine {
   dispose() {
     this.stop()
     this.reset()
+    clearTimeout(this.emitPending)
+    this.emitPending = 0
     this.pool?.remove()
     this.pool = null
   }
@@ -325,16 +345,10 @@ export class Engine {
   }
   private addCamera(c: CameraItem, n: number) {
     const url = (c.stream_url || '').trim()
-    const protocol: SourceView['protocol'] = /^https?:\/\//i.test(url) ? 'http' : /^rtsp:\/\//i.test(url) ? 'rtsp' : 'other'
+    const protocol: SourceView['protocol'] = 'http'
     const view: SourceView = { id: c.id, n, name: c.name, kind: 'camera', url, protocol, status: 'connecting', since: Date.now(), dets: [] }
     const rt: Rt = { view, el: null, inFlight: false, lastCapture: 0, lastAnalyzed: 0, fails: 0, same: 0, hash: 0, retryAt: 0 }
-    if (protocol === 'rtsp') {
-      view.status = 'unsupported'
-      view.message = 'RTSP не воспроизводится в браузере. Нужен шлюз в MJPEG/HLS или серверный сбор кадров.'
-    } else if (protocol === 'other') {
-      view.status = 'unsupported'
-      view.message = url ? 'Неизвестный тип адреса потока.' : 'У камеры не указан адрес потока.'
-    } else {
+    {
       // frames are fetched one at a time through the server; the stream is never held open
       const img = new Image()
       img.decoding = 'async'
@@ -373,28 +387,33 @@ export class Engine {
 
   /* recording mode: the observation clock follows the video */
   startRecording(file: File, start: number) {
+    this.startRecordingUrl(URL.createObjectURL(file), file.name, start)
+  }
+  /** Stream a saved recording directly; its original clock drives the existing analysis. */
+  startRecordingUrl(url: string, name: string, start: number, options?: { credentials?: boolean; onPlaybackError?: () => void; onPlaybackReady?: () => void }) {
     this.safetySession = Math.random().toString(36).slice(2)
     this.generation++
     this.stopRecording(false)
     for (const id of [...this.rts.keys()]) this.removeSource(id)
     this.clearSession()
-    const url = URL.createObjectURL(file)
     const el = document.createElement('video')
+    el.crossOrigin = options?.credentials ? 'use-credentials' : 'anonymous'
     el.src = url
     el.muted = true
     el.playsInline = true
     el.preload = 'auto'
     el.className = 'f-media'
-    this.rec = { name: file.name, start, url, el, duration: 0, ended: false }
+    this.rec = { name, start, url, el, duration: 0, ended: false }
     this.mode = 'recording'
-    const view: SourceView = { id: 'recording', n: 1, name: file.name, kind: 'video', protocol: 'file', status: 'connecting', since: Date.now(), dets: [] }
+    const view: SourceView = { id: 'recording', n: 1, name, url, kind: 'video', protocol: 'file', status: 'connecting', since: Date.now(), dets: [] }
     const rt: Rt = { view, el, inFlight: false, lastCapture: 0, lastAnalyzed: 0, fails: 0, same: 0, hash: 0, retryAt: 0 }
     el.onloadeddata = () => {
+      options?.onPlaybackReady?.()
       if (this.rec) this.rec.duration = el.duration * 1000
       this.setStatus(rt, 'live')
       el.play().catch(() => this.emit())
     }
-    el.onerror = () => this.setStatus(rt, 'offline', 'Браузер не может воспроизвести этот файл.')
+    el.onerror = () => { this.setStatus(rt, 'offline', 'Запись временно недоступна для воспроизведения.'); options?.onPlaybackError?.() }
     el.onended = () => {
       if (this.rec) this.rec.ended = true
       this.emit()
@@ -408,12 +427,19 @@ export class Engine {
     this.pool?.appendChild(el)
     this.emit()
   }
+  refreshRecordingSession() {
+    const element = this.rec?.el
+    if (!element) return
+    const position = element.currentTime; const paused = element.paused
+    element.addEventListener('loadedmetadata', () => { element.currentTime = position; if (!paused) void element.play().catch(() => this.emit()) }, { once: true })
+    element.load()
+  }
   stopRecording(resume = true) {
     if (!this.rec) return
     this.rec.el.pause()
     this.rec.el.removeAttribute('src')
     this.rec.el.load()
-    URL.revokeObjectURL(this.rec.url)
+    if (this.rec.url.startsWith('blob:')) URL.revokeObjectURL(this.rec.url)
     this.removeSource('recording')
     this.rec = null
     this.mode = 'live'
@@ -449,6 +475,15 @@ export class Engine {
     this.frames = 0
   }
 
+  /** New PPR rules must never borrow coverage or sightings from before their activation. */
+  resetEvaluationWindow() {
+    this.generation++
+    this.evaluationRevision++
+    this.clearSession()
+    // Publish the cleared observation before React receives the new rule profile.
+    for (const listener of this.listeners) listener()
+  }
+
   /* loop */
   private tick() {
     const wall = Date.now()
@@ -475,15 +510,21 @@ export class Engine {
 
   /** Camera: take one frame from the stream through the server proxy, show it, analyse it. */
   private async pullFrame(rt: Rt) {
+    const generation = this.generation
     rt.inFlight = true
     rt.lastCapture = Date.now()
     try {
-      const frame = await api.grabFrame(rt.view.url!)
+      const frame = await api.grabFrame(rt.view.id)
       rt.inFlight = false
-      this.capture(rt, frame)
-      frame.removeAttribute('src') // closes the stream connection
+      try {
+        if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+        this.capture(rt, frame)
+      } finally {
+        frame.removeAttribute('src') // closes the stream connection, including a discarded frame
+      }
     } catch (e) {
       rt.inFlight = false
+      if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
       rt.fails++
       if (rt.fails >= OFFLINE_AFTER_FAILS || rt.view.status !== 'live') {
         this.setStatus(rt, 'offline', e instanceof Error ? e.message : 'Камера не отдала кадр.')
@@ -550,7 +591,7 @@ export class Engine {
       this.showView(rt)
     }
     // a camera that replays a recording, looks away or is being moved says nothing about the site
-    if (rt.view.loop?.looped || viewBlocked(rt.view)) {
+    if (!this.inferenceEnabled || rt.view.loop?.looped || viewBlocked(rt.view)) {
       rt.view.dets = []
       rt.lastAnalyzed = Date.now()
       this.emit()
@@ -559,14 +600,14 @@ export class Engine {
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {
-        if (!blob || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
+        if (!blob || !this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
           rt.inFlight = false
           return
         }
         api
           .detectFrame(blob, this.stageName, safety)
           .then((res) => {
-            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             if (!res.model_ready) {
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
@@ -588,7 +629,7 @@ export class Engine {
             this.addCoverage(at)
           })
           .catch((e: unknown) => {
-            if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             const msg = e instanceof Error ? e.message : 'сервис не ответил'
             rt.view.dets = []
             this.setModel('down', msg)
@@ -628,12 +669,15 @@ export class Engine {
   }
 
   private async pollStatus() {
+    const generation = this.generation
     try {
       const s = await api.detectorStatus()
+      if (generation !== this.generation) return
       this.setCompliance(s)
       if (!s.ready) this.setModel('down', s.message || 'модель не загружена')
       else if (this.model !== 'ready') this.setModel('ready')
     } catch (e) {
+      if (generation !== this.generation) return
       this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил')
     }
   }
@@ -688,14 +732,15 @@ export class Engine {
   }
 
   liveSnapshots() {
-    return [...this.rts.values()].filter((r) => r.view.status === 'live' && r.view.snapshot).map((r) => ({ name: r.view.name, snapshot: r.view.snapshot!, id: r.view.id }))
+    return [...this.rts.values()].filter((r) => r.view.status === 'live' && !r.view.loop?.looped && !viewBlocked(r.view) && r.view.snapshot).map((r) => ({ name: r.view.name, snapshot: r.view.snapshot!, id: r.view.id }))
   }
 
   snapshot(): Observation {
     const rec = this.rec
     const sources = [...this.rts.values()].map((r) => ({ ...r.view, dets: [...r.view.dets] })).sort((a, b) => a.n - b.n)
-    const dets = this.dets
-    const cov = this.cov.map((x) => [...x] as [number, number])
+    const healthy = new Set(sources.filter(source => source.status === 'live' && !source.loop?.looped && !viewBlocked(source)).map(source => source.id))
+    const dets = new Map([...this.dets].map(([code, sightings]) => [code, sightings.filter(sighting => healthy.has(sighting.src))]))
+    const cov = healthy.size ? this.cov.map((x) => [...x] as [number, number]) : []
     const lastIdx = (arr: Sight[], t: number) => this.lastIndexAtOrBefore(arr, t)
     const windowMs = this.windowMs
     const gap = this.coverGap()
@@ -709,6 +754,7 @@ export class Engine {
       modelMessage: this.modelMessage,
       modelSince: this.modelSince,
       frames: this.frames,
+      evaluationRevision: this.evaluationRevision,
       recording: rec ? { name: rec.name, start: rec.start, duration: rec.duration, paused: rec.el.paused, ended: rec.ended } : undefined,
       seenWithin: (code, t, win) => {
         const arr = dets.get(code)

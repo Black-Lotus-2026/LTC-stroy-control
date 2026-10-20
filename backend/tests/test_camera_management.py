@@ -11,8 +11,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.v1.projects import delete_camera, update_camera
 from app.db.base import Base
+from app.models.enums import UserRole
 from app.models.project import Camera, Project, Zone
+from app.models.user import User
 from app.schemas.stroy_control import CameraUpdate
+from tests.customer_control_fixtures import customer
 
 
 @compiles(JSONB, "sqlite")
@@ -25,6 +28,12 @@ def sqlite_session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine)()
+    admin = User(
+        username="camera-admin", name="Explicit synthetic manager", role=UserRole.ADMIN
+    )
+    session.add(admin)
+    session.commit()
+    session.info["admin"] = admin
     try:
         yield session
     finally:
@@ -46,6 +55,7 @@ def test_update_camera_and_remove_zone(sqlite_session: Session) -> None:
         stream_url="http://old/video",
     )
     sqlite_session.add(camera)
+    customer(sqlite_session, project, sqlite_session.info["admin"])
     sqlite_session.commit()
 
     result = update_camera(
@@ -57,10 +67,11 @@ def test_update_camera_and_remove_zone(sqlite_session: Session) -> None:
             zone_id=None,
         ),
         sqlite_session,
+        sqlite_session.info["admin"],
     )
 
     assert result.name == "Камера котлована"
-    assert result.stream_url == "https://192.168.1.106:8080/video"
+    assert result.stream_url == f"/api/v1/videos/proxy-stream?camera_id={camera.id}"
     assert result.zone_id is None
 
 
@@ -73,6 +84,8 @@ def test_camera_cannot_be_changed_or_deleted_through_another_project(
     sqlite_session.flush()
     camera = Camera(project_id=owner.id, code="CAM-02", name="Камера")
     sqlite_session.add(camera)
+    customer(sqlite_session, owner, sqlite_session.info["admin"])
+    customer(sqlite_session, other, sqlite_session.info["admin"])
     sqlite_session.commit()
 
     with pytest.raises(HTTPException) as update_error:
@@ -81,11 +94,12 @@ def test_camera_cannot_be_changed_or_deleted_through_another_project(
             camera.id,
             CameraUpdate(name="Чужое изменение"),
             sqlite_session,
+            sqlite_session.info["admin"],
         )
     assert update_error.value.status_code == 404
 
     with pytest.raises(HTTPException) as delete_error:
-        delete_camera(other.id, camera.id, sqlite_session)
+        delete_camera(other.id, camera.id, sqlite_session, sqlite_session.info["admin"])
     assert delete_error.value.status_code == 404
     assert sqlite_session.get(Camera, camera.id) is not None
 
@@ -98,7 +112,9 @@ def test_delete_camera(sqlite_session: Session) -> None:
     sqlite_session.add(camera)
     sqlite_session.commit()
     camera_id = camera.id
-
-    delete_camera(project.id, camera_id, sqlite_session)
-
-    assert sqlite_session.get(Camera, camera_id) is None
+    customer(sqlite_session, project, sqlite_session.info["admin"])
+    sqlite_session.commit()
+    with pytest.raises(HTTPException) as protected:
+        delete_camera(project.id, camera_id, sqlite_session, sqlite_session.info["admin"])
+    assert protected.value.status_code == 409
+    assert sqlite_session.get(Camera, camera_id) is not None

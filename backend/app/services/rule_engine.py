@@ -2,8 +2,10 @@
 
 Evaluates detected machinery on video frames against active stage probability thresholds:
 - Tier 1: P > 0.8 -> MANDATORY. If absent -> status ERROR (MISSING_MANDATORY)
-- Tier 2: 0.6 <= P <= 0.8 -> RECOMMENDED. If absent -> status WARNING (MISSING_RECOMMENDED)
-- Tier 3: P < 0.15 -> PROHIBITED/UNCHARACTERISTIC. If present -> status ERROR (UNCHARACTERISTIC_PRESENT)
+- Tier 2: 0.6 <= P <= 0.8 -> RECOMMENDED. If absent -> WARNING
+  (MISSING_RECOMMENDED).
+- Tier 3: P < 0.15 -> PROHIBITED/UNCHARACTERISTIC. If present -> ERROR
+  (UNCHARACTERISTIC_PRESENT).
 - Tier 4: 0.15 <= P < 0.6 -> NEUTRAL. No violation.
 """
 
@@ -28,6 +30,8 @@ MACHINERY_NAME_RU_MAP: dict[str, str] = {
     "tower_crane": "Башенный кран",
     "grader": "Автогрейдер",
     "concrete_pump": "Бетононасос",
+    "pile_driving": "Сваебойная установка",
+    "crawler_crane": "Гусеничный кран",
     "aerial_lift": "Автогидроподъемник",
     "asphalt_paver": "Асфальтоукладчик",
     "MACHINERY_DUMP_TRUCK": "Самосвал",
@@ -42,6 +46,8 @@ MACHINERY_NAME_RU_MAP: dict[str, str] = {
     "MACHINERY_TOWER_CRANE": "Башенный кран",
     "MACHINERY_GRADER": "Автогрейдер",
     "MACHINERY_CONCRETE_PUMP": "Бетононасос",
+    "MACHINERY_PILE_DRIVING": "Сваебойная установка",
+    "MACHINERY_CRAWLER_CRANE": "Гусеничный кран",
     "MACHINERY_AERIAL_LIFT": "Автогидроподъемник",
     "MACHINERY_ASPHALT_PAVER": "Асфальтоукладчик",
 }
@@ -67,7 +73,8 @@ class RuleEvaluationResult:
     stage_probability: float
     observed_count: int
     severity: str  # "ERROR", "WARNING", "NEUTRAL"
-    discrepancy_type: str  # "MISSING_MANDATORY", "MISSING_RECOMMENDED", "UNCHARACTERISTIC_PRESENT", "NEUTRAL_INFO"
+    # MISSING_MANDATORY, MISSING_RECOMMENDED, UNCHARACTERISTIC_PRESENT, NEUTRAL_INFO
+    discrepancy_type: str
     is_violation: bool
     description: str
 
@@ -99,7 +106,10 @@ class RuleEngine:
         probabilities: dict[str, float],
         unified_detected_classes: set[str],
     ) -> list[RuleEvaluationResult]:
-        """Evaluate a unified set of detected machinery across all connected cameras against stage probabilities."""
+        (
+            "Evaluate a unified set of detected machinery across all connected "
+            "cameras against stage probabilities."
+        )
         detected_counts = {cls_name: 1 for cls_name in unified_detected_classes}
         return self.evaluate_stage_machinery(probabilities, detected_counts)
 
@@ -123,7 +133,13 @@ class RuleEngine:
                     severity="ERROR",
                     discrepancy_type="MISSING_MANDATORY",
                     is_violation=True,
-                    description=f"Отсутствует обязательная техника «{machinery_name}» (вероятность этапа P={p:.2f} > 0.80).",
+                    description=(
+                        "Отсутствует обязательная техника «"
+                        f"{machinery_name}"
+                        "» (вероятность этапа P="
+                        f"{p:.2f}"
+                        " > 0.80)."
+                    ),
                 )
             return RuleEvaluationResult(
                 machinery_name=machinery_name,
@@ -132,7 +148,13 @@ class RuleEngine:
                 severity="NEUTRAL",
                 discrepancy_type="NEUTRAL_INFO",
                 is_violation=False,
-                description=f"Обязательная техника «{machinery_name}» зафиксирована на площадке в количестве {observed_count} ед.",
+                description=(
+                    "Обязательная техника «"
+                    f"{machinery_name}"
+                    "» зафиксирована на площадке в количестве "
+                    f"{observed_count}"
+                    " ед."
+                ),
             )
 
         # Tier 2: Recommended
@@ -145,7 +167,13 @@ class RuleEngine:
                     severity="WARNING",
                     discrepancy_type="MISSING_RECOMMENDED",
                     is_violation=True,
-                    description=f"Отсутствует рекомендованная техника «{machinery_name}» (вероятность этапа P={p:.2f}).",
+                    description=(
+                        "Отсутствует рекомендованная техника «"
+                        f"{machinery_name}"
+                        "» (вероятность этапа P="
+                        f"{p:.2f}"
+                        ")."
+                    ),
                 )
             return RuleEvaluationResult(
                 machinery_name=machinery_name,
@@ -154,7 +182,11 @@ class RuleEngine:
                 severity="NEUTRAL",
                 discrepancy_type="NEUTRAL_INFO",
                 is_violation=False,
-                description=f"Рекомендованная техника «{machinery_name}» присутствует на площадке.",
+                description=(
+                    "Рекомендованная техника «"
+                    f"{machinery_name}"
+                    "» присутствует на площадке."
+                ),
             )
 
         # Tier 3: Prohibited / Uncharacteristic
@@ -167,7 +199,13 @@ class RuleEngine:
                     severity="ERROR",
                     discrepancy_type="UNCHARACTERISTIC_PRESENT",
                     is_violation=True,
-                    description=f"Зафиксирована нехарактерная техника «{machinery_name}» (P={p:.2f} < 0.15). Нарушение регламента работ.",
+                    description=(
+                        "Зафиксирована нехарактерная техника «"
+                        f"{machinery_name}"
+                        "» (P="
+                        f"{p:.2f}"
+                        " < 0.15). Нарушение регламента работ."
+                    ),
                 )
             return RuleEvaluationResult(
                 machinery_name=machinery_name,
@@ -176,7 +214,11 @@ class RuleEngine:
                 severity="NEUTRAL",
                 discrepancy_type="NEUTRAL_INFO",
                 is_violation=False,
-                description=f"Нехарактерная техника «{machinery_name}» отсутствует на площадке.",
+                description=(
+                    "Нехарактерная техника «"
+                    f"{machinery_name}"
+                    "» отсутствует на площадке."
+                ),
             )
 
         # Tier 4: Neutral informational (0.15 <= P < 0.6)
@@ -187,5 +229,11 @@ class RuleEngine:
             severity="NEUTRAL",
             discrepancy_type="NEUTRAL_INFO",
             is_violation=False,
-            description=f"Вспомогательная техника «{machinery_name}» (P={p:.2f}): нейтральный статус.",
+            description=(
+                "Вспомогательная техника «"
+                f"{machinery_name}"
+                "» (P="
+                f"{p:.2f}"
+                "): нейтральный статус."
+            ),
         )

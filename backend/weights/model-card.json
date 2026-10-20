@@ -1,0 +1,44 @@
+{
+  "status": "preliminary; grouped control pending",
+  "architecture": "YOLOv8n",
+  "weights": "construction_machinery.pt",
+  "weights_sha256": "3a2fadfb75a38733f58ce88de7c8a7a2e0e0f2e55be83c48f9709e119ab39e70",
+  "initial_weights": "official COCO yolov8n.pt",
+  "trained_classes": [
+    "excavator",
+    "dump_truck",
+    "loader"
+  ],
+  "canonical_class_ids": {
+    "excavator": 0,
+    "dump_truck": 2,
+    "loader": 6
+  },
+  "unlearned_target_classes": [
+    "bulldozer",
+    "truck_crane",
+    "tower_crane",
+    "concrete_mixer",
+    "roller",
+    "grader",
+    "backhoe_loader",
+    "concrete_pump"
+  ],
+  "source_notebook": "https://www.kaggle.com/code/isaevsemyon/ltc-yolov8n-machinery-weather-pilot",
+  "source_version": 2,
+  "split": "original public split; known source-video overlap",
+  "integration": "verified CPU inference for all 3 class mappings; default path resolves this file",
+  "real_weather_validation": "not established; synthetic diagnostic only",
+  "report": "docs/yolo-training-run.md",
+  "photo_diagnostic_96_images": {
+    "baseline_mAP50": 0.1524817232542982,
+    "finetuned_mAP50": 0.884448307928641,
+    "scope": "96 test photographs without explicit video filename; camera/site independence unknown"
+  },
+  "pending_control": {
+    "notebook_version": 4,
+    "status": "QUEUED",
+    "source_groups_disjoint": true,
+    "installed": false
+  }
+}

@@ -11,9 +11,10 @@ proposals, never automatic subclass labels or machine counts.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 EQUIPMENT17 = {
     "dump_truck": "dump_truck",
@@ -100,10 +101,16 @@ CAVEATS = {
         "coarse loader source; do not infer or exclude a separate backhoe subtype"
     ],
     ("mocs13", "static_crane"): [
-        "presence_only: source may box mast and jib separately; boxes are not machine counts"
+        (
+            "presence_only: source may box mast and jib separately; boxes are not "
+            "machine counts"
+        )
     ],
     ("mocs13", "crane"): [
-        "broad_mobile_crane: truck/crawler subtype unresolved; source label conflicts may exist"
+        (
+            "broad_mobile_crane: truck/crawler subtype unresolved; source label "
+            "conflicts may exist"
+        )
     ],
     ("mocs13", "pump_truck"): [
         "presence_only: source can box boom or delivery hose without visible pump vehicle"
@@ -213,7 +220,10 @@ def overlap_proposals(detections: list[Detection], threshold: float) -> list[dic
                         "iou": overlap,
                         "action": "retain_both_pending_review",
                         "automatic_collapse": False,
-                        "caveat": "IoU alone does not prove same object; source extents and calibration differ",
+                        "caveat": (
+                            "IoU alone does not prove same object; source extents "
+                            "and calibration differ"
+                        ),
                     }
                 )
     return proposals
@@ -257,13 +267,17 @@ class ConstructionEnsemble:
             model = model_factory(str(weights))
             names = (
                 dict(enumerate(model.names))
-                if isinstance(model.names, (list, tuple))
+                if isinstance(model.names, list | tuple)
                 else {int(k): v for k, v in model.names.items()}
             )
             expected = set(MAPPINGS[expert])
             if set(names.values()) != expected or len(names) != len(expected):
                 raise ValueError(
-                    f"{expert} checkpoint taxonomy mismatch: expected exact {sorted(expected)}, got {names}"
+                    f"{expert}"
+                    " checkpoint taxonomy mismatch: expected exact "
+                    f"{sorted(expected)}"
+                    ", got "
+                    f"{names}"
                 )
             self.models[expert], self.names[expert] = model, names
 
@@ -293,7 +307,8 @@ class ConstructionEnsemble:
             source = np.ascontiguousarray(frame[:, :, ::-1])
         else:
             raise TypeError(
-                "Supply a PIL image or numpy uint8 RGB frame; disk frame paths are not accepted"
+                "Supply a PIL image or numpy uint8 RGB frame; disk frame paths "
+                "are not accepted"
             )
         if width <= 0 or height <= 0 or not 0 <= confidence <= 1 or imgsz <= 0:
             raise ValueError("Invalid frame dimensions, confidence or imgsz")
@@ -325,7 +340,7 @@ class ConstructionEnsemble:
             if not len(coords) == len(scores) == len(classes):
                 raise ValueError("Model box tensors have inconsistent lengths")
             for ordinal, (xyxy, score, class_id) in enumerate(
-                zip(coords, scores, classes)
+                zip(coords, scores, classes, strict=False)
             ):
                 score, numeric_id = float(score), float(class_id)
                 if not math.isfinite(numeric_id) or not numeric_id.is_integer():
@@ -409,11 +424,19 @@ def mapping_manifest() -> dict:
             ]
             for expert, mapping in MAPPINGS.items()
         },
-        "nms_policy": "identical semantic class only; retain raw_detections and suppression provenance",
-        "parent_narrow_policy": "IoU review proposals only; retain both, never automatic narrowing",
+        "nms_policy": (
+            "identical semantic class only; retain raw_detections and suppression "
+            "provenance"
+        ),
+        "parent_narrow_policy": (
+            "IoU review proposals only; retain both, never automatic narrowing"
+        ),
         "confidence_policy": "uncalibrated expert scores, not fused probabilities",
         "unsupported_canonical_classes": ["backhoe_loader", "crawler_crane"],
-        "machine_count_warning": "MOCS tower_crane/concrete_pump boxes can be components, not complete machines",
+        "machine_count_warning": (
+            "MOCS tower_crane/concrete_pump boxes can be components, not complete "
+            "machines"
+        ),
     }
 
 
@@ -440,6 +463,7 @@ def validate_partial24_decoder(
         )
     if decoder != expected:
         raise ValueError(
-            "partial24 decoder mismatch: coarse labels must retain their original semantics"
+            "partial24 decoder mismatch: coarse labels must retain their "
+            "original semantics"
         )
     return {name: decoder[name] for name in names}

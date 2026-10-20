@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Annotated
 
@@ -14,9 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import CurrentUser, DbSession
 from app.api.v1.videos import _detect_uploaded_image
-from app.core.config import settings
-from app.models.enums import UserRole
-from app.models.project import Camera, Project
+from app.models.project import Camera
 from app.models.safety import (
     SafetyDocument,
     SafetyEvent,
@@ -28,6 +26,8 @@ from app.models.safety import (
 )
 from app.models.user import User
 from app.schemas.safety import ReviewInput, ZoneInput
+from app.services.access_policy import resolve_context
+from app.services.legacy_access import require_full_project_read
 from app.services.safety_catalog import catalog
 from app.services.trained_detector import decode_image
 from app.services.trained_taxonomy import SEMANTIC_NAMES
@@ -42,36 +42,17 @@ TITLES = {
 
 
 def project_access(db, project_id, user, *, manage=False):
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "Объект не найден")
-    owner = bool(project.owner_username and project.owner_username == user.username)
-    admin = user.role == UserRole.ADMIN
-    # No implicit cross-project access for managers; unowned projects are private.
-    assigned = db.scalar(
-        select(SafetyZone.id)
-        .where(
-            SafetyZone.project_id == project_id,
-            SafetyZone.responsible_user_id == user.id,
-            SafetyZone.enabled.is_(True),
-        )
-        .limit(1)
+    return (
+        resolve_context(
+            db, project_id, user, permission="camera.configure", write=True, lock=True
+        ).project
+        if manage
+        else require_full_project_read(db, project_id, user).project
     )
-    if not (admin or owner or (assigned and not manage)):
-        raise HTTPException(403, "Нет доступа к безопасности этого объекта")
-    return project
 
 
 def event_access(db, event, user):
-    """An old assignment grants access to that event only, never project ingestion."""
-    try:
-        return project_access(db, event.project_id, user)
-    except HTTPException as exc:
-        if exc.status_code != 403 or event.snapshot["zone"]["responsible_user_id"] != str(
-            user.id
-        ):
-            raise
-        return db.get(Project, event.project_id)
+    return project_access(db, event.project_id, user)
 
 
 def zone_dict(zone):
@@ -96,15 +77,8 @@ def zone_dict(zone):
 
 
 def can_review(event, user, project):
-    responsible = event.snapshot["zone"]["responsible_user_id"]
-    return event.status == "candidate" and (
-        user.role == UserRole.ADMIN
-        or project.owner_username == user.username
-        or (
-            str(user.id) == responsible
-            and user.role in {UserRole.MANAGER, UserRole.INSPECTOR}
-        )
-    )
+    # The canonical Incident owns review and acceptance; this adapter is read-only.
+    return False
 
 
 def event_dict(event, user, project):
@@ -123,7 +97,19 @@ def event_dict(event, user, project):
         evidence_sha256=event.evidence_sha256,
         evidence_url=f"/api/v1/safety/events/{event.id}/evidence",
         created_at=event.created_at,
-        snapshot=event.snapshot,
+        snapshot={
+            **event.snapshot,
+            "ppr_requirements": [
+                {
+                    **citation,
+                    "source_url": (
+                        f"/api/v1/safety/events/{event.id}/ppr-sources/"
+                        f"{citation['requirement_id']}"
+                    ),
+                }
+                for citation in event.snapshot.get("ppr_requirements", [])
+            ],
+        },
         reviewed_by=event.reviewed_by,
         reviewed_at=event.reviewed_at,
         review_comment=event.review_comment,
@@ -138,28 +124,40 @@ def get_catalog(db: DbSession, user: CurrentUser):
 
 @router.get("/projects/{project_id}/configuration")
 def configuration(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
-    project = project_access(db, project_id, user)
-    can_manage = user.role == UserRole.ADMIN or project.owner_username == user.username
-    users = (
-        db.scalars(
-            select(User).where(
-                User.is_active.is_(True),
-                User.role.in_([UserRole.ADMIN, UserRole.MANAGER, UserRole.INSPECTOR]),
-            )
-        ).all()
-        if can_manage
-        else [user]
+    ctx = resolve_context(db, project_id, user, permission="camera.configure")
+    from app.models.customer_control import (
+        OrganizationMembership,
+        ProjectAssignment,
+        ProjectOrganization,
     )
-    # Project owner can always be the responsible, regardless of their default role.
-    if can_manage and user not in users:
-        users.append(user)
+
+    users = db.scalars(
+        select(User)
+        .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+        .join(
+            ProjectAssignment,
+            ProjectAssignment.membership_id == OrganizationMembership.id,
+        )
+        .join(
+            ProjectOrganization,
+            ProjectOrganization.id == ProjectAssignment.participation_id,
+        )
+        .where(
+            ProjectOrganization.project_id == project_id,
+            ProjectOrganization.status == "active",
+            ProjectAssignment.status == "active",
+            OrganizationMembership.status == "active",
+            User.is_active.is_(True),
+        )
+        .distinct()
+    )
     return dict(
-        can_manage=can_manage,
+        can_manage=not ctx.is_demo,
         cameras=[
             dict(id=c.id, name=c.name)
             for c in db.scalars(select(Camera).where(Camera.project_id == project_id))
         ],
-        responsibles=[dict(id=u.id, name=u.name, role=u.role) for u in users],
+        responsibles=[dict(id=u.id, name=u.name, role="assigned") for u in users],
     )
 
 
@@ -180,16 +178,36 @@ def validate_assignment(db, project, data, user):
     camera = db.get(Camera, data.camera_id)
     if not camera or camera.project_id != project.id:
         raise HTTPException(422, "Камера должна принадлежать объекту")
-    responsible = db.get(User, data.responsible_user_id)
-    if (
-        not responsible
-        or not responsible.is_active
-        or not (
-            responsible.role in {UserRole.ADMIN, UserRole.MANAGER, UserRole.INSPECTOR}
-            or responsible.username == project.owner_username
+    from app.models.customer_control import (
+        OrganizationMembership,
+        ProjectAssignment,
+        ProjectOrganization,
+    )
+
+    assigned = db.scalar(
+        select(ProjectAssignment.id)
+        .join(
+            OrganizationMembership,
+            OrganizationMembership.id == ProjectAssignment.membership_id,
         )
-    ):
-        raise HTTPException(422, "Выберите действующего ответственного")
+        .join(
+            ProjectOrganization,
+            ProjectOrganization.id == ProjectAssignment.participation_id,
+        )
+        .join(User, User.id == OrganizationMembership.user_id)
+        .where(
+            ProjectOrganization.project_id == project.id,
+            ProjectOrganization.status == "active",
+            ProjectAssignment.status == "active",
+            OrganizationMembership.status == "active",
+            User.is_active.is_(True),
+            User.id == data.responsible_user_id,
+        )
+    )
+    if assigned is None:
+        raise HTTPException(
+            422, "Ответственный должен иметь действующее назначение на объект"
+        )
 
 
 @router.post("/projects/{project_id}/zones", status_code=201)
@@ -200,6 +218,8 @@ def create_zone(project_id: uuid.UUID, data: ZoneInput, db: DbSession, user: Cur
         project_id=project_id, created_by=user.id, **data.model_dump(mode="python")
     )
     db.add(zone)
+    db.flush()
+    _approve_zone_policy(db, zone, user)
     db.commit()
     db.refresh(zone)
     return zone_dict(zone)
@@ -215,6 +235,7 @@ def edit_zone(zone_id: uuid.UUID, data: ZoneInput, db: DbSession, user: CurrentU
     for key, value in data.model_dump(mode="python").items():
         setattr(zone, key, value)
     zone.revision += 1
+    _approve_zone_policy(db, zone, user)
     db.execute(delete(SafetyTrack).where(SafetyTrack.zone_id == zone.id))
     db.execute(delete(SafetyFrameReceipt).where(SafetyFrameReceipt.zone_id == zone.id))
     db.commit()
@@ -230,6 +251,7 @@ def remove_zone(zone_id: uuid.UUID, db: DbSession, user: CurrentUser):
     # Soft deletion preserves evidence and attribution.
     zone.enabled = False
     zone.revision += 1
+    _approve_zone_policy(db, zone, user)
     db.execute(delete(SafetyTrack).where(SafetyTrack.zone_id == zone.id))
     db.commit()
     return Response(status_code=204)
@@ -278,33 +300,19 @@ def evidence(event_id: uuid.UUID, db: DbSession, user: CurrentUser, kind: str = 
 
 @router.post("/events/{event_id}/review")
 def review(event_id: uuid.UUID, data: ReviewInput, db: DbSession, user: CurrentUser):
-    event = db.scalar(
-        select(SafetyEvent).where(SafetyEvent.id == event_id).with_for_update()
+    event = db.get(SafetyEvent, event_id)
+    if event is None:
+        raise HTTPException(404, detail={"code": "RESOURCE_NOT_FOUND"})
+    resolve_context(
+        db, event.project_id, user, permission="incident.confirm", write=True, lock=True
     )
-    if not event:
-        raise HTTPException(404, "Событие не найдено")
-    project = event_access(db, event, user)
-    responsible = event.snapshot["zone"]["responsible_user_id"]
-    if not (
-        user.role == UserRole.ADMIN
-        or project.owner_username == user.username
-        or (
-            str(user.id) == responsible
-            and user.role in {UserRole.MANAGER, UserRole.INSPECTOR}
-        )
-    ):
-        raise HTTPException(
-            403, "Подтверждение доступно ответственному или владельцу объекта"
-        )
-    if event.status != "candidate":
-        raise HTTPException(409, "Решение уже принято; запись аудита неизменяема")
-    event.status = data.decision
-    event.reviewed_by = user.id
-    event.reviewed_at = datetime.now(UTC)
-    event.review_comment = data.comment
-    db.commit()
-    db.refresh(event)
-    return event_dict(event, user, project)
+    raise HTTPException(
+        409,
+        detail={
+            "code": "WORKFLOW_UPGRADE_REQUIRED",
+            "message": "Решение по безопасности принимается в связанном деле",
+        },
+    )
 
 
 def inside(point, polygon):
@@ -408,7 +416,20 @@ def evaluate(
     model_sha,
     uploaded_by=None,
     recording_mode=False,
+    observed_at=None,
 ):
+    from app.services.observation_basis import approved_safety_policy, writable_project
+
+    if not writable_project(db, zone.project_id):
+        return None, "project_read_only"
+    policy_event = approved_safety_policy(db, zone)
+    if not policy_event:
+        return None, "policy_not_approved"
+    observed_at = observed_at or datetime.now(UTC)
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    if policy_event.occurred_at.replace(tzinfo=UTC) > observed_at:
+        return None, "policy_not_effective_at_capture"
     receipt = db.scalar(
         select(SafetyFrameReceipt.id).where(
             SafetyFrameReceipt.zone_id == zone.id,
@@ -426,7 +447,14 @@ def evaluate(
     if not track:
         track = SafetyTrack(zone_id=zone.id, source_id=source, state={})
         db.add(track)
+    from app.services.ppr_rules import resolve_ppr_rules
+
+    ppr_rules, ppr_revision = resolve_ppr_rules(
+        db, zone.project_id, observed_at=observed_at
+    )
     state = dict(track.state)
+    if state.get("ppr_revision", "") != ppr_revision:
+        state = {}
     if state and position <= state["last"]:
         return None, "out_of_order"
     db.add(
@@ -448,6 +476,7 @@ def evaluate(
     # Continuity is heuristic, not identity tracking or a metre-distance measurement.
     if not matching or gap > 15000 or "first" not in state:
         state = {
+            "ppr_revision": ppr_revision,
             "first": position,
             "count": 0,
             "box": boxes[0],
@@ -475,6 +504,13 @@ def evaluate(
         ):
             document = db.get(SafetyDocument, r.document_id)
             requirements.append({**r.data, "document": document.data})
+        matched_class = state["box"].get("raw_label")
+        ppr_rule = ppr_rules.get(matched_class, {})
+        ppr_citations = (
+            ppr_rule.get("citations", [])
+            if ppr_rule.get("probability") == 0 and not ppr_rule.get("conflict")
+            else []
+        )
         event = SafetyEvent(
             project_id=zone.project_id,
             camera_id=zone.camera_id,
@@ -488,12 +524,20 @@ def evaluate(
             evidence_jpeg=jpeg,
             first_evidence_jpeg=track.first_jpeg or jpeg,
             snapshot=dict(
+                capture_schema_version=1,
+                observed_from=(
+                    observed_at - timedelta(milliseconds=position - state["first"])
+                ).isoformat(),
+                observed_until=observed_at.isoformat(),
+                policy_event_id=str(policy_event.id),
+                policy_sha256=policy_event.reason,
                 zone=z,
                 detections=detections,
                 matched_detection=state["box"],
                 first_matched_detection=state["first_box"],
                 first_detections=state["first_detections"],
                 requirements=requirements,
+                ppr_requirements=ppr_citations,
                 sanctions=[s.data for s in db.scalars(select(SafetySanction))],
                 first_evidence_sha256=hashlib.sha256(
                     track.first_jpeg or jpeg
@@ -514,6 +558,15 @@ def evaluate(
         )
         db.add(event)
         db.flush()
+        from app.services.observation_basis import link_safety_incident
+
+        link_safety_incident(
+            db,
+            event,
+            observed_from=observed_at - timedelta(milliseconds=position - state["first"]),
+            observed_until=observed_at,
+            policy_event=policy_event,
+        )
         state["event_id"] = str(event.id)
     track.state = state
     return event, "candidate" if event else "observing"
@@ -530,16 +583,65 @@ async def analyze_frame(
     position_ms: int = Form(..., ge=0, le=4102444800000),
     recording_mode: bool = Form(False),
 ):
-    project = project_access(db, project_id, user)
+    project = resolve_context(
+        db, project_id, user, permission="video.analyze", write=True, lock=True
+    ).project
     source_id = source_id.strip()
     if not source_id:
         raise HTTPException(422, "Нужен идентификатор источника")
     camera = db.get(Camera, camera_id)
     if not camera or camera.project_id != project_id:
         raise HTTPException(422, "Камера не принадлежит объекту")
-    raw = await file.read(settings.max_image_upload_bytes + 1)
-    if len(raw) > settings.max_image_upload_bytes:
-        raise HTTPException(413, "Изображение превышает допустимый размер")
+    require_full_project_read(db, project_id, user)
+    observed_at = datetime.now(UTC)
+    if recording_mode:
+        from app.models import VideoAsset
+        from app.services.access_policy import resource_visible
+
+        try:
+            video_id = uuid.UUID(source_id.removeprefix("video:"))
+        except ValueError:
+            raise HTTPException(422, "Источник записи должен быть video:UUID") from None
+        asset = db.get(VideoAsset, video_id)
+        ctx = resolve_context(db, project_id, user, permission="video.read")
+        if (
+            not asset
+            or asset.project_id != project_id
+            or asset.camera_id != camera.id
+            or not resource_visible(db, ctx, "video", asset.id)
+        ):
+            raise HTTPException(404, detail={"code": "RESOURCE_NOT_FOUND"})
+        if not 0 <= position_ms < asset.duration_seconds * 1000:
+            raise HTTPException(422, "Позиция за пределами записи")
+        raw = await run_in_threadpool(_recording_source_frame, asset, position_ms)
+        observed_at = asset.start_timestamp.replace(tzinfo=UTC) + timedelta(
+            milliseconds=position_ms
+        )
+        source_id = f"video:{asset.id}"
+    else:
+        from app.services.camera_view import capture_frame
+
+        raw = await run_in_threadpool(capture_frame, camera)
+        source_id = f"camera:{camera.id}"
+        position_ms = int(observed_at.timestamp() * 1000)
+    if raw is None:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "INSUFFICIENT_OBSERVATION",
+                "message": "Серверный кадр источника недоступен",
+            },
+        )
+    from app.services.observation_basis import camera_frame_quality
+
+    if not camera_frame_quality(db, camera.id, observed_at, raw):
+        raise HTTPException(
+            409,
+            detail={
+                "code": "INSUFFICIENT_OBSERVATION",
+                "message": "Ракурс, перенос или повтор записи не позволяют проверку зоны",
+            },
+        )
     # Reuse sole YOLO endpoint logic. Never VLM; no user JSON boxes accepted.
     result = await _detect_uploaded_image(
         UploadFile(BytesIO(raw), filename="frame.jpg"), None, photo=False
@@ -576,6 +678,7 @@ async def analyze_frame(
             result.model_sha256 or "unavailable",
             user.id,
             recording_mode,
+            observed_at=observed_at,
         )
         if event:
             made.append(event)
@@ -590,3 +693,37 @@ async def analyze_frame(
             recording_mode=recording_mode,
         ),
     }
+
+
+def _approve_zone_policy(db, zone, user):
+    from app.services.incident_workflow import audit
+    from app.services.observation_basis import digest, safety_policy_payload
+
+    ctx = resolve_context(
+        db, zone.project_id, user, permission="camera.configure", write=True, lock=True
+    )
+    db.flush()
+    audit(db, ctx, "safety.policy.approved", zone.id, digest(safety_policy_payload(zone)))
+
+
+def _recording_source_frame(asset, position_ms):
+    import cv2
+
+    from app.api.v1.videos import _video_path
+
+    capture = cv2.VideoCapture(str(_video_path(asset)))
+    try:
+        capture.set(cv2.CAP_PROP_POS_MSEC, position_ms)
+        success, frame = capture.read()
+        if not success or frame is None:
+            return None
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        actual = (
+            (capture.get(cv2.CAP_PROP_POS_FRAMES) - 1) / fps * 1000 if fps > 0 else -1
+        )
+        if abs(actual - position_ms) > 1000:
+            return None
+        success, encoded = cv2.imencode(".jpg", frame)
+        return encoded.tobytes() if success else None
+    finally:
+        capture.release()

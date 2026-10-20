@@ -1,0 +1,30 @@
+.myvms-demo { grid-column: 1 / -1; width: 100%; min-width: 0; padding: 20px; }
+.myvms-heading, .myvms-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+.myvms-heading h2 { margin: 8px 0; font-size: 24px; }
+.myvms-heading p, .myvms-caption, .myvms-analysis p { color: var(--fg-3); font-size: 13px; line-height: 1.5; }
+.myvms-controls { justify-content: flex-start; gap: 12px; }
+.myvms-controls [role=group] { display: flex; gap: 6px; }
+.myvms-controls [aria-pressed=true] { outline: 1px solid currentColor; }
+.myvms-controls [role=status] { font-size: 13px; color: var(--fg-3); }
+.myvms-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+.myvms-frame { position: relative; min-height: 240px; background: #101519; overflow: hidden; border-radius: 6px; }
+.myvms-frame > img { display: block; width: 100%; height: auto; }
+.myvms-frame[data-stale=true] > img { filter: saturate(.3) brightness(.7); }
+.myvms-frame > p { color: #e5e9e8; padding: 30px; }
+.myvms-boxes { position: absolute; inset: 0; pointer-events: none; }
+.myvms-box { position: absolute; border: 2px solid #b6ec8b; }
+.myvms-box > span { position: absolute; left: -2px; top: 0; padding: 3px 6px; color: #101519; background: #b6ec8b; font-size: 12px; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.myvms-frame-label { position: absolute; bottom: 8px; left: 8px; background: #101519d9; color: #fff; padding: 5px 9px; font-size: 12px; border-radius: 3px; }
+.myvms-video video { display: block; width: 100%; min-height: 240px; background: #101519; border-radius: 6px; }
+.myvms-analysis { padding: 18px; border: 1px solid var(--line, #8884); border-radius: 6px; }
+.myvms-analysis h3 { margin: 0 0 16px; font-size: 15px; }
+.myvms-analysis ul { list-style: none; padding: 0; margin: 0 0 20px; }
+.myvms-analysis li, .myvms-analysis dl > div { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; font-size: 13px; }
+.myvms-analysis dt { color: var(--fg-3); }
+.myvms-analysis dd { margin: 0; white-space: nowrap; }
+.myvms-notice { border-left: 3px solid var(--warn, #d39141); padding: 12px; background: #d3914110; font-size: 13px; line-height: 1.5; }
+.myvms-history { margin: 16px 0; font-size: 13px; }
+.myvms-history li { margin-top: 8px; }
+.myvms-history time { font-variant-numeric: tabular-nums; margin-right: 12px; }
+.myvms-entry { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 20px; }
+@media (max-width: 800px) { .myvms-layout { grid-template-columns: minmax(0, 1fr); } .myvms-demo { padding: 12px; } .myvms-box > span { font-size: 10px; } }

@@ -168,7 +168,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .ctx:hover { background: var(--surface); }
 .ctx:active { background: var(--surface-2); }
 .ctx small { font-size: 11px; color: var(--fg-3); line-height: 1.2; }
-.ctx span { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34ch; }
+.ctx span { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(100%, 34ch); }
 .ctx span::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 7px; border-right: 1.5px solid var(--fg-3); border-bottom: 1.5px solid var(--fg-3); transform: translateY(-3px) rotate(45deg); }
 .bar .slash { color: var(--fg-4); font-size: 18px; margin: 0 -2px; }
 .grow { flex: 1; }
@@ -897,7 +897,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
   .bar .slash, #ctxZone, .avatar span { display: none; }
   .time-pill .date, .time-pill b { display: none; }
   .time-pill { padding: 0 11px 0 10px; gap: 8px; }
-  .ctx span { max-width: 15ch; }
+  .ctx span { max-width: min(100%, 15ch); }
   .verdict { grid-template-columns: 36px minmax(0,1fr); padding-top: 14px; }
   .v-glyph, .v-glyph svg { width: 36px; height: 36px; }
   .v-title { font-size: 23px; }
@@ -935,6 +935,24 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
   .s-step .s-act { grid-column: 2; justify-content: flex-start; }
   .thresholds { grid-template-columns: repeat(2, 1fr); }
   .toast { bottom: calc(var(--dock-min) + 12px); max-width: calc(100vw - 32px); }
+}
+
+@media (max-width: 600px) {
+  .app { grid-template-rows: auto auto auto; }
+  .app > .bar {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) repeat(3, auto);
+    padding: 8px var(--gut);
+  }
+  .app > .bar > .brand { grid-column: 1; grid-row: 1; margin: 0; }
+  .app > .bar > .ctx { grid-column: 2; grid-row: 1; }
+  .app > .bar > .grow { display: none; }
+  .app > .bar > .tasks-btn { grid-column: 3; grid-row: 1; }
+  .app > .bar > .icon-btn:not(.tasks-btn) { grid-column: 4; grid-row: 1; }
+  .app > .bar > .avatar-btn { grid-column: 5; grid-row: 1; }
+  .app > .bar > .time-pill { grid-column: 1 / 4; grid-row: 2; justify-self: start; min-width: 0; padding: 0 8px; gap: 5px; }
+  .app > .bar > .safety-entry { grid-column: 4 / 6; grid-row: 2; }
+  .app > .bar .time-pill .exit { white-space: nowrap; font-size: 11px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

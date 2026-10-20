@@ -4,8 +4,10 @@ import { DocumentsPanel } from './Documents'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, DocumentSelection, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import { mediaUrl } from '../api'
+import { CameraViewImage } from './CameraViewImage'
 import type { NumKey, Observation, Settings as S, SourceView } from '../model'
-import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
+import { DEFAULTS, DEMO_DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
+import { isSharedDemoProject } from '../projectScope'
 import { atTime, clock, durShort, hhmmss, plural, toLocalInput } from '../lib/format'
 import { PROBLEM_WORD, turnWords } from '../lib/view'
 import { Spring, clamp } from '../lib/spring'
@@ -37,8 +39,11 @@ export interface ZoneDraft { name: string; code: string; description: string }
 export interface ViewActions {
   states: CameraViewState[]
   user: UserProfile
+  canApprove?: boolean
+  canPropose?: boolean
+  canRequestMove?: boolean
   submit: (cameraId: string, note?: string) => Promise<void>
-  approve: (cameraId: string) => Promise<void>
+  approve: (cameraId: string, sha256: string) => Promise<void>
   reject: (cameraId: string, note?: string) => Promise<void>
   requestMove: (cameraId: string, untilIso: string, reason: string) => Promise<void>
   approveMove: (cameraId: string) => Promise<void>
@@ -69,6 +74,9 @@ export function SettingsSheet({
   onRecordingCamera,
   onDocumentRulesChanged,
   onBeforeDocumentAnalysis,
+  allowedTabs,
+  canConfigure = false,
+  canUpload = false,
 }: {
   tab: SheetTab
   recordingCameraId: string
@@ -93,8 +101,11 @@ export function SettingsSheet({
   weather: Weather | null
   objectActions: ObjectActions
   views?: ViewActions | null
+  allowedTabs?: readonly SheetTab[]
+  canConfigure?: boolean
+  canUpload?: boolean
 }) {
-  const [tab, setTab] = useState<SheetTab>(initialTab)
+  const [tab, setTab] = useState<SheetTab>(allowedTabs && !allowedTabs.includes(initialTab) ? allowedTabs[0] ?? 'sources' : initialTab)
   const [safetyDirty, setSafetyDirty] = useState(false)
   const el = useRef<HTMLElement>(null)
   const scrim = useRef<HTMLDivElement>(null)
@@ -164,7 +175,8 @@ export function SettingsSheet({
     if (n.errAfter <= n.warnAfter) n.errAfter = STEPS.errAfter.find((v) => v > n.warnAfter) ?? n.errAfter
     onSettings(n)
   }
-  const row = (p: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean }) => <SetRow key={p.k} {...p} settings={settings} onStep={set} onSettings={onSettings} />
+  const defaults = isSharedDemoProject(project) ? DEMO_DEFAULTS : DEFAULTS
+  const row = (p: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean }) => <SetRow key={p.k} {...p} settings={settings} defaults={defaults} onStep={set} onSettings={onSettings} />
 
   return (
     <>
@@ -193,7 +205,7 @@ export function SettingsSheet({
               ['tasks', 'Задачи'],
               ['object', 'Объект'],
             ] as const
-          ).map(([k, v]) => (
+          ).filter(([k]) => !allowedTabs || allowedTabs.includes(k)).map(([k, v]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => { if (!safetyDirty || window.confirm('Есть несохранённые изменения зоны. Перейти без сохранения?')) { setSafetyDirty(false); setTab(k) } }}>
               {v}
             </button>
@@ -228,8 +240,8 @@ export function SettingsSheet({
             </>
           )}
           {tab === 'photo' && <PhotoInspection />}
-          {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} />}
-          {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} />}
+          {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} canConfigure={canConfigure} canUpload={canUpload} />}
+          {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} user={user} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
           {tab === 'shift' && (
             <>
@@ -246,7 +258,7 @@ export function SettingsSheet({
 
 const fmtVal = (k: NumKey, v: number) => (k === 'conf' ? `${v}%` : k === 'window' ? `${v} с` : k === 'shiftFrom' || k === 'shiftTo' ? clock(v) : durShort(v * 1000))
 
-function SetRow({ k, title, desc, where, locked = false, settings, onStep, onSettings }: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean; settings: S; onStep: (k: NumKey, d: number) => void; onSettings: (s: S) => void }) {
+function SetRow({ k, title, desc, where, locked = false, settings, defaults, onStep, onSettings }: { k: NumKey; title: string; desc: string; where?: string; locked?: boolean; settings: S; defaults: S; onStep: (k: NumKey, d: number) => void; onSettings: (s: S) => void }) {
   return (
     <div className="set-row">
       <div>
@@ -267,11 +279,11 @@ function SetRow({ k, title, desc, where, locked = false, settings, onStep, onSet
         </div>
       )}
       <div className="def">
-        По умолчанию: {fmtVal(k, DEFAULTS[k])}
-        {settings[k] !== DEFAULTS[k] && !locked && (
+        По умолчанию: {fmtVal(k, defaults[k])}
+        {settings[k] !== defaults[k] && !locked && (
           <>
             <span className="changed">изменено</span>
-            <button type="button" onClick={() => onSettings({ ...settings, [k]: DEFAULTS[k] })}>
+            <button type="button" onClick={() => onSettings({ ...settings, [k]: defaults[k] })}>
               Сбросить
             </button>
           </>
@@ -291,7 +303,7 @@ const STATUS_LINE: Record<string, string> = {
   idle: 'Пауза: открыта запись',
 }
 
-function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording, views }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null, code?: string) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null, code?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void; views: ViewActions | null }) {
+function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRecording, views, canConfigure, canUpload }: { obs: Observation; cameras: CameraItem[]; zones: ZoneItem[]; onAdd: (n: string, u: string, z?: string | null, code?: string) => Promise<void>; onUpdate: (id: string, n: string, u: string, z: string | null, code?: string) => Promise<void>; onDelete: (id: string) => Promise<void>; onCheck: Probe; onRecording: (f: File, start: number) => void; views: ViewActions | null; canConfigure: boolean; canUpload: boolean }) {
   const [form, setForm] = useState<null | 'camera' | 'recording'>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
@@ -319,7 +331,7 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
               <span className="kicker">Камера · изменение</span>
               <CameraForm
                 zones={zones}
-                initial={{ name: c.name, url: c.stream_url || '', zoneId: c.zone_id ?? null, code: c.code || '' }}
+                initial={{ name: c.name, url: '', zoneId: c.zone_id ?? null, code: c.code || '' }}
                 submitLabel="Сохранить"
                 onAdd={(n, u, z, code) => onUpdate(c.id, n, u, z ?? null, code).then(() => setEditing(null))}
                 onCheck={onCheck}
@@ -339,11 +351,11 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
                 {STATUS_LINE[st]}
                 {v?.message ? ` · ${v.message}` : ''}
               </small>
-              <small className="mono">{c.stream_url || 'адрес не указан'}</small>
+              <small>Подключение проверяется сервером; адрес и учётные данные защищены.</small>
               {zones.length > 0 && <small>Зона: {zone ? zone.name : 'не указана'}</small>}
               {checks[c.id] && <small>{checks[c.id]}</small>}
             </div>
-            <div className="row-actions">
+            {canConfigure && <div className="row-actions">
               {confirmDel === c.id ? (
                 <span className="confirm-row">
                   Удалить?
@@ -363,7 +375,7 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
                     onClick={async () => {
                       setChecks((x) => ({ ...x, [c.id]: 'Проверяем…' }))
                       try {
-                        const r = await onCheck(c.stream_url!)
+                        const r = await onCheck(c.id)
                         setChecks((x) => ({ ...x, [c.id]: r.message }))
                       } catch (e) {
                         setChecks((x) => ({ ...x, [c.id]: e instanceof Error ? e.message : 'Не удалось проверить' }))
@@ -380,7 +392,7 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
                   </button>
                 </>
               )}
-            </div>
+            </div>}
           </div>
           {views && obs.mode === 'live' && <ViewBlock camera={c} state={views.states.find((x) => x.camera_id === c.id)} live={v} a={views} />}
           </div>
@@ -399,12 +411,12 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
         <RecordingForm onSubmit={(f, s) => { onRecording(f, s); setForm(null) }} onCancel={() => setForm(null)} />
       ) : (
         <div className="form-actions">
-          <button type="button" className="btn small" onClick={() => setForm('camera')}>
+          {canConfigure && <button type="button" className="btn small" onClick={() => setForm('camera')}>
             Добавить камеру
-          </button>
-          <button type="button" className="btn small" onClick={() => setForm('recording')}>
+          </button>}
+          {canUpload && <button type="button" className="btn small" onClick={() => setForm('recording')}>
             Открыть запись
-          </button>
+          </button>}
         </div>
       )}
     </>
@@ -414,10 +426,10 @@ function Sources({ obs, cameras, zones, onAdd, onUpdate, onDelete, onCheck, onRe
 export function CameraForm({
   onAdd,
   onCancel,
-  onCheck,
+  onCheck: _onCheck,
   zones = [],
   initial,
-  submitLabel = 'Проверить и сохранить',
+  submitLabel = 'Сохранить камеру',
 }: {
   onAdd: (n: string, u: string, zoneId?: string | null, code?: string) => Promise<void>
   onCancel?: () => void
@@ -434,18 +446,13 @@ export function CameraForm({
   const rtsp = /^rtsp:\/\//i.test(url.trim())
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim() || !url.trim()) return
-    setState({ s: 'busy', msg: 'Проверяем связь…' })
+    if (!name.trim() || (!initial && !url.trim())) return
+    setState({ s: 'busy', msg: 'Сохраняем камеру…' })
     try {
       // the address did not change: nothing to check again
       if (initial && url.trim() === initial.url.trim()) {
         await onAdd(name.trim(), url.trim(), zoneId, code.trim())
         setState({ s: 'idle' })
-        return
-      }
-      const r = await onCheck(url.trim())
-      if (!r.ok) {
-        setState({ s: 'warn', msg: `${r.message}. Камеру можно сохранить, но кадров не будет, пока связь не появится.` })
         return
       }
       await onAdd(name.trim(), url.trim(), zoneId, code.trim())
@@ -469,7 +476,7 @@ export function CameraForm({
         </label>
         <label>
           Адрес потока
-          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://10.20.1.11/mjpeg" required />
+          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={initial ? "Оставьте пустым, чтобы сохранить подключение" : "https://camera.example/mjpeg"} required={!initial} />
         </label>
       </div>
       <div className="form-grid two-col">
@@ -548,7 +555,8 @@ export function RecordingForm({ onSubmit, onCancel }: { onSubmit: (f: File, star
 }
 
 /* ── Object: its card, the zones of the site, and deleting it ─────────────── */
-function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectItem; zones: ZoneItem[]; cameras: CameraItem[]; weather: Weather | null; a: ObjectActions }) {
+function ObjectPane({ project, zones, cameras, weather, a, user }: { project: ProjectItem; zones: ZoneItem[]; cameras: CameraItem[]; weather: Weather | null; a: ObjectActions; user: UserProfile }) {
+  const metadataLocked = user.role === 'viewer' || (isSharedDemoProject(project) && user.role !== 'admin')
   const init = { name: project.name, code: project.code || '', address: project.address || '', object_kind: project.object_kind || KINDS[0] }
   const [f, setF] = useState(init)
   const [st, setSt] = useState<{ s: 'idle' | 'saving' | 'saved' | 'error'; msg?: string }>({ s: 'idle' })
@@ -562,7 +570,7 @@ function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectI
   const kinds = KINDS.includes(f.object_kind) ? KINDS : [f.object_kind, ...KINDS]
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!f.name.trim() || !dirty) return
+    if (metadataLocked || !f.name.trim() || !dirty) return
     setSt({ s: 'saving' })
     try {
       await a.onUpdateProject(f)
@@ -575,7 +583,9 @@ function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectI
     <>
       <section className="obj-sec">
         <span className="kicker">Карточка объекта</span>
+        {metadataLocked && <p className="hint">Карточку и удаление общего демонстрационного объекта изменяет администратор. Для своего объекта создайте отдельный проект в меню объектов.</p>}
         <form onSubmit={save}>
+          <fieldset disabled={metadataLocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="form-grid two-col">
             <label style={{ gridColumn: '1 / -1' }}>
               Название
@@ -610,6 +620,7 @@ function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectI
             {st.s === 'saved' && !dirty && <span className="save-state" data-s="saved">Сохранено</span>}
             {st.s === 'error' && <span className="err-line">{st.msg}</span>}
           </div>
+          </fieldset>
         </form>
         {weather && <p className="hint">{weather.resolved_address ? `Погода в плане — для места «${weather.resolved_address}».` : weather.location_configured ? 'Погода: место по этому адресу не найдено, прогноза нет.' : 'Укажите адрес, и в плане появится прогноз погоды на неделю.'}</p>}
         <p className="hint">Тип объекта пока только подписывает объект: сервер не учитывает его, когда сопоставляет этапы плана со справочником.</p>
@@ -670,7 +681,7 @@ function ObjectPane({ project, zones, cameras, weather, a }: { project: ProjectI
 
       <section className="obj-sec danger-zone">
         <span className="kicker">Удаление объекта</span>
-        {!ask ? (
+        {metadataLocked ? <p className="hint">Общий демонстрационный объект сохраняется для всех пользователей; удалить его может администратор.</p> : !ask ? (
           <div className="obj-head">
             <p className="hint">Объект удаляется вместе с планом, камерами, зонами и журналом событий.</p>
             <button type="button" className="btn small danger" onClick={() => setAsk(true)}>
@@ -949,8 +960,8 @@ const ts = (v?: string | null) => (v ? new Date(v).getTime() : null)
 
 /** The camera's approved view, what it matches now, and who may change it: the administrator decides. */
 function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: CameraViewState; live?: SourceView; a: ViewActions }) {
-  const admin = a.user.role === 'admin'
-  const viewer = a.user.role === 'viewer'
+  const admin = a.canApprove === true
+  const viewer = a.canPropose !== true && a.canRequestMove !== true
   const [form, setForm] = useState<null | 'fix' | 'move'>(null)
   const [note, setNote] = useState('')
   const [until, setUntil] = useState(() => toLocalInput(new Date(Date.now() + 4 * 3600_000)))
@@ -991,7 +1002,7 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
       <div className="sv-shots">
         {ref ? (
           <figure>
-            <img src={mediaUrl(ref.url)} alt={`Утверждённый ракурс: ${camera.name}`} />
+            <CameraViewImage url={ref.url} alt={`Утверждённый ракурс: ${camera.name}`} />
             <figcaption>
               Утверждён {atTime(ts(ref.at) ?? now)}
               {ref.by ? ` · ${ref.by}` : ''}
@@ -1005,7 +1016,7 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
         )}
         {prop && (
           <figure className="prop">
-            <img src={mediaUrl(prop.url)} alt={`Предложенный ракурс: ${camera.name}`} />
+            <CameraViewImage url={prop.url} alt={`Предложенный ракурс: ${camera.name}`} />
             <figcaption>
               Предложен {atTime(ts(prop.at) ?? now)}
               {prop.by ? ` · ${prop.by}` : ''}
@@ -1019,7 +1030,7 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
           <span>Новый ракурс ждёт утверждения{admin ? '' : ' администратором'}.</span>
           {admin && (
             <span className="row-actions">
-              <button type="button" className="btn small primary" disabled={busy?.s === 'saving'} onClick={() => run(() => a.approve(camera.id))}>
+              <button type="button" className="btn small primary" disabled={busy?.s === 'saving' || !prop.sha256} onClick={() => { if (prop.sha256) void run(() => a.approve(camera.id, prop.sha256!)) }}>
                 Утвердить
               </button>
               <button type="button" className="btn small ghost" disabled={busy?.s === 'saving'} onClick={() => run(() => a.reject(camera.id))}>
@@ -1039,7 +1050,7 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
             </span>
           </span>
           <span className="row-actions">
-            {admin && move.status === 'requested' && (
+            {admin && a.canRequestMove && move.status === 'requested' && (
               <>
                 <button type="button" className="btn small primary" disabled={busy?.s === 'saving'} onClick={() => run(() => a.approveMove(camera.id))}>
                   Согласовать
@@ -1049,7 +1060,7 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
                 </button>
               </>
             )}
-            {(admin || mine(move.by_id)) && (
+            {a.canRequestMove && (admin || mine(move.by_id)) && (
               <button type="button" className="btn small ghost" disabled={busy?.s === 'saving'} onClick={() => run(() => a.cancelMove(camera.id))}>
                 Отменить перенос
               </button>
@@ -1061,14 +1072,14 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
         <div className="sv-form">
           <p className="hint">
             {admin
-              ? 'Текущий кадр станет утверждённым ракурсом. Открытые события о смещении этой камеры закроются как согласованные.'
-              : 'Текущий кадр уйдёт администратору. Пока он не утвердит, камера сверяется с прежним ракурсом.'}
+              ? 'Текущий кадр будет предложен как новая версия ракурса. Просмотрите его и утвердите отдельным решением.'
+              : 'Текущий кадр уйдёт управляющему заказчика. Пока он не утвердит, камера сверяется с прежним ракурсом.'}
           </p>
           {live?.snapshot && <img className="sv-now" src={live.snapshot} alt="Текущий кадр" />}
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder={admin ? 'Комментарий, необязательно' : 'Почему ракурс изменился'} maxLength={500} />
           <div className="form-actions">
             <button type="button" className="btn small primary" disabled={busy?.s === 'saving' || !live?.snapshot || (!admin && note.trim().length < 3)} onClick={() => run(() => a.submit(camera.id, note.trim() || undefined))}>
-              {admin ? 'Утвердить этот ракурс' : 'Отправить на утверждение'}
+              Отправить ракурс на утверждение
             </button>
             <button type="button" className="btn small ghost" onClick={() => setForm(null)}>
               Отмена
@@ -1101,9 +1112,9 @@ function ViewBlock({ camera, state, live, a }: { camera: CameraItem; state?: Cam
         !viewer && (
           <div className="form-actions">
             <button type="button" className="btn small" disabled={!live?.snapshot} onClick={() => { setNote(''); setForm('fix') }} title={live?.snapshot ? undefined : 'Нет текущего кадра'}>
-              {admin ? (ref ? 'Утвердить текущий ракурс' : 'Утвердить ракурс по текущему кадру') : 'Предложить текущий ракурс'}
+              Предложить текущий ракурс
             </button>
-            {!move && ref && (
+            {a.canRequestMove && !move && ref && (
               <button type="button" className="btn small ghost" onClick={() => { setNote(''); setForm('move') }}>
                 {admin ? 'Согласовать перенос' : 'Попросить перенос'}
               </button>

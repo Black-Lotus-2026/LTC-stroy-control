@@ -121,7 +121,7 @@ export function Queue({
           {fold === 'closed' && (
             <ul>
               {closed.slice(0, 30).map((e) => (
-                <DoneRow key={e.id} e={e} onOpen={onOpen} line={e.status === 'resolved' && e.check === 'passed' ? 'Устранено · подтвердили камеры' : STATUS_WORD[e.status]} />
+                <DoneRow key={e.id} e={e} onOpen={onOpen} line={STATUS_WORD[e.status]} />
               ))}
             </ul>
           )}

@@ -10,7 +10,7 @@ async function moduleUrl(path, replacements = {}) {
   for (const [from, to] of Object.entries(replacements)) code = code.replaceAll(`'${from}'`, `'${to}'`).replaceAll(`"${from}"`, `"${to}"`)
   return dataUrl(code)
 }
-const legacy = dataUrl('export const API_PREFIX="/api/v1"; export const API_BASE_URL=""; export const getStoredToken=()=>"safety-token"; export const setStoredToken=()=>{}')
+const legacy = dataUrl('export const API_PREFIX="/api/v1"; export const API_BASE_URL=""; export const getStoredToken=()=>"safety-token"; export const getAuthHeaders=()=>({Authorization:"Bearer safety-token"}); export const setStoredToken=()=>{}')
 const apiUrl = await moduleUrl('../src/sverka/api.ts', { '../api/stroyControlApi': legacy })
 const api = await import(apiUrl)
 const safety = await import(await moduleUrl('../src/sverka/safetyApi.ts', { '../api/stroyControlApi': legacy, './api': apiUrl }))

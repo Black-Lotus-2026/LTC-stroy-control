@@ -5,6 +5,7 @@ import type { CameraItem, UserProfile } from '../api'
 import type { Observation } from '../model'
 import * as safety from '../safetyApi'
 import type { Point, SafetyConfiguration, SafetyEvent, SafetyZone, ZoneInput } from '../safetyApi'
+import { PprCitations } from './PprSourceLink'
 import { OBSERVATION_LABELS, toObservationCode } from '../../domain/constructionObservations'
 
 const message = (e: unknown) => e instanceof Error ? e.message : 'Не удалось выполнить запрос'
@@ -69,7 +70,7 @@ export function SafetyPanel({ projectId, cameras, obs, recordingCameraId, onReco
         {zones.map(z => <article className="safety-card" key={z.id}><div className="safety-heading"><h4>{z.name}</h4><span className="safety-status">{z.enabled ? 'Включена' : 'Черновик / выключена'}</span></div><p>{safety.SAFETY_SCENARIOS[z.scenario]} · {cameras.find(c => c.id === z.camera_id)?.name ?? 'Камера недоступна'}</p><p className="hint">{z.site_basis || 'Основание не указано'} · наблюдение от {z.min_duration_seconds} с</p>{config.can_manage && <button className="btn small" onClick={() => setEditor(z)}>Настроить</button>}</article>)}
       </>}
     </>}
-    {!loading && page === 'events' && <>{event ? <SafetyCase key={event.id} event={event} config={config} onDirtyChange={setDirty} onBack={() => { if (leave()) { setDirty(false); setSelected(null) } }} onReview={async (decision, comment) => { const updated = await safety.reviewSafetyEvent(event.id, decision, comment); setEvents(old => old.map(e => e.id === updated.id ? updated : e)) }} /> : <>
+    {!loading && page === 'events' && <>{event ? <SafetyCase key={event.id} projectId={projectId} event={event} config={config} onDirtyChange={setDirty} onBack={() => { if (leave()) { setDirty(false); setSelected(null) } }} onReview={async (decision, comment) => { const updated = await safety.reviewSafetyEvent(event.id, decision, comment); setEvents(old => old.map(e => e.id === updated.id ? updated : e)) }} /> : <>
       {!events.length && <div className="safety-empty"><h4>Событий пока нет</h4><p>{enabled.length ? 'Здесь появятся повторные наблюдения в настроенных зонах. Проверьте, что камера передаёт кадры и анализ доступен.' : 'Добавьте зону контроля и включите её после проверки границ и основания.'}</p><button className="btn small" onClick={() => setPage('zones')}>К зонам контроля</button></div>}
       {events.map(e => <button className="safety-event" key={e.id} onClick={() => setSelected(e.id)}><span className="safety-status">{statusLabel[e.status]}</span><strong>{safety.SAFETY_SCENARIOS[e.scenario]}</strong><span>{e.zone_snapshot.name} · {cameras.find(c => c.id === e.camera_name)?.name ?? e.camera_name}</span><small>{stamp(e.first_seen)} · открыть доказательства →</small></button>)}
     </>}</>}
@@ -138,7 +139,7 @@ function NormRecords({ rows }: { rows: Record<string, unknown>[] }) {
     {typeof r.url === 'string' && /^https:\/\//.test(r.url) && <a href={r.url} target="_blank" rel="noreferrer">Открыть источник ↗</a>}</div>)}</>
 }
 
-function SafetyCase({ event, config, onBack, onReview, onDirtyChange }: { event: SafetyEvent; config: SafetyConfiguration | null; onBack: () => void; onReview: (decision: 'confirmed' | 'rejected', comment: string) => Promise<void>; onDirtyChange: (dirty: boolean) => void }) {
+function SafetyCase({ projectId, event, config, onBack, onReview, onDirtyChange }: { projectId: string; event: SafetyEvent; config: SafetyConfiguration | null; onBack: () => void; onReview: (decision: 'confirmed' | 'rejected', comment: string) => Promise<void>; onDirtyChange: (dirty: boolean) => void }) {
   const [kind, setKind] = useState<'first' | 'last'>('last')
   const [imageUrl, setImageUrl] = useState('')
   const [imageError, setImageError] = useState('')
@@ -165,6 +166,7 @@ function SafetyCase({ event, config, onBack, onReview, onDirtyChange }: { event:
     <h4>Наблюдение</h4><p>{event.candidate_reason}</p><p>Начало по источнику: {stamp(event.first_seen)}<br />Последний кадр по источнику: {stamp(event.last_seen)}<br />Зарегистрировано сервером: {stamp(event.created_at)}</p><p className="hint">Наблюдаемое время: {Math.max(0, Math.round((event.last_position_ms-event.first_position_ms)/1000))} с · кадров: {event.observations}. Это серия кадров, а не непрерывное доказательство нахождения одного объекта.</p>
     <ul>{event.detections.map((d,i) => { const code = toObservationCode(d.raw_label); return <li key={i}>{code ? OBSERVATION_LABELS[code] : d.raw_label} · оценка модели {Math.round(d.confidence*100)}%</li> })}</ul><p className="hint">Оценка модели не является вероятностью нарушения. Расстояния и свободную ширину прохода по рамке определить нельзя.</p><p className="hint">{event.limitations}</p>
     <h4>Условие правила</h4><p>{event.zone_snapshot.site_basis}</p><p className="hint">Сохранённая версия зоны · порог {event.zone_snapshot.min_duration_seconds} с · ответственный: {event.zone_snapshot.responsible_name ?? config?.responsibles.find(u => u.id === event.zone_snapshot.responsible_user_id)?.name ?? 'Указан в настройках события'}</p>
+    {!!event.pprRequirements?.length && <><h4>Основание ППР объекта</h4><PprCitations projectId={projectId} citations={event.pprRequirements} /></>}
     <h4>Нормативное основание</h4><NormRecords rows={event.norm_snapshot} />
     <h4>Возможная ответственность</h4><p className="hint">Сумма не начислена. Нужны проверка применимости нормы и установление состава правонарушения. Решение принимает уполномоченный орган.</p><NormRecords rows={event.sanction_snapshot} />
     <details><summary>Данные доказательства</summary><p className="safety-hash">Модель SHA256: {event.model_sha256}</p><p className="safety-hash">Первый кадр SHA256: {event.first_evidence_sha256}</p><p className="safety-hash">Последний кадр SHA256: {event.evidence_sha256}</p><p className="safety-hash">Событие: {event.id} · источник: {event.source_id}</p><p>Алгоритм: {event.algorithm_version}. В карточке сохранены версии зоны и нормативного основания на момент события.</p>{event.reviewed_by && <p className="safety-hash">Идентификатор проверяющего: {event.reviewed_by}</p>}</details>

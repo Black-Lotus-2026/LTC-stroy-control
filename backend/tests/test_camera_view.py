@@ -1,10 +1,11 @@
-"""Camera view: frame comparison, approval by an administrator, planned moves and rechecks."""
+"""Camera view comparison, customer approval, planned moves and rechecks."""
 
 from __future__ import annotations
 
 import base64
 import io
 import random
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -18,18 +19,25 @@ from sqlalchemy.orm import Session
 import app.api.v1.incidents as incidents_api
 import app.services.camera_view as cv
 from app.api.v1 import camera_views as views_api
-from app.api.v1.incidents import create_incident, update_incident_status
+from app.api.v1.camera_workflow import decide_move, request_move
 from app.db.base import Base
 from app.models.alert import AlertNotification
 from app.models.camera_view import CameraViewEvent
+from app.models.customer_control import ProjectRole
 from app.models.enums import IncidentStatus, UserRole
 from app.models.incident import Incident
 from app.models.project import Camera, Project
 from app.models.user import User
-from app.schemas.camera_view import ViewMoveRequest, ViewNote, ViewReferenceRequest
-from app.schemas.stroy_control import IncidentCreateRequest, IncidentStatusUpdateRequest
-from app.services.alert_service import run_due_verifications, verify_incident
+from app.schemas.camera_view import ViewNote, ViewReferenceRequest
+from app.schemas.customer_control import CameraMoveCommand, CameraMoveDecisionCommand
+from app.services.alert_service import (
+    apply_verification,
+    request_verification,
+    run_due_verifications,
+    verify_incident,
+)
 from app.storage.local import LocalStorage
+from tests.customer_control_fixtures import contractor, customer, system_camera_incident
 
 
 @compiles(JSONB, "sqlite")
@@ -48,8 +56,8 @@ def db():
 
 @pytest.fixture(autouse=True)
 def storage(tmp_path, monkeypatch):
+    monkeypatch.setattr(cv.settings, "camera_view_storage_root", tmp_path / "private")
     local = LocalStorage(root=tmp_path, public_url="http://test/media")
-    monkeypatch.setattr(cv, "get_storage", lambda: local)
     monkeypatch.setattr(incidents_api, "get_storage", lambda: local)
     return local
 
@@ -83,9 +91,12 @@ def f(im: Image.Image) -> cv.ViewFeatures:
 
 # --- comparison ---
 
+
 def test_same_view_matches_despite_light_and_jpeg() -> None:
     ref = scene(1)
-    darker = ImageEnhance.Contrast(ImageEnhance.Brightness(ref).enhance(0.55)).enhance(0.8)
+    darker = ImageEnhance.Contrast(ImageEnhance.Brightness(ref).enhance(0.55)).enhance(
+        0.8
+    )
     m = cv.compare(f(ref), f(darker))
     assert m.match >= cv.MATCH_OK
     assert (m.dx, m.dy) == (0, 0)
@@ -138,16 +149,27 @@ def test_snapshot_is_checked_and_reencoded() -> None:
 
 # --- approval and moves ---
 
+
 def setup(db: Session) -> tuple[Project, Camera, User, User]:
     owner = User(username="foreman", name="Прораб Петров", role=UserRole.MANAGER)
     chief = User(username="chief", name="Иванов", role=UserRole.ADMIN)
     db.add_all([owner, chief])
     db.flush()
-    project = Project(code="PRJ-VIEW", name="Объект", owner_username=owner.username, escalation_user_id=chief.id)
+    project = Project(
+        code="PRJ-VIEW",
+        name="Объект",
+        owner_username=owner.username,
+        escalation_user_id=chief.id,
+    )
     db.add(project)
     db.flush()
-    camera = Camera(project_id=project.id, code="CAM-V1", name="Камера 1", stream_url="http://cam/1")
+    camera = Camera(
+        project_id=project.id, code="CAM-V1", name="Камера 1", stream_url="http://cam/1"
+    )
     db.add(camera)
+    db.flush()
+    customer(db, project, chief)
+    contractor(db, project, owner)
     db.commit()
     return project, camera, owner, chief
 
@@ -157,28 +179,34 @@ def b64(im: Image.Image) -> str:
 
 
 def view_incident(db: Session, project: Project, camera: Camera, user: User) -> Incident:
-    res = create_incident(
-        IncidentCreateRequest(
-            project_id=project.id, camera_id=camera.id, camera_name=camera.name,
-            discrepancy_type="VIEW_CHANGED", severity="ERROR",
-            title="Ракурс камеры изменён: Камера 1", description="Наблюдение: совпадение 21 %",
-            album_snapshots=[{"camera_name": "Камера 1 · сейчас", "snapshot_base64": b64(scene(9)), "is_primary": True}],
-        ),
-        db, user,
-    )
-    return db.get(Incident, res.id)
+    return system_camera_incident(db, project, camera)
+
+
+def set_reference(project_id, camera_id, body, db, manager):
+    views_api.submit_reference(project_id, camera_id, body, db, manager)
+    return approve_reference(project_id, camera_id, db, manager)
 
 
 def test_foreman_proposes_and_only_admin_approves(db: Session) -> None:
     project, camera, owner, chief = setup(db)
-    state = views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1)), note="кран Б"), db, owner)
-    assert state.reference is None and state.proposal and state.proposal.by == "Прораб Петров"
+    state = views_api.submit_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1)), note="кран Б"),
+        db,
+        owner,
+    )
+    assert (
+        state.reference is None
+        and state.proposal
+        and state.proposal.by == "Прораб Петров"
+    )
 
     with pytest.raises(HTTPException) as denied:
-        views_api.approve_reference(project.id, camera.id, db, owner)
+        approve_reference(project.id, camera.id, db, owner)
     assert denied.value.status_code == 403
 
-    state = views_api.approve_reference(project.id, camera.id, db, chief)
+    state = approve_reference(project.id, camera.id, db, chief)
     assert state.reference and state.reference.by == "Иванов" and state.proposal is None
     assert [h.kind for h in state.history] == ["reference_set", "reference_proposed"]
 
@@ -188,98 +216,224 @@ def test_viewer_cannot_change_the_view(db: Session) -> None:
     viewer = User(username="watch", name="Наблюдатель", role=UserRole.VIEWER)
     db.add(viewer)
     project.owner_username = viewer.username
+    customer(db, project, viewer, role=ProjectRole.PROJECT_VIEWER)
     db.commit()
     with pytest.raises(HTTPException) as denied:
-        views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, viewer)
+        views_api.submit_reference(
+            project.id,
+            camera.id,
+            ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+            db,
+            viewer,
+        )
     assert denied.value.status_code == 403
 
 
-def test_view_event_needs_reference_and_belongs_to_its_camera(db: Session, storage: LocalStorage) -> None:
+def test_view_event_needs_reference_and_belongs_to_its_camera(
+    db: Session, storage: LocalStorage
+) -> None:
     project, camera, owner, chief = setup(db)
     with pytest.raises(HTTPException) as no_ref:
         view_incident(db, project, camera, owner)
     assert no_ref.value.status_code == 422
 
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, chief)
-    other = Camera(project_id=project.id, code="CAM-V2", name="Камера 2", stream_url="http://cam/2")
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
+    other = Camera(
+        project_id=project.id, code="CAM-V2", name="Камера 2", stream_url="http://cam/2"
+    )
     db.add(other)
     db.commit()
-    views_api.submit_reference(project.id, other.id, ViewReferenceRequest(snapshot_base64=b64(scene(2))), db, chief)
+    set_reference(
+        project.id,
+        other.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(2))),
+        db,
+        chief,
+    )
 
     first = view_incident(db, project, camera, owner)
     second = view_incident(db, project, other, owner)
     assert first.id != second.id
-    assert first.assigned_user_id == owner.id
+    assert first.assigned_user_id == chief.id
     names = [p["camera_name"] for p in first.explanation["album_photos"]]
     assert names == ["Камера 1 · сейчас", "Камера 1 · утверждённый ракурс"]
 
 
-def test_new_reference_closes_view_events_as_agreed(db: Session) -> None:
+def test_new_reference_does_not_accept_historical_view_events(db: Session) -> None:
     project, camera, owner, chief = setup(db)
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, chief)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
     incident = view_incident(db, project, camera, owner)
 
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(9)), note="камера на мачте Б"), db, owner)
+    views_api.submit_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(9)), note="камера на мачте Б"),
+        db,
+        owner,
+    )
     db.refresh(incident)
     assert incident.status == IncidentStatus.PENDING  # a proposal decides nothing
 
-    views_api.approve_reference(project.id, camera.id, db, chief)
+    approve_reference(project.id, camera.id, db, chief)
     db.refresh(incident)
-    assert incident.status == IncidentStatus.RESOLVED
-    assert incident.verification_details["resolution"] == "accepted"
+    assert incident.status == IncidentStatus.PENDING
+    assert incident.resolved_at is None
     kinds = {n.kind for n in db.scalars(select(AlertNotification))}
-    assert "view_accepted" in kinds
+    assert "view_accepted" not in kinds
 
 
 def test_agreed_move_suppresses_view_events_and_expires_into_a_task(db: Session) -> None:
     project, camera, owner, chief = setup(db)
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, chief)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
     until = datetime.now(UTC) + timedelta(hours=2)
-    state = views_api.request_move(project.id, camera.id, ViewMoveRequest(until=until, reason="кран переставили"), db, owner)
-    assert state.move and state.move.status == "requested"
-
+    move = request_move(
+        project.id,
+        camera.id,
+        CameraMoveCommand(
+            requested_from=datetime.now(UTC) - timedelta(seconds=1),
+            requested_until=until,
+            reason="Кран переставили",
+            coverage_plan="Резервный ракурс",
+        ),
+        db,
+        owner,
+        uuid.uuid4(),
+    )
+    assert move.status == "requested"
     with pytest.raises(HTTPException):
-        views_api.approve_move(project.id, camera.id, db, owner)
-    state = views_api.approve_move(project.id, camera.id, db, chief)
-    assert state.move.status == "approved" and state.move.approved_by == "Иванов"
-
+        decide_move(
+            move.id,
+            CameraMoveDecisionCommand(
+                expected_version=move.row_version, action="approve", note="Нельзя самому"
+            ),
+            db,
+            owner,
+            uuid.uuid4(),
+        )
+    move = decide_move(
+        move.id,
+        CameraMoveDecisionCommand(
+            expected_version=move.row_version,
+            action="approve",
+            note="Согласовано заказчиком",
+        ),
+        db,
+        chief,
+        uuid.uuid4(),
+    )
+    assert move.status == "approved" and cv.move_active(camera)
     with pytest.raises(HTTPException) as agreed:
         view_incident(db, project, camera, owner)
     assert agreed.value.status_code == 409
-
     assert cv.expire_moves(db, now=until + timedelta(minutes=1)) == 1
     db.commit()
-    overdue = db.scalars(select(Incident).where(Incident.discrepancy_type == "VIEW_MOVE_OVERDUE")).one()
-    assert overdue.assigned_user_id == owner.id and overdue.camera_id == camera.id
+    overdue = db.scalars(
+        select(Incident).where(Incident.discrepancy_type == "VIEW_MOVE_OVERDUE")
+    ).one()
+    assert overdue.assigned_user_id == chief.id and overdue.camera_id == camera.id
     assert camera.view_move_status is None
-    assert db.scalars(select(CameraViewEvent.kind).where(CameraViewEvent.kind == "move_expired")).one()
+    assert db.scalars(
+        select(CameraViewEvent.kind).where(CameraViewEvent.kind == "move_expired")
+    ).one()
 
 
 def test_reject_and_cancel(db: Session) -> None:
     project, camera, owner, chief = setup(db)
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, owner)
-    state = views_api.reject_reference(project.id, camera.id, ViewNote(note="не тот ракурс"), db, chief)
-    assert state.proposal is None and state.history[0].note == "не тот ракурс"
-
-    until = datetime.now(UTC) + timedelta(hours=1)
-    views_api.request_move(project.id, camera.id, ViewMoveRequest(until=until, reason="перенос на мачту"), db, owner)
-    state = views_api.cancel_move(project.id, camera.id, db, owner)
-    assert state.move is None
+    views_api.submit_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        owner,
+    )
+    state = views_api.reject_reference(
+        project.id, camera.id, ViewNote(note="Не тот ракурс"), db, chief
+    )
+    assert state.proposal is None and state.history[0].note == "Не тот ракурс"
+    now = datetime.now(UTC)
+    move = request_move(
+        project.id,
+        camera.id,
+        CameraMoveCommand(
+            requested_from=now,
+            requested_until=now + timedelta(hours=1),
+            reason="Перенос",
+            coverage_plan="Резерв",
+        ),
+        db,
+        owner,
+        uuid.uuid4(),
+    )
+    move = decide_move(
+        move.id,
+        CameraMoveDecisionCommand(
+            expected_version=move.row_version,
+            action="cancel",
+            note="Отменён до решения заказчика",
+        ),
+        db,
+        owner,
+        uuid.uuid4(),
+    )
+    assert move.status == "cancelled" and camera.view_move_status is None
     with pytest.raises(HTTPException) as past:
-        views_api.request_move(project.id, camera.id, ViewMoveRequest(until=datetime.now(UTC) - timedelta(minutes=1), reason="поздно"), db, owner)
+        request_move(
+            project.id,
+            camera.id,
+            CameraMoveCommand(
+                requested_from=now,
+                requested_until=now - timedelta(minutes=1),
+                reason="Поздно",
+                coverage_plan="Резерв",
+            ),
+            db,
+            owner,
+            uuid.uuid4(),
+        )
     assert past.value.status_code == 422
 
 
 # --- the server's recheck ---
 
-def test_recheck_compares_fresh_frames_with_the_reference(db: Session, monkeypatch) -> None:
+
+def test_recheck_compares_fresh_frames_with_the_reference(
+    db: Session, monkeypatch
+) -> None:
     project, camera, owner, chief = setup(db)
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, chief)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
     incident = view_incident(db, project, camera, owner)
 
-    turned = cv.verify_view_incident(db, incident, capture=lambda _c: jpeg(scene(9)), pause=0)
+    turned = cv.verify_view_incident(
+        db, incident, capture=lambda _c: jpeg(scene(9)), pause=0
+    )
     assert turned.outcome == "failed"
-    back = cv.verify_view_incident(db, incident, capture=lambda _c: jpeg(scene(1)), pause=0)
+    back = cv.verify_view_incident(
+        db, incident, capture=lambda _c: jpeg(scene(1)), pause=0
+    )
     assert back.outcome == "passed" and back.details["resolution"] == "restored"
     dark = cv.verify_view_incident(db, incident, capture=lambda _c: None, pause=0)
     assert dark.outcome == "unavailable"
@@ -288,30 +442,50 @@ def test_recheck_compares_fresh_frames_with_the_reference(db: Session, monkeypat
     monkeypatch.setattr(cv, "verify_view_incident", lambda _db, _inc, **_kw: turned)
     assert verify_incident(db, incident).outcome == "failed"
 
-    # «камера возвращена — проверить» rechecks at once, without waiting for beat
-    monkeypatch.setattr(incidents_api, "verify_view_incident", lambda _db, _inc, **_kw: turned)
-    update_incident_status(incident.id, IncidentStatusUpdateRequest(status="resolved"), db, owner)
-    assert incident.status == IncidentStatus.IN_PROGRESS and incident.verification_status == "failed"
-    monkeypatch.setattr(incidents_api, "verify_view_incident", lambda _db, _inc, **_kw: back)
-    update_incident_status(incident.id, IncidentStatusUpdateRequest(status="resolved"), db, owner)
-    assert incident.status == IncidentStatus.RESOLVED
+    # Technical verification records supporting evidence; it cannot accept work.
+    request_verification(db, incident, chief)
+    apply_verification(db, incident, turned)
+    assert (
+        incident.status == IncidentStatus.PENDING
+        and incident.verification_status == "failed"
+    )
+    apply_verification(db, incident, back)
+    assert incident.status == IncidentStatus.PENDING
+    assert incident.resolved_at is None
     assert incident.verification_details["resolution"] == "restored"
 
 
 def test_http_camera_frame_is_read_without_opencv(monkeypatch) -> None:
-    body = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg(scene(1)) + b"\r\n--frame\r\n"
+    monkeypatch.setattr(
+        cv.socket, "getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("8.8.8.8", 80))]
+    )
+    body = (
+        b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+        + jpeg(scene(1))
+        + b"\r\n--frame\r\n"
+    )
 
     def transport(request):
         import httpx
 
         if request.url.path == "/snap.jpg":
-            return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=jpeg(scene(2)))
-        return httpx.Response(200, headers={"content-type": "multipart/x-mixed-replace; boundary=frame"}, content=body)
+            return httpx.Response(
+                200, headers={"content-type": "image/jpeg"}, content=jpeg(scene(2))
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "multipart/x-mixed-replace; boundary=frame"},
+            content=body,
+        )
 
     import httpx
 
     real = httpx.Client
-    monkeypatch.setattr(cv.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(transport), **kw))
+    monkeypatch.setattr(
+        cv.httpx,
+        "Client",
+        lambda **kw: real(transport=httpx.MockTransport(transport), **kw),
+    )
     assert cv.capture_http_frame("http://cam/snap.jpg")[:2] == b"\xff\xd8"
     frame = cv.capture_http_frame("http://cam/mjpeg")
     assert frame[:2] == b"\xff\xd8" and frame[-2:] == b"\xff\xd9"
@@ -321,12 +495,294 @@ def test_deadline_does_not_close_a_still_turned_camera(db: Session) -> None:
     project, camera, owner, chief = setup(db)
     project.alert_error_deadline_minutes = 1
     db.commit()
-    views_api.submit_reference(project.id, camera.id, ViewReferenceRequest(snapshot_base64=b64(scene(1))), db, chief)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
     incident = view_incident(db, project, camera, owner)
     later = datetime.now(UTC) + timedelta(minutes=5)
     result = run_due_verifications(
-        db, now=later, verifier=lambda d, i: cv.verify_view_incident(d, i, capture=lambda _c: jpeg(scene(9)), pause=0)
+        db,
+        now=later,
+        verifier=lambda d, i: cv.verify_view_incident(
+            d, i, capture=lambda _c: jpeg(scene(9)), pause=0
+        ),
     )
     db.commit()
-    assert result == {"checked": 1, "resolved": 0, "escalated": 1}
+    assert result == {"checked": 0, "resolved": 0, "escalated": 0}
     assert incident.status == IncidentStatus.PENDING
+    assert incident.reaction_due_at is None
+    assert incident.remediation_due_at is None
+
+
+def test_view_recheck_requires_majority_of_requested_frames(db):
+    project, camera, owner, chief = setup(db)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
+    incident = view_incident(db, project, camera, owner)
+    frames = iter([jpeg(scene(1)), None, None])
+    result = cv.verify_view_incident(
+        db, incident, capture=lambda _: next(frames), pause=0
+    )
+    assert result.outcome == "unavailable"
+    assert result.details["reason"] == "insufficient_frames"
+    frames = iter([jpeg(scene(1)), jpeg(scene(1)), None])
+    assert (
+        cv.verify_view_incident(
+            db, incident, capture=lambda _: next(frames), pause=0
+        ).outcome
+        == "passed"
+    )
+
+
+def test_view_images_are_private_and_authorized(db, storage):
+    project, camera, owner, chief = setup(db)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
+    key = camera.view_reference_key
+    assert not storage.exists(key)
+    assert cv._view_path(key).is_file()
+    state = cv.view_state(db, camera)
+    assert state["reference"]["url"].startswith(
+        f"/api/v1/projects/{project.id}/cameras/{camera.id}/view/assets/"
+    )
+    asset = state["reference"]["url"].rsplit("/", 1)[1]
+    result = views_api.view_asset(project.id, camera.id, asset, db, owner)
+    assert result.body == cv.load_view_image(key)
+    assert result.headers["cache-control"] == "private, no-store"
+    outsider = User(username="private-outsider", name="Outsider", role=UserRole.MANAGER)
+    db.add(outsider)
+    db.commit()
+    with pytest.raises(HTTPException) as failure:
+        views_api.view_asset(project.id, camera.id, asset, db, outsider)
+    assert failure.value.status_code == 404
+    with pytest.raises(HTTPException) as failure:
+        views_api.view_asset(project.id, camera.id, "unknown", db, owner)
+    assert failure.value.status_code == 404
+    second = Camera(project_id=project.id, code="UNCITED-REFERENCE", name="Other camera")
+    db.add(second)
+    db.commit()
+    with pytest.raises(HTTPException) as failure:
+        views_api.view_asset(project.id, second.id, asset, db, owner)
+    assert failure.value.status_code == 404
+    project.kind = "shared_demo"
+    project.code = "MANAGEMENT-DEMO"
+    project.owner_username = None
+    viewer = User(username="shared-viewer", name="Viewer", role=UserRole.VIEWER)
+    db.add(viewer)
+    db.commit()
+    with pytest.raises(HTTPException) as quarantined:
+        views_api.view_asset(project.id, camera.id, asset, db, viewer)
+    assert quarantined.value.status_code == 404
+    project.demo_manifest = {"camera_ids": [str(camera.id)]}
+    db.commit()
+    assert (
+        views_api.view_asset(project.id, camera.id, asset, db, viewer).body == result.body
+    )
+    with pytest.raises(HTTPException) as failure:
+        views_api.submit_reference(
+            project.id,
+            camera.id,
+            ViewReferenceRequest(snapshot_base64=b64(scene(2))),
+            db,
+            viewer,
+        )
+    assert failure.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/x",
+        "http://169.254.169.254/x",
+        "rtsp://[::1]/x",
+        "http://10.1.2.3/x",
+        "file:///etc/passwd",
+        "ftp://8.8.8.8/x",
+    ],
+)
+def test_fresh_capture_rejects_non_network_and_unconfigured_private_targets(
+    monkeypatch, url
+):
+    monkeypatch.setattr(cv.settings, "camera_allowed_networks", [])
+    monkeypatch.setattr(
+        cv.socket, "getaddrinfo", lambda host, *a, **kw: [(2, 1, 6, "", (host, 80))]
+    )
+    assert cv.capture_frame(type("Camera", (), {"stream_url": url})()) is None
+
+
+def test_capture_dns_is_pinned_and_private_networks_require_explicit_allowlist(
+    monkeypatch,
+):
+    import httpx
+
+    monkeypatch.setattr(
+        cv.socket, "getaddrinfo", lambda *a, **kw: [(2, 1, 6, "", ("192.168.1.5", 80))]
+    )
+    monkeypatch.setattr(cv.settings, "camera_allowed_networks", ["192.168.1.0/24"])
+    seen = []
+
+    def respond(request):
+        seen.append(request)
+        return httpx.Response(
+            200, headers={"content-type": "image/jpeg"}, content=jpeg(scene(1))
+        )
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        cv.httpx,
+        "Client",
+        lambda **kw: original(transport=httpx.MockTransport(respond), **kw),
+    )
+    assert cv.capture_http_frame("https://camera.example/frame.jpg")
+    assert seen[0].url.host == "192.168.1.5"
+    assert seen[0].headers["host"] == "camera.example"
+    assert seen[0].extensions["sni_hostname"] == "camera.example"
+    monkeypatch.setattr(cv.settings, "camera_allowed_networks", ["0.0.0.0/0"])
+    monkeypatch.setattr(
+        cv.socket,
+        "getaddrinfo",
+        lambda *a, **kw: [(2, 1, 6, "", ("169.254.169.254", 80))],
+    )
+    assert cv.capture_http_frame("http://camera.example/") is None
+    assert len(seen) == 1
+
+
+def test_slow_http_stream_has_total_deadline_and_redirects_are_not_followed(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(
+        cv.socket, "getaddrinfo", lambda *a, **kw: [(2, 1, 6, "", ("8.8.8.8", 80))]
+    )
+    elapsed = [0.0]
+    yielded = []
+    monkeypatch.setattr(cv.time, "monotonic", lambda: elapsed[0])
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self):
+            for index in range(100):
+                elapsed[0] += 0.6
+                yielded.append(index)
+                yield b"x"
+
+    def respond(request):
+        if request.url.path == "/redirect":
+            return httpx.Response(302, headers={"location": "http://127.0.0.1/"})
+        return httpx.Response(
+            200,
+            headers={"content-type": "multipart/x-mixed-replace"},
+            stream=SlowStream(),
+        )
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        cv.httpx,
+        "Client",
+        lambda **kw: original(transport=httpx.MockTransport(respond), **kw),
+    )
+    assert cv.capture_http_frame("http://camera.example/slow", timeout=1) is None
+    assert len(yielded) == 2
+    assert cv.capture_http_frame("http://camera.example/redirect") is None
+
+
+def test_rtsp_capture_is_disabled_by_default_and_requires_operator_trusted_network(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import cv2
+
+    monkeypatch.setattr(
+        cv.socket, "getaddrinfo", lambda *a, **kw: [(2, 1, 6, "", ("192.168.1.8", 554))]
+    )
+    monkeypatch.setattr(
+        cv,
+        "settings",
+        SimpleNamespace(
+            camera_allow_rtsp_capture=False, camera_allowed_networks=["192.168.1.0/24"]
+        ),
+    )
+    camera = SimpleNamespace(stream_url="rtsp://operator:secret@camera.example/live")
+    assert cv.capture_frame(camera) is None
+    cv.settings.camera_allow_rtsp_capture = True
+    cv.settings.camera_allowed_networks = []
+    assert cv.capture_frame(camera) is None
+    cv.settings.camera_allowed_networks = ["192.168.1.0/24"]
+    captured = []
+
+    class Capture:
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(
+        cv2, "VideoCapture", lambda url, *args: captured.append(url) or Capture()
+    )
+    assert cv.capture_frame(camera) is None
+    assert captured == ["rtsp://operator:secret@192.168.1.8/live"]
+
+
+@pytest.mark.parametrize("condition", ["move", "changed_view", "loop"])
+def test_equipment_recheck_fails_closed_for_invalid_camera_context(
+    db, monkeypatch, condition
+):
+    from types import SimpleNamespace
+
+    from app.services import alert_service
+
+    project, camera, owner, chief = setup(db)
+    set_reference(
+        project.id,
+        camera.id,
+        ViewReferenceRequest(snapshot_base64=b64(scene(1))),
+        db,
+        chief,
+    )
+    incident = view_incident(db, project, camera, owner)
+    incident.discrepancy_type = "UNCHARACTERISTIC_PRESENT"
+    incident.machinery_type = "Экскаватор"
+    if condition == "move":
+        camera.view_move_status = "approved"
+        camera.view_move_until = datetime.now(UTC) + timedelta(hours=1)
+    elif condition == "loop":
+        incident.discrepancy_type = "STREAM_LOOP"
+        db.flush()
+        second = view_incident(db, project, camera, owner)
+        second.discrepancy_type = "UNCHARACTERISTIC_PRESENT"
+        second.machinery_type = "Экскаватор"
+        incident = second
+    db.commit()
+    monkeypatch.setattr(alert_service, "_capture_frame", lambda _: jpeg(scene(9)))
+    monkeypatch.setattr(
+        alert_service,
+        "_detector",
+        lambda: SimpleNamespace(
+            is_ready=True,
+            compliance_enabled=True,
+            can_evaluate=lambda _: True,
+            detect_frame=lambda _: [],
+        ),
+    )
+    monkeypatch.setattr(alert_service.time, "sleep", lambda _: None)
+    assert alert_service.verify_incident(db, incident).outcome == "unavailable"
+
+
+def approve_reference(project_id, camera_id, db, manager):
+    camera = db.get(Camera, camera_id)
+    expected = cv.view_state(db, camera)["proposal"]["sha256"]
+    return views_api.approve_reference(project_id, camera_id, db, manager, expected)

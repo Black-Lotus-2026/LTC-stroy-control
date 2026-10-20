@@ -19,13 +19,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import io
+import ipaddress
 import logging
+import socket
 import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -38,22 +43,18 @@ from app.core.config import settings
 from app.models.camera_view import CameraViewEvent
 from app.models.enums import (
     IncidentCategory,
-    IncidentEventType,
     IncidentPriority,
     IncidentStatus,
     IncidentType,
-    UserRole,
 )
-from app.models.incident import Incident, IncidentEvent
+from app.models.incident import Incident
 from app.models.project import Camera, Project
 from app.models.user import User
 from app.services.alert_service import (
     OPEN_STATUSES,
     VerificationResult,
     assign_initial_alert,
-    queue_notification,
 )
-from app.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ VIEW_W, VIEW_H = 64, 36
 MAX_DX, MAX_DY = 8, 5
 TILES_X, TILES_Y = 4, 3
 JITTER = 1
-# Не ниже MATCH_OK — ракурс совпадает; ниже MATCH_BAD — не совпадает; между ними — без изменений.
+# MATCH_OK and MATCH_BAD bound an inconclusive comparison interval.
 MATCH_OK = 0.6
 MATCH_BAD = 0.45
 VIEW_CHANGED = "VIEW_CHANGED"
@@ -69,6 +70,55 @@ VIEW_MOVE_OVERDUE = "VIEW_MOVE_OVERDUE"
 VIEW_TYPES = (VIEW_CHANGED, VIEW_MOVE_OVERDUE)
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_MOVE = timedelta(days=7)
+
+
+def _view_path(key: str) -> Path:
+    root = Path(
+        getattr(
+            settings,
+            "camera_view_storage_root",
+            settings.storage_local_root.parent / "camera-views-private",
+        )
+    ).resolve()
+    path = (root / key).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("Invalid camera view asset")
+    return path
+
+
+def save_view_image(key: str, image: bytes) -> None:
+    path = _view_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_bytes(image)
+    path.chmod(0o600)
+
+
+def load_view_image(key: str) -> bytes:
+    return _view_path(key).read_bytes()
+
+
+def view_asset_url(camera: Camera, key: str) -> str:
+    asset = hashlib.sha256(key.encode()).hexdigest()
+    return f"/api/v1/projects/{camera.project_id}/cameras/{camera.id}/view/assets/{asset}"
+
+
+def view_asset_key(db: Session, camera: Camera, asset: str) -> str | None:
+    keys = [camera.view_reference_key, camera.view_proposal_key]
+    keys.extend(
+        db.scalars(
+            select(CameraViewEvent.snapshot_key).where(
+                CameraViewEvent.camera_id == camera.id
+            )
+        )
+    )
+    return next(
+        (
+            key
+            for key in keys
+            if key and hashlib.sha256(key.encode()).hexdigest() == asset
+        ),
+        None,
+    )
 
 
 class ViewError(ValueError):
@@ -93,6 +143,7 @@ class ViewMatch:
 
 
 # --- Сравнение кадров ---
+
 
 def gray_from_image(data: bytes) -> np.ndarray:
     with Image.open(io.BytesIO(data)) as im:
@@ -120,7 +171,11 @@ def _ncc(a: np.ndarray, b: np.ndarray) -> float:
 def _tiles(h: int, w: int) -> list[tuple[int, int, int, int]]:
     ys = [round(h * i / TILES_Y) for i in range(TILES_Y + 1)]
     xs = [round(w * j / TILES_X) for j in range(TILES_X + 1)]
-    return [(ys[i], ys[i + 1], xs[j], xs[j + 1]) for i in range(TILES_Y) for j in range(TILES_X)]
+    return [
+        (ys[i], ys[i + 1], xs[j], xs[j + 1])
+        for i in range(TILES_Y)
+        for j in range(TILES_X)
+    ]
 
 
 def _median_ncc(ref: np.ndarray, cur: np.ndarray, dx: int, dy: int) -> float:
@@ -153,7 +208,7 @@ def compare(ref: ViewFeatures, cur: ViewFeatures) -> ViewMatch:
 
 
 def decode_snapshot(raw: str) -> bytes:
-    """Принять снимок от клиента: base64 → проверенное изображение → JPEG не больше 1280 px."""
+    """Decode and bound a client snapshot to a verified 1280px JPEG."""
     if raw.startswith("data:") and "," in raw[:100]:
         raw = raw.split(",", 1)[1]
     try:
@@ -175,6 +230,7 @@ def decode_snapshot(raw: str) -> bytes:
 
 # --- Состояние камеры ---
 
+
 def aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -183,7 +239,11 @@ def aware(value: datetime | None) -> datetime | None:
 
 def move_active(camera: Camera, now: datetime | None = None) -> bool:
     now = now or datetime.now(UTC)
-    return camera.view_move_status == "approved" and (aware(camera.view_move_until) or now) > now
+    return (
+        camera.view_move_status == "approved"
+        and (aware(camera.view_move_at) or now) <= now
+        and (aware(camera.view_move_until) or now) > now
+    )
 
 
 def _user_name(db: Session, user_id: uuid.UUID | None) -> str | None:
@@ -194,11 +254,11 @@ def _user_name(db: Session, user_id: uuid.UUID | None) -> str | None:
 
 
 def view_state(db: Session, camera: Camera, *, history: int = 12) -> dict:
-    storage = get_storage()
-    url = lambda key: storage.public_url(key) if key else None  # noqa: E731
+    url = lambda key: view_asset_url(camera, key) if key else None  # noqa: E731
     reference = (
         {
             "url": url(camera.view_reference_key),
+            "sha256": _view_sha256(camera.view_reference_key),
             "at": camera.view_reference_at,
             "by": _user_name(db, camera.view_reference_by),
         }
@@ -208,6 +268,7 @@ def view_state(db: Session, camera: Camera, *, history: int = 12) -> dict:
     proposal = (
         {
             "url": url(camera.view_proposal_key),
+            "sha256": _view_sha256(camera.view_proposal_key),
             "at": camera.view_proposal_at,
             "by": _user_name(db, camera.view_proposal_by),
             "by_id": camera.view_proposal_by,
@@ -282,9 +343,17 @@ def _log(
     )
 
 
-def _require_admin(user: User) -> None:
-    if user.role != UserRole.ADMIN:
-        raise ViewError("Согласует администратор", 403)
+def _require_admin(db: Session, camera: Camera, user: User) -> None:
+    from app.services.access_policy import resolve_context
+
+    resolve_context(
+        db,
+        camera.project_id,
+        user,
+        permission="camera.reference.approve",
+        write=True,
+        lock=True,
+    )
 
 
 def _clear_move(camera: Camera) -> None:
@@ -306,17 +375,22 @@ def _clear_proposal(camera: Camera) -> None:
 
 # --- Эталон ---
 
+
 def submit_reference(
-    db: Session, camera: Camera, user: User, image: bytes, note: str | None, *, now: datetime | None = None
+    db: Session,
+    camera: Camera,
+    user: User,
+    image: bytes,
+    note: str | None,
+    *,
+    now: datetime | None = None,
 ) -> None:
-    """Администратор утверждает ракурс сразу; остальные предлагают его администратору."""
+    """Сохранить предложение; конкретный снимок отдельно утверждает заказчик."""
     now = now or datetime.now(UTC)
-    key = f"cameras/{camera.id}/view/{now.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}.jpg"
-    get_storage().save(key, image)
+    stamp = now.strftime("%Y%m%dT%H%M%S")
+    key = f"cameras/{camera.id}/view/{stamp}-{uuid.uuid4().hex[:6]}.jpg"
+    save_view_image(key, image)
     note = (note or "").strip() or None
-    if user.role == UserRole.ADMIN:
-        _approve_reference(db, camera, user, key, note, now)
-        return
     camera.view_proposal_key = key
     camera.view_proposal_at = now
     camera.view_proposal_by = user.id
@@ -324,18 +398,34 @@ def submit_reference(
     _log(db, camera, "reference_proposed", user, note=note, key=key, now=now)
 
 
-def approve_proposal(db: Session, camera: Camera, user: User, *, now: datetime | None = None) -> None:
-    _require_admin(user)
+def approve_proposal(
+    db: Session, camera: Camera, user: User, *, now: datetime | None = None
+) -> None:
+    _require_admin(db, camera, user)
     if not camera.view_proposal_key:
         raise ViewError("Нового ракурса на согласовании нет", 409)
-    _approve_reference(db, camera, user, camera.view_proposal_key, camera.view_proposal_note, now or datetime.now(UTC))
+    _approve_reference(
+        db,
+        camera,
+        user,
+        camera.view_proposal_key,
+        camera.view_proposal_note,
+        now or datetime.now(UTC),
+    )
 
 
 def reject_proposal(db: Session, camera: Camera, user: User, note: str | None) -> None:
-    _require_admin(user)
+    _require_admin(db, camera, user)
     if not camera.view_proposal_key:
         raise ViewError("Нового ракурса на согласовании нет", 409)
-    _log(db, camera, "reference_rejected", user, note=(note or "").strip() or None, key=camera.view_proposal_key)
+    _log(
+        db,
+        camera,
+        "reference_rejected",
+        user,
+        note=(note or "").strip() or None,
+        key=camera.view_proposal_key,
+    )
     _clear_proposal(camera)
 
 
@@ -348,54 +438,41 @@ def _approve_reference(
     _clear_proposal(camera)
     _log(db, camera, "reference_set", user, note=note, key=key, now=now)
     if camera.view_move_status:
-        _log(db, camera, "move_completed", user, until=camera.view_move_until, now=now)
-        _clear_move(camera)
-    resolve_view_incidents(db, camera, user, now)
+        from app.models.customer_control import CameraMoveRequest
+
+        active_request = db.scalar(
+            select(CameraMoveRequest.id).where(
+                CameraMoveRequest.camera_id == camera.id,
+                CameraMoveRequest.status.in_(
+                    {"approved", "in_progress", "awaiting_reference"}
+                ),
+            )
+        )
+        if not active_request:
+            _log(
+                db, camera, "move_completed", user, until=camera.view_move_until, now=now
+            )
+            _clear_move(camera)
+    # Reference changes are technical verification, not human acceptance of a
+    # remediation submission. Historical incidents keep their evidence/state.
 
 
 def resolve_view_incidents(db: Session, camera: Camera, user: User, now: datetime) -> int:
-    """Утверждённый новый ракурс закрывает открытые события о ракурсе этой камеры."""
-    incidents = db.scalars(
-        select(Incident).where(
-            Incident.camera_id == camera.id,
-            Incident.discrepancy_type.in_(VIEW_TYPES),
-            Incident.status.in_(OPEN_STATUSES),
-        )
-    ).all()
-    name = user.name or user.username or "администратор"
-    for incident in incidents:
-        old = incident.status
-        incident.status = IncidentStatus.RESOLVED
-        incident.resolved_at = now
-        incident.verification_requested_at = None
-        incident.verification_details = {
-            **(incident.verification_details or {}),
-            "resolution": "accepted",
-            "resolved_by": name,
-            "checked_at": now.isoformat(),
-        }
-        db.add(IncidentEvent(
-            incident_id=incident.id, event_type=IncidentEventType.COMMENTED, user_id=user.id,
-            comment="Новый ракурс камеры утверждён: смещение согласовано",
-        ))
-        db.add(IncidentEvent(
-            incident_id=incident.id, event_type=IncidentEventType.STATUS_CHANGED, user_id=user.id,
-            old_status=old, new_status=IncidentStatus.RESOLVED,
-            comment=f"Ракурс утверждён: {old.value} -> resolved",
-        ))
-        assignee = db.get(User, incident.assigned_user_id) if incident.assigned_user_id else None
-        queue_notification(
-            db, incident=incident, recipient=assignee, kind="view_accepted",
-            title=f"{incident.code}: новый ракурс утверждён",
-            body=f"{name} утвердил новый ракурс камеры «{camera.name}»; событие закрыто.",
-        )
-    return len(incidents)
+    """Compatibility entry point: reference approval never accepts remediation."""
+    return 0
 
 
 # --- Перенос камеры ---
 
+
 def plan_move(
-    db: Session, camera: Camera, user: User, until: datetime, reason: str, *, now: datetime | None = None
+    db: Session,
+    camera: Camera,
+    user: User,
+    until: datetime,
+    reason: str,
+    *,
+    now: datetime | None = None,
 ) -> None:
     now = now or datetime.now(UTC)
     until = aware(until)
@@ -414,12 +491,21 @@ def plan_move(
     camera.view_move_by = user.id
     camera.view_move_at = now
     _log(db, camera, "move_requested", user, note=reason, until=until, now=now)
-    if user.role == UserRole.ADMIN:
-        _approve_move(db, camera, user, now)
 
 
-def approve_move(db: Session, camera: Camera, user: User, *, now: datetime | None = None) -> None:
-    _require_admin(user)
+def approve_move(
+    db: Session, camera: Camera, user: User, *, now: datetime | None = None
+) -> None:
+    from app.services.access_policy import resolve_context
+
+    resolve_context(
+        db,
+        camera.project_id,
+        user,
+        permission="camera.move.decide",
+        write=True,
+        lock=True,
+    )
     now = now or datetime.now(UTC)
     if camera.view_move_status != "requested":
         raise ViewError("Запроса на перенос нет", 409)
@@ -436,26 +522,66 @@ def _approve_move(db: Session, camera: Camera, user: User, now: datetime) -> Non
 
 
 def reject_move(db: Session, camera: Camera, user: User, note: str | None) -> None:
-    _require_admin(user)
+    from app.services.access_policy import resolve_context
+
+    resolve_context(
+        db,
+        camera.project_id,
+        user,
+        permission="camera.move.decide",
+        write=True,
+        lock=True,
+    )
     if camera.view_move_status != "requested":
         raise ViewError("Запроса на перенос нет", 409)
-    _log(db, camera, "move_rejected", user, note=(note or "").strip() or None, until=camera.view_move_until)
+    _log(
+        db,
+        camera,
+        "move_rejected",
+        user,
+        note=(note or "").strip() or None,
+        until=camera.view_move_until,
+    )
     _clear_move(camera)
 
 
 def cancel_move(db: Session, camera: Camera, user: User) -> None:
     if not camera.view_move_status:
         raise ViewError("Переноса нет", 409)
-    if user.role != UserRole.ADMIN and camera.view_move_by != user.id:
-        raise ViewError("Отменить перенос может тот, кто его запросил, или администратор", 403)
+    from app.services.access_policy import resolve_context
+
+    if camera.view_move_status == "approved" or camera.view_move_by != user.id:
+        resolve_context(
+            db,
+            camera.project_id,
+            user,
+            permission="camera.move.decide",
+            write=True,
+            lock=True,
+        )
     _log(db, camera, "move_cancelled", user, until=camera.view_move_until)
     _clear_move(camera)
 
 
-def expire_moves(db: Session, *, now: datetime | None = None, project_id: uuid.UUID | None = None) -> int:
-    """Согласованный перенос истёк, а новый ракурс не утверждён: событие ответственному."""
+def expire_moves(
+    db: Session, *, now: datetime | None = None, project_id: uuid.UUID | None = None
+) -> int:
+    """Record an overdue camera move without changing incident acceptance."""
     now = now or datetime.now(UTC)
-    query = select(Camera).where(Camera.view_move_status == "approved", Camera.view_move_until <= now)
+    from app.api.v1.camera_workflow import expire_move_requests
+
+    expired_requests = expire_move_requests(db, now)
+    query = (
+        select(Camera)
+        .join(Project, Project.id == Camera.project_id)
+        .where(
+            Project.kind != "shared_demo",
+            Project.lifecycle == "active",
+            Camera.view_move_status == "approved",
+            Camera.view_move_until <= now,
+        )
+        .with_for_update(skip_locked=True)
+    )
     if project_id:
         query = query.where(Camera.project_id == project_id)
     cameras = db.scalars(query).all()
@@ -465,25 +591,47 @@ def expire_moves(db: Session, *, now: datetime | None = None, project_id: uuid.U
             _overdue_incident(db, camera, project, now)
         _log(db, camera, "move_expired", None, until=camera.view_move_until, now=now)
         _clear_move(camera)
-    return len(cameras)
+    return len(cameras) + expired_requests
 
 
-def _overdue_incident(db: Session, camera: Camera, project: Project, now: datetime) -> None:
+def _overdue_incident(
+    db: Session, camera: Camera, project: Project, now: datetime
+) -> None:
+    from app.models.customer_control import AuditEvent
+    from app.services.observation_basis import snapshot_basis
+
+    approval = db.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.project_id == project.id,
+            AuditEvent.resource_id == camera.id,
+            AuditEvent.event_type == "camera.move.approved",
+            AuditEvent.occurred_at >= camera.view_move_at,
+        )
+        .order_by(AuditEvent.occurred_at.desc())
+    )
+    if approval is None:
+        return
     dedup = f"{project.id}:{camera.id}:{VIEW_MOVE_OVERDUE}"
-    if db.scalar(select(Incident.id).where(Incident.dedup_key == dedup, Incident.status.in_(OPEN_STATUSES))):
+    if db.scalar(
+        select(Incident.id).where(
+            Incident.dedup_key == dedup, Incident.status.in_(OPEN_STATUSES)
+        )
+    ):
         return
     tz = ZoneInfo(project.timezone or settings.default_timezone)
     until = aware(camera.view_move_until) or now
     local = until.astimezone(tz).strftime("%d.%m %H:%M")
     zone_name = camera.zone.name if camera.zone else None
-    storage = get_storage()
     album = (
-        [{
-            "url": storage.public_url(camera.view_reference_key),
-            "camera_name": f"{camera.name} · прежний утверждённый ракурс",
-            "is_primary": True,
-            "captured_at": (aware(camera.view_reference_at) or now).isoformat(),
-        }]
+        [
+            {
+                "url": view_asset_url(camera, camera.view_reference_key),
+                "camera_name": f"{camera.name} · прежний утверждённый ракурс",
+                "is_primary": True,
+                "captured_at": (aware(camera.view_reference_at) or now).isoformat(),
+            }
+        ]
         if camera.view_reference_key
         else []
     )
@@ -495,11 +643,22 @@ def _overdue_incident(db: Session, camera: Camera, project: Project, now: dateti
         category=IncidentCategory.CAMERA,
         type=IncidentType.CAMERA_VISIBILITY,
         title=f"Перенос камеры не завершён: {camera.name}",
-        description="\n".join([
-            f"Правило: перенос камеры «{camera.name}» был согласован до {local}; после переноса администратор утверждает новый ракурс.",
-            f"Наблюдение: срок переноса истёк в {local}, новый ракурс не утверждён. Причина переноса: {camera.view_move_reason or 'не указана'}.",
-            "Качество данных: пока ракурс не утверждён, кадры этой камеры не сверяются с эталоном.",
-        ]),
+        description="\n".join(
+            [
+                (
+                    f"Правило: перенос камеры «{camera.name}» согласован до {local}; "
+                    "после переноса заказчик утверждает новый ракурс."
+                ),
+                (
+                    f"Наблюдение: перенос истёк в {local}, ракурс не утверждён. "
+                    f"Причина: {camera.view_move_reason or 'не указана'}."
+                ),
+                (
+                    "Качество данных: пока ракурс не утверждён, кадры "
+                    "этой камеры не сверяются с эталоном."
+                ),
+            ]
+        ),
         discrepancy_type=VIEW_MOVE_OVERDUE,
         priority=IncidentPriority.MEDIUM,
         status=IncidentStatus.PENDING,
@@ -516,24 +675,108 @@ def _overdue_incident(db: Session, camera: Camera, project: Project, now: dateti
     )
     db.add(incident)
     db.flush()
+    snapshot_basis(
+        db,
+        incident,
+        kind="camera",
+        observed_from=until,
+        observed_until=now,
+        policy={
+            "provenance": "camera_policy",
+            "approval_event_id": str(approval.id),
+            "sha256": approval.reason,
+            "move_until": until.isoformat(),
+        },
+        sources=[
+            {"camera_id": str(camera.id), "reference_key": camera.view_reference_key}
+        ],
+    )
     assign_initial_alert(db, incident, project)
 
 
 # --- Повторная проверка ---
 
+
+def validated_capture_url(url: str) -> tuple[str, str, str]:
+    """Pin resolved addresses; private networks require explicit configuration."""
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in {"http", "https", "rtsp"}
+        or not parsed.hostname
+        or parsed.fragment
+    ):
+        raise ValueError("Unsupported camera target")
+    port = parsed.port or (
+        443 if parsed.scheme == "https" else 554 if parsed.scheme == "rtsp" else 80
+    )
+    networks = [
+        ipaddress.ip_network(str(value))
+        for value in getattr(settings, "camera_allowed_networks", [])
+    ]
+    addresses = {
+        ipaddress.ip_address(row[4][0].split("%", 1)[0])
+        for row in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+    }
+    if not addresses:
+        raise ValueError("Camera target unavailable")
+    for address in addresses:
+        address = getattr(address, "ipv4_mapped", None) or address
+        if (
+            address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_unspecified
+            or address.is_reserved
+        ):
+            raise ValueError("Camera target prohibited")
+        if not address.is_global and not any(
+            address.version == network.version and address in network
+            for network in networks
+        ):
+            raise ValueError("Private camera target not configured")
+        if parsed.scheme == "rtsp" and not any(
+            address.version == network.version and address in network
+            for network in networks
+        ):
+            raise ValueError("RTSP target requires a trusted network")
+    selected = str(sorted(addresses, key=str)[0])
+    pinned = str(httpx.URL(url).copy_with(host=selected))
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    if parsed.port:
+        host += f":{parsed.port}"
+    return pinned, host, parsed.hostname
+
+
 def capture_http_frame(url: str, *, timeout: float = 5.0) -> bytes | None:
-    """Один кадр HTTP-камеры без OpenCV: снимок (image/*) или первый JPEG из MJPEG-потока."""
+    """Fetch one bounded image or MJPEG frame through the protected network policy."""
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client, client.stream("GET", url) as r:
-            if r.status_code >= 400:
+        deadline = time.monotonic() + timeout
+        pinned, host, hostname = validated_capture_url(url)
+        if time.monotonic() >= deadline:
+            return None
+        limits = httpx.Timeout(timeout, read=min(timeout, 1.0))
+        with (
+            httpx.Client(
+                timeout=limits, follow_redirects=False, trust_env=False
+            ) as client,
+            client.stream(
+                "GET",
+                pinned,
+                headers={"Host": host},
+                extensions={"sni_hostname": hostname},
+            ) as r,
+        ):
+            if not 200 <= r.status_code < 300:
                 return None
             kind = r.headers.get("content-type", "")
             buf = b""
             for chunk in r.iter_bytes():
+                if time.monotonic() >= deadline:
+                    return None
                 buf += chunk
+                if len(buf) > MAX_IMAGE_BYTES:
+                    return None
                 if kind.startswith("image/"):
-                    if len(buf) > MAX_IMAGE_BYTES:
-                        return None
                     continue
                 start = buf.find(b"\xff\xd8")
                 end = buf.find(b"\xff\xd9", start + 2) if start >= 0 else -1
@@ -542,20 +785,40 @@ def capture_http_frame(url: str, *, timeout: float = 5.0) -> bytes | None:
                 if len(buf) > MAX_IMAGE_BYTES:
                     return None
             return buf if kind.startswith("image/") and buf else None
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError, OSError):
         return None
 
 
 def capture_frame(camera: Camera) -> bytes | None:
     url = camera.stream_url or ""
     if url.startswith(("http://", "https://")):
-        frame = capture_http_frame(url)
-        if frame:
-            return frame
-    from app.services.alert_service import _capture_frame  # noqa: PLC0415 - OpenCV for RTSP
-
+        return capture_http_frame(url)
+    if url.startswith("rtsp://") and not getattr(
+        settings, "camera_allow_rtsp_capture", False
+    ):
+        return None
     try:
-        return _capture_frame(camera)
+        pinned, _, _ = validated_capture_url(url)
+    except (ValueError, OSError):
+        return None
+    try:
+        import cv2
+
+        capture = cv2.VideoCapture(
+            pinned,
+            cv2.CAP_FFMPEG,
+            [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000],
+        )
+        try:
+            if not capture.isOpened():
+                return None
+            ok, image = capture.read()
+            if not ok:
+                return None
+            encoded, data = cv2.imencode(".jpg", image)
+            return data.tobytes() if encoded else None
+        finally:
+            capture.release()
     except ImportError:
         return None
 
@@ -572,18 +835,32 @@ def verify_view_incident(
     now = datetime.now(UTC)
     camera = db.get(Camera, incident.camera_id) if incident.camera_id else None
     if camera is None:
-        return VerificationResult("unavailable", {"reason": "no_camera", "checked_at": now.isoformat()})
+        return VerificationResult(
+            "unavailable", {"reason": "no_camera", "checked_at": now.isoformat()}
+        )
     if incident.discrepancy_type == VIEW_MOVE_OVERDUE:
-        approved_after = (aware(camera.view_reference_at) or datetime.min.replace(tzinfo=UTC)) >= aware(incident.created_at or now)
+        approved_after = (
+            aware(camera.view_reference_at) or datetime.min.replace(tzinfo=UTC)
+        ) >= aware(incident.created_at or now)
         outcome = "passed" if approved_after and not camera.view_move_status else "failed"
-        return VerificationResult(outcome, {"reason": None if outcome == "passed" else "view_not_approved", "checked_at": now.isoformat()})
+        return VerificationResult(
+            outcome,
+            {
+                "reason": None if outcome == "passed" else "view_not_approved",
+                "checked_at": now.isoformat(),
+            },
+        )
     if not camera.view_reference_key:
-        return VerificationResult("unavailable", {"reason": "no_view_reference", "checked_at": now.isoformat()})
+        return VerificationResult(
+            "unavailable", {"reason": "no_view_reference", "checked_at": now.isoformat()}
+        )
     try:
-        ref = features_from_image(get_storage().load(camera.view_reference_key))
+        ref = features_from_image(load_view_image(camera.view_reference_key))
     except (OSError, UnidentifiedImageError):
         logger.exception("Reference view unreadable: %s", camera.id)
-        return VerificationResult("unavailable", {"reason": "no_view_reference", "checked_at": now.isoformat()})
+        return VerificationResult(
+            "unavailable", {"reason": "no_view_reference", "checked_at": now.isoformat()}
+        )
     capture = capture or capture_frame
     scores: list[float] = []
     for i in range(samples):
@@ -599,11 +876,24 @@ def verify_view_incident(
         "working_cameras": 1 if scores else 0,
         "configured_cameras": 1,
         "view_match": [round(s, 2) for s in scores],
+        "requested_samples": samples,
+        "successful_samples": len(scores),
         "checked_at": now.isoformat(),
     }
     if not scores:
         return VerificationResult("unavailable", {**details, "reason": "no_frames"})
     good = sum(s >= MATCH_OK for s in scores)
-    if good * 2 > len(scores):
+    if len(scores) * 2 <= samples:
+        return VerificationResult(
+            "unavailable", {**details, "reason": "insufficient_frames"}
+        )
+    if good * 2 > samples:
         return VerificationResult("passed", {**details, "resolution": "restored"})
     return VerificationResult("failed", details)
+
+
+def _view_sha256(key):
+    try:
+        return hashlib.sha256(load_view_image(key)).hexdigest() if key else None
+    except (OSError, ValueError):
+        return None

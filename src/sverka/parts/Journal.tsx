@@ -7,6 +7,7 @@ import { DAY_MS, MONTHS_G, MONTHS_S, addDays, clock, dayStart, daysBetween, fmtD
 import { Spring, VelocityTracker, capture, clamp, lerp, project, reducedMotion, rubber } from '../lib/spring'
 import { ACT_DEFAULTS, buildAct, type ActOptions } from '../act'
 import { CloseIcon, Roll, Seg, SevIcon, Tick } from './common'
+import { CameraViewImage } from './CameraViewImage'
 
 type Preset = 'shift' | 'day' | 'week' | 'month' | 'all' | 'custom'
 interface Range { from: number; to: number; preset: Preset }
@@ -22,8 +23,8 @@ const PRESETS: { v: Preset; label: string }[] = [
 /* camera events need no decision, so they get their own chip instead of «Ждут решения» */
 type StKey = EventStatus | 'stream'
 const stKey = (e: UiEvent): StKey => (e.kind === 'stream' ? 'stream' : e.status)
-const STATUSES: StKey[] = ['pending', 'confirmed', 'in_progress', 'false_positive', 'resolved', 'stream']
-const STATUS_SHORT: Record<StKey, string> = { pending: 'Ждут решения', confirmed: 'Подтверждено', in_progress: 'В работе', false_positive: 'Ложные', resolved: 'Устранено', stream: 'Видеопоток' }
+const STATUSES: StKey[] = ['pending', 'confirmed', 'in_progress', 'remediation_submitted', 'false_positive', 'resolved', 'stream']
+const STATUS_SHORT: Record<StKey, string> = { pending: 'Ждут решения', confirmed: 'Подтверждено', in_progress: 'В работе', remediation_submitted: 'Ожидают приёмки', false_positive: 'Ложные', resolved: 'Закрыты', stream: 'Видеопоток' }
 const A4 = 794 // px, 210 mm at 96 dpi
 
 function spanText(from: number, to: number) {
@@ -429,7 +430,7 @@ function Row({ e, stages, included, onToggle, onOpen }: { e: UiEvent; stages: St
         <span className="j-st" data-s={stKey(e)}>
           {statusWord(e)}
         </span>
-        <span className="j-thumb">{photo ? <img src={photo.url} alt="" loading="lazy" /> : null}</span>
+        <span className="j-thumb">{photo ? <CameraViewImage url={photo.url} alt="" loading="lazy" /> : null}</span>
       </button>
     </div>
   )
@@ -441,7 +442,7 @@ function Shot({ e, included, onToggle, onOpen }: { e: UiEvent; included: boolean
     <div className="j-shot" data-sev={toneOf(e)}>
       <button type="button" className="j-open" onClick={(ev) => onOpen(e.id, ev.currentTarget)}>
         <span className="j-pic">
-          {photo ? <img src={photo.url} alt="" loading="lazy" /> : <span className="j-nopic">кадр не сохранён</span>}
+          {photo ? <CameraViewImage url={photo.url} alt="" loading="lazy" /> : <span className="j-nopic">кадр не сохранён</span>}
           <span className="j-cap">
             <span className="j-sev" data-sev={toneOf(e)}>
               <SevIcon sev={toneOf(e)} />

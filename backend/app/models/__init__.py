@@ -5,6 +5,9 @@
 успели импортироваться. Пропущенная модель — молча потерянная таблица.
 """
 
+from app.models import customer_control  # noqa: F401
+from app.models.alert import AlertNotification
+from app.models.camera_view import CameraViewEvent
 from app.models.enums import (
     AnalysisStatus,
     CameraStatus,
@@ -30,12 +33,12 @@ from app.models.enums import (
     UserRole,
     ZoneRiskLevel,
 )
-from app.models.alert import AlertNotification
-from app.models.camera_view import CameraViewEvent
 from app.models.document import DocumentAnalysisRun, DocumentChunk, ProjectDocument
 from app.models.geocoding import GeocodingThrottle
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
+from app.models.ppr_analysis import PprAnalysis, PprPage, PprRequirement
+from app.models.ppr_document import PprDocument
 from app.models.project import (
     Camera,
     CameraHealthEvent,
@@ -48,12 +51,12 @@ from app.models.report import GeneratedReport, ObservationLog, ReportSchedule
 from app.models.rules import CostRate, RuleSet, WorkRequirement
 from app.models.safety import (
     SafetyDocument,
+    SafetyEvent,
+    SafetyFrameReceipt,
     SafetyRequirement,
     SafetySanction,
-    SafetyZone,
     SafetyTrack,
-    SafetyFrameReceipt,
-    SafetyEvent,
+    SafetyZone,
 )  # noqa: F401
 from app.models.schedule import ScheduleTask
 from app.models.user import User
@@ -65,6 +68,10 @@ __all__ = [
     "ProjectDocument",
     "DocumentChunk",
     "DocumentAnalysisRun",
+    "PprDocument",
+    "PprAnalysis",
+    "PprPage",
+    "PprRequirement",
     "SafetyDocument",
     "SafetyRequirement",
     "SafetySanction",

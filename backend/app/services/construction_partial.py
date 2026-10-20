@@ -61,7 +61,8 @@ def reviewed_contract(mapping):
         )
         if observed != expected:
             raise ValueError(
-                "Source semantics differ from the reviewed inventory; no broad-to-narrow aliases"
+                "Source semantics differ from the reviewed inventory; no "
+                "broad-to-narrow aliases"
             )
         for row in rows:
             raw, semantic = row["raw_class"], row["semantic_class"]
@@ -77,7 +78,8 @@ def reviewed_contract(mapping):
             )
             if channel != expected_channel:
                 raise ValueError(
-                    "Source Truck and target loader/pump channel scopes must remain separate"
+                    "Source Truck and target loader/pump channel scopes must "
+                    "remain separate"
                 )
             if channel in decoder and decoder[channel] != semantic:
                 raise ValueError("Conflicting channel decoder")
@@ -135,7 +137,7 @@ def preflight_pickle(path):
         if len(entries) != 1 or entries[0].file_size > 32 * 1024 * 1024:
             raise ValueError("Unexpected checkpoint pickle layout/size")
         globals_found = set()
-        for op, arg, position in pickletools.genops(package.read(entries[0])):
+        for op, arg, _position in pickletools.genops(package.read(entries[0])):
             if op.name == "GLOBAL":
                 globals_found.add(arg)
                 if arg not in _STANDARD_GLOBALS:
@@ -203,7 +205,7 @@ def ordered_names(names):
         if set(names) != set(range(len(names))):
             raise ValueError("Checkpoint head IDs must be contiguous ordered integers")
         return [names[i] for i in range(len(names))]
-    if isinstance(names, (list, tuple)):
+    if isinstance(names, list | tuple):
         return list(names)
     raise ValueError("Checkpoint names missing")
 
@@ -252,7 +254,9 @@ def decode_partial_result(
         )
         if not len(coordinates) == len(scores) == len(classes):
             raise ValueError("Inconsistent prediction tensor lengths")
-        for i, (xyxy, score, class_id) in enumerate(zip(coordinates, scores, classes)):
+        for i, (xyxy, score, class_id) in enumerate(
+            zip(coordinates, scores, classes, strict=False)
+        ):
             if (
                 not math.isfinite(float(class_id))
                 or not float(class_id).is_integer()
@@ -280,7 +284,8 @@ def decode_partial_result(
                 caveats.append("source-specific generic truck, not dump_truck")
             if channel in {"backhoe_loader", "crawler_crane"}:
                 caveats.append(
-                    "Explicit fine target head; confidence uncalibrated and quality approval is separate"
+                    "Explicit fine target head; confidence uncalibrated and "
+                    "quality approval is separate"
                 )
             if clipped != list(map(float, xyxy)):
                 caveats.append("coordinates_clipped_to_frame")
@@ -348,7 +353,10 @@ def decode_partial_result(
                     "iou": overlap,
                     "automatic_collapse": False,
                     "action": "retain_both_pending_review",
-                    "caveat": "No parent gating or subtype inference; scores are uncalibrated",
+                    "caveat": (
+                        "No parent gating or subtype inference; scores are "
+                        "uncalibrated"
+                    ),
                 }
             )
     ungated = list(kept)
@@ -363,7 +371,10 @@ def decode_partial_result(
         "iou_threshold": parent_support_iou,
         "child_to_parent_channels": parent_channels,
         "decisions": [],
-        "warning": "Research candidate filter only; preserves raw/ungated outputs, does not calibrate confidence or establish correctness/absence",
+        "warning": (
+            "Research candidate filter only; preserves raw/ungated outputs, does "
+            "not calibrate confidence or establish correctness/absence"
+        ),
     }
     if parent_support_iou is not None:
         if not 0 < parent_support_iou <= 1:
@@ -450,7 +461,8 @@ class ConstructionPartial:
             or ckpt.get("partial_source_training") is not True
         ):
             raise ValueError(
-                "Initialization-only or unrecognized untrained checkpoint; inference forbidden"
+                "Initialization-only or unrecognized untrained checkpoint; "
+                "inference forbidden"
             )
         head = model.model[-1]
         if (

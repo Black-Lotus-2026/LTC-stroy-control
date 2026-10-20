@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
@@ -50,7 +50,7 @@ def test_cascade_shift_math(sqlite_session: Session) -> None:
     sqlite_session.add(project)
     sqlite_session.commit()
 
-    base_date = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    base_date = datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC)
     t1 = ScheduleTask(
         project_id=project.id,
         name="Этап 1: Подготовка",
@@ -79,7 +79,8 @@ def test_cascade_shift_math(sqlite_session: Session) -> None:
     sqlite_session.commit()
 
     engine = ScheduleEngine(sqlite_session)
-    # Delay stage 2 by 5 days -> stage 3 should shift forward by 5 days; stage 1 remains untouched
+    # Delay stage 2 by 5 days -> stage 3 should shift forward by 5 days; stage 1 remains
+    # untouched
     res = engine.cascade_shift(t2.id, delay_days=5)
 
     assert res.shifted_stage_count == 1

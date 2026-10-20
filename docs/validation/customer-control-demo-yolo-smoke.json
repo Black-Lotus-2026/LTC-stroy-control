@@ -1,0 +1,108 @@
+{
+  "checkpoint_sha256": "ce1195cb295534a08b3cdbba9ccf8c7a0c962875437ba49c4c6e68bbe3a4fb40",
+  "runtime_ready": true,
+  "status": "ready",
+  "device": "cpu",
+  "quality_verified": false,
+  "compliance_enabled": false,
+  "videos": [
+    {
+      "filename": "Camera 2_20261019_101926.mp4",
+      "sha256_before": "be28c5aab3d1778a41c2fa50e08308bb428ce1a7715b58ace4bc533fe030067c",
+      "size_bytes": 1555935601,
+      "fps": 19.990714319740054,
+      "frame_count": 59591,
+      "samples": [
+        {
+          "offset_seconds": 0.0,
+          "dimensions": [
+            2592,
+            1944
+          ],
+          "classes": {
+            "truck": 1,
+            "backhoe_loader": 1,
+            "loader": 2
+          },
+          "detections": 4,
+          "elapsed_seconds": 0.808
+        },
+        {
+          "offset_seconds": 30.0,
+          "dimensions": [
+            2592,
+            1944
+          ],
+          "classes": {
+            "truck": 1,
+            "loader": 1,
+            "backhoe_loader": 1
+          },
+          "detections": 3,
+          "elapsed_seconds": 0.811
+        },
+        {
+          "offset_seconds": 60.0,
+          "dimensions": [
+            2592,
+            1944
+          ],
+          "classes": {
+            "truck": 1
+          },
+          "detections": 1,
+          "elapsed_seconds": 0.937
+        }
+      ],
+      "sha256_after": "be28c5aab3d1778a41c2fa50e08308bb428ce1a7715b58ace4bc533fe030067c",
+      "original_unchanged": true
+    },
+    {
+      "filename": "Camera 3_20261019_101926.mp4",
+      "sha256_before": "82a2d647d60c077ed6cbfe72a22567b554b53f8250506a23b11ab4f1910369ff",
+      "size_bytes": 919586831,
+      "fps": 24.999423863570893,
+      "frame_count": 86783,
+      "samples": [
+        {
+          "offset_seconds": 0.0,
+          "dimensions": [
+            1920,
+            1080
+          ],
+          "classes": {
+            "other_vehicle": 1
+          },
+          "detections": 1,
+          "elapsed_seconds": 0.809
+        },
+        {
+          "offset_seconds": 30.0,
+          "dimensions": [
+            1920,
+            1080
+          ],
+          "classes": {
+            "other_vehicle": 1
+          },
+          "detections": 1,
+          "elapsed_seconds": 0.754
+        },
+        {
+          "offset_seconds": 60.0,
+          "dimensions": [
+            1920,
+            1080
+          ],
+          "classes": {
+            "other_vehicle": 1
+          },
+          "detections": 1,
+          "elapsed_seconds": 0.675
+        }
+      ],
+      "sha256_after": "82a2d647d60c077ed6cbfe72a22567b554b53f8250506a23b11ab4f1910369ff",
+      "original_unchanged": true
+    }
+  ]
+}

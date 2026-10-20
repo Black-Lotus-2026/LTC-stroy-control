@@ -4,6 +4,7 @@ import { LV, LV_ORDER, STEPS } from '../model'
 import { MACH, Sil, type Code } from '../lib/machinery'
 import { durShort, hhmm, plural } from '../lib/format'
 import { Spring, clamp, lerp } from '../lib/spring'
+import { PprCitations } from './PprSourceLink'
 
 /** How many events this rule would have produced during the watched part of this session. */
 function impact(obs: Observation, code: Code, d: { lvl: Level; warnAfter: number }, s: Settings) {
@@ -37,6 +38,8 @@ export function RuleEditor({
   onApply,
   onReset,
   onClose,
+  projectId,
+  onPpr,
 }: {
   code: Code
   stage: Stage
@@ -47,6 +50,8 @@ export function RuleEditor({
   onApply: (d: { lvl: Level; warnAfter: number | null; errAfter: number | null }) => Promise<void>
   onReset: () => Promise<void>
   onClose: () => void
+  projectId: string
+  onPpr: () => void
 }) {
   const r = prof.rules[code]
   const [draft, setDraft] = useState({ lvl: r.lvl, warnAfter: r.warnAfter, errAfter: r.errAfter })
@@ -175,7 +180,12 @@ export function RuleEditor({
       <div className="meta">
         Этап {stage.n} · {stage.name}
       </div>
-      <div className="meta">Источник требования: {r.source === 'document' ? 'ПОС/ППР · цитата во вкладке «Документы»' : r.source === 'manual' ? 'ручная правка' : 'справочник этапов'}</div>
+      {r.source ? <div className="meta">Источник требования: {r.source === 'document' ? 'ПОС/ППР · цитата во вкладке «Документы»' : r.source === 'manual' ? 'ручная правка' : 'справочник этапов'}</div> : null}
+      {r.basis ? <>
+        <p className="src-line">{r.basis === 'ppr_conflict' ? 'В ППР есть противоречащие требования. Автоматический вывод по этой технике приостановлен до проверки ответственным.' : `Основание — ППР объекта. Уровень: ${LV[r.lvl].label.toLowerCase()}. Изменить применение можно в документе ППР.`}</p>
+        <PprCitations projectId={projectId} citations={r.pprRequirements ?? []} />
+        <div className="pop-actions"><button type="button" className="btn small" onClick={close}>Закрыть</button><button type="button" className="btn primary small" onClick={onPpr}>К документам ППР</button></div>
+      </> : <>
       <div className="field">
         <span className="lbl" id="segLbl">
           Требование на этом этапе
@@ -255,6 +265,7 @@ export function RuleEditor({
           {busy === 'apply' ? 'Сохраняем…' : 'Применить'}
         </button>
       </div>
+      </>}
     </section>
   )
 }

@@ -2,6 +2,60 @@
 # Запуск: make up   (или docker compose up --build)
 
 services:
+  ppr_llm:
+    image: ollama/ollama@sha256:265409e1d931028a8f7d5a32bcbafddd7bffbc6cc629d77efe9560adf692a5e7
+    restart: unless-stopped
+    cpus: 6.0
+    mem_limit: 12g
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes:
+      - ppr_models_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ppr_model_init:
+    image: ollama/ollama@sha256:265409e1d931028a8f7d5a32bcbafddd7bffbc6cc629d77efe9560adf692a5e7
+    environment:
+      OLLAMA_HOST: http://ppr_llm:11434
+    command: ["pull", "qwen2.5:7b"]
+    depends_on:
+      ppr_llm:
+        condition: service_healthy
+
+  ppr_worker:
+    env_file:
+      - ./backend/.env
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app:celery_app worker -Q ppr -c 1 -l info
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      PPR_STORAGE_ROOT: /app/var/documents
+      CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
+      PPR_PROVIDER: ollama
+      PPR_OLLAMA_URL: http://ppr_llm:11434
+      PPR_ANALYSIS_MODEL: qwen2.5:7b
+    volumes:
+      - ./backend:/app
+      - ppr_documents_data:/app/var/documents
+      - camera_views_private:/app/var/camera-views-private
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ppr_model_init:
+        condition: service_completed_successfully
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -47,6 +101,11 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
+      PPR_STORAGE_ROOT: /app/var/documents
+      CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
+      PPR_PROVIDER: ollama
+      PPR_OLLAMA_URL: http://ppr_llm:11434
+      PPR_ANALYSIS_MODEL: qwen2.5:7b
       STORAGE_PUBLIC_URL: http://localhost:8000/media
       REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
       REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
@@ -65,6 +124,8 @@ services:
       # Код примонтирован — правки применяются без пересборки образа.
       - ./backend:/app
       - storage_data:/app/var/storage
+      - ppr_documents_data:/app/var/documents
+      - camera_views_private:/app/var/camera-views-private
       # Исходные файлы организаторов (справочник работ, ссылки на датасеты).
       - ./data:/app/data:ro
       - ./info:/app/info:ro
@@ -88,6 +149,8 @@ services:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       STORAGE_LOCAL_ROOT: /app/var/storage
+      PPR_STORAGE_ROOT: /app/var/documents
+      CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
       REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
       REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
       REPORT_LLM_REASONING_EFFORT: ${REPORT_LLM_REASONING_EFFORT:-low}
@@ -104,6 +167,8 @@ services:
     volumes:
       - ./backend:/app
       - storage_data:/app/var/storage
+      - ppr_documents_data:/app/var/documents
+      - camera_views_private:/app/var/camera-views-private
       - ./data:/app/data:ro
       - ./info:/app/info:ro
     depends_on:
@@ -121,8 +186,10 @@ services:
       ENVIRONMENT: docker
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
+      CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
     volumes:
       - ./backend:/app
+      - camera_views_private:/app/var/camera-views-private
     depends_on:
       redis:
         condition: service_healthy
@@ -132,7 +199,11 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     environment:
-      VITE_API_URL: http://127.0.0.1:8000
+      # Empty: the browser uses the site's hostname and API port 8000.
+      # Set an explicit public API origin when using a domain or HTTPS proxy.
+      VITE_API_URL: ${VITE_API_URL:-}
+      # Vite accepts IP addresses by default; explicitly allow the server domain.
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${FRONTEND_HOST:-localhost}
     volumes:
       - ./src:/app/src
       - ./public:/app/public
@@ -148,3 +219,6 @@ services:
 volumes:
   postgres_data:
   storage_data:
+  ppr_documents_data:
+  ppr_models_data:
+  camera_views_private:

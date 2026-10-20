@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+
 from openpyxl import Workbook
 
 
@@ -17,8 +18,12 @@ def generate_demo_schedule(output_path: Path | None = None) -> Path:
         # Default locations to search/create
         candidates = [
             Path("/app/data/demo_schedule_single_object.xlsx"),
-            Path(__file__).resolve().parents[2] / "data" / "demo_schedule_single_object.xlsx",
-            Path(__file__).resolve().parents[3] / "data" / "demo_schedule_single_object.xlsx",
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "demo_schedule_single_object.xlsx",
+            Path(__file__).resolve().parents[3]
+            / "data"
+            / "demo_schedule_single_object.xlsx",
             Path("data/demo_schedule_single_object.xlsx"),
         ]
         for c in candidates:

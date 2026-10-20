@@ -1,0 +1,96 @@
+.customer-context { flex: 1; min-width: 0; display: grid; gap: 6px; font-size: 12px; color: var(--fg-2); }
+.customer-context select { width: 100%; min-height: 44px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); color: var(--fg); text-overflow: ellipsis; }
+.customer-title { display: flex; justify-content: space-between; align-items: start; gap: 18px; margin-bottom: 22px; }
+.customer-title h1 { margin: 7px 0 10px; font: 400 clamp(28px, 4vw, 42px)/1.12 var(--f-display); }
+.customer-title p, .customer-muted { margin: 0; color: var(--fg-2); line-height: 1.65; font-size: 13px; }
+.customer-notice { padding: 12px 16px; border: 1px solid var(--line-2); border-radius: 9px; margin: 0 0 18px; font-size: 13px; line-height: 1.6; }
+.customer-notice[data-kind="error"] { color: var(--err); background: var(--err-bg); }
+.customer-notice[data-kind="demo"] { color: var(--plan-2); background: var(--plan-faint); }
+.customer-state { padding: 30px; border: 1px dashed var(--line-2); border-radius: 12px; display: grid; gap: 12px; align-items: start; justify-items: start; }
+.customer-state h2, .customer-state p { margin: 0; }
+.customer-state p { color: var(--fg-2); font-size: 14px; line-height: 1.6; }
+.customer-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 18px; }
+.customer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; }
+.customer-card { padding: 20px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); display: grid; align-content: start; gap: 12px; min-width: 0; }
+.customer-card h2, .customer-card h3 { margin: 0; font-size: 18px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.customer-card p { margin: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.customer-card small { color: var(--fg-2); line-height: 1.5; }
+.customer-meta { display: flex; flex-wrap: wrap; align-items: start; gap: 7px 14px; font-size: 12px; line-height: 1.5; color: var(--fg-2); }
+.customer-status { font-size: 12px; line-height: 1.5; color: var(--plan-2); }
+.customer-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.customer-actions .btn { min-height: 44px; justify-content: center; }
+.customer-dialog { color: var(--fg); background: var(--bg); width: min(1020px, calc(100vw - 40px)); max-width: none; max-height: calc(100dvh - 40px); overflow: auto; padding: 0; border: 1px solid var(--line-2); border-radius: 14px; }
+.customer-dialog::backdrop { background: var(--scrim); backdrop-filter: blur(3px); }
+.customer-dialog-head { display: flex; justify-content: space-between; gap: 16px; padding: 22px 26px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+.customer-dialog-head h2 { margin: 6px 0 0; font: 400 26px/1.2 var(--f-display); }
+.customer-dialog-body { padding: 24px 26px 32px; display: grid; gap: 22px; }
+.customer-dialog-body section { display: grid; gap: 12px; }
+.customer-dialog-body h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.customer-dialog-body p, .customer-dialog-body li { margin: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.customer-dialog-body blockquote { margin: 0; padding: 12px 16px; border-left: 3px solid var(--plan); background: var(--surface); white-space: pre-wrap; font-size: 13px; line-height: 1.65; }
+.customer-form { display: grid; gap: 14px; }
+.customer-form label { display: grid; gap: 7px; font-size: 13px; color: var(--fg-2); }
+.customer-form input:not([type="checkbox"]), .customer-form select, .customer-form textarea { width: 100%; min-height: 44px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 7px; padding: 10px 12px; font: inherit; }
+.customer-form textarea { min-height: 100px; resize: vertical; }
+.customer-form .customer-check { display: flex; align-items: flex-start; gap: 10px; }
+.customer-form .customer-check input { margin-top: 4px; }
+.customer-evidence { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; }
+.customer-evidence figure { margin: 0; display: grid; gap: 8px; }
+.customer-evidence img { width: 100%; height: 220px; object-fit: contain; background: var(--surface); border-radius: 8px; }
+.customer-evidence figcaption { color: var(--fg-2); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.customer-timeline { margin: 0; padding-left: 20px; display: grid; gap: 12px; }
+.customer-inline-check { display: flex; align-items: start; gap: 9px; }
+.customer-inline-check input { margin-top: 5px; }
+@media (max-width: 640px) {
+ .customer-context { order: 3; flex-basis: 100%; }
+ .customer-title { flex-wrap: wrap; }
+ .customer-dialog { width: 100vw; max-height: 100dvh; height: 100dvh; border: 0; border-radius: 0; }
+ .customer-dialog-head, .customer-dialog-body { padding: 18px; }
+ .customer-dialog-head h2 { font-size: 23px; }
+ .customer-actions .btn { flex: 1 1 130px; }
+ .customer-state { padding: 22px; }
+}
+/* R1 tools use the existing Workspace, queue and settings sheet materials. */
+.native-workspace { height: 100%; min-height: 0; }
+.access-empty { grid-template-rows: var(--bar-h) minmax(0, 1fr); }
+.access-content { overflow: auto; padding: var(--gut); max-width: 1000px; width: 100%; margin: 0 auto; }
+.access-state { padding: 24px; display: grid; justify-items: start; gap: 14px; margin-bottom: 24px; }
+.access-state h1 { font: 400 28px/1.2 var(--f-display); margin: 0; }
+.access-state p { color: var(--fg-3); line-height: 1.6; }
+.workspace-access-line { display: flex; gap: 14px; align-items: center; padding: 7px var(--gut); color: var(--fg-3); font-size: 12px; border-bottom: 1px solid var(--line); }
+.customer-role-sheet { width: 780px; }
+.customer-role-sheet .tabs { overflow-x: auto; flex-shrink: 0; scrollbar-width: thin; }
+.customer-role-sheet .tabs button { white-space: nowrap; }
+.customer-role-sheet .tabs button[aria-selected="true"] { box-shadow: inset 0 -2px var(--fg); }
+.customer-role-sheet .sheet-body { padding-top: 20px; }
+.customer-role-sheet .customer-card { padding: 16px; border-radius: 8px; border-color: var(--line); }
+.customer-role-sheet .customer-card h2, .customer-role-sheet .customer-card h3 { font-size: 16px; }
+.customer-role-sheet .customer-grid { grid-template-columns: minmax(0, 1fr); }
+.customer-role-sheet .customer-state { padding: 20px; border-radius: 8px; }
+.role-queue-filter { padding: 0 8px 10px; display: flex; gap: 12px; align-items: center; }
+.role-queue-filter select { min-width: 0; max-width: 100%; flex: 1; background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--line); border-radius: 5px; padding: 7px; font: inherit; font-size: 12px; }
+.role-queue-filter .link { font-size: 11.5px; }
+.role-q-card { grid-template-columns: 3px minmax(0, 1fr); }
+.role-q-card .q-sub { display: block; }
+.role-q-card .customer-meta { margin-top: 4px; color: var(--fg-3); font-size: 11px; }
+.customer-task-queue .q-list { max-height: 42vh; overflow: auto; scrollbar-width: thin; }
+.customer-role-sheet .customer-form label { color: var(--fg-2); }
+@media (max-width: 860px) {
+ .customer-role-sheet { width: auto; }
+ .customer-role-sheet .customer-title { flex-wrap: wrap; }
+ .customer-task-queue .q-list { max-height: none; }
+ .access-content { padding: 16px; }
+}
+
+.work[data-document-only="true"] { grid-template-columns: minmax(0, 1fr); }
+.document-entry { padding: 28px; display: grid; align-content: center; justify-items: start; gap: 16px; }
+.document-entry h2 { margin: 0; font: 400 28px/1.2 var(--f-display); }
+.document-entry p { max-width: 60ch; margin: 0; color: var(--fg-3); font-size: 14px; line-height: 1.65; }
+.intro-foot .it-task { max-width: 46ch; line-height: 1.45; }
+.it-context-select { max-width: min(46ch, 100%); min-height: 32px; margin-top: 3px; padding: 5px 8px; color: var(--fg-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: 5px; font: 12px var(--f-ui); }
+@media (max-width: 720px) { .intro .intro-foot { grid-template-areas: "steps steps" "role role" "go go"; } .intro-foot .it-go { justify-self: start; } }
+
+.intro-foot .it-role > * { min-width: 0; max-width: 100%; }
+.intro-foot .it-role b { white-space: normal; overflow-wrap: anywhere; }
+.intro-foot .it-context-select { width: 100%; }
+@media (max-width: 600px) { .intro .it-tag { display: none; } }

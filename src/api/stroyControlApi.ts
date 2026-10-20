@@ -296,6 +296,9 @@ export interface AdminRecipient {
 
 function getApiBaseUrl(): string {
   const envUrl = import.meta.env.VITE_API_URL
+  if (envUrl === 'same-origin') {
+    return typeof window !== 'undefined' ? window.location.origin : ''
+  }
   if (envUrl && typeof envUrl === 'string') {
     // Windows Docker IPv6 bug: 'localhost' resolves to [::1] which hangs in Docker Windows bridge.
     // Replace localhost with 127.0.0.1 to force direct IPv4 connection.
@@ -355,6 +358,12 @@ export interface AuthTokenResponse {
 }
 
 const TOKEN_KEY = 'stroy_control_token'
+let selectedProjectAssignment: string | null = null
+
+/** A server-issued pointer, never a client-side authorization decision. */
+export function setProjectAssignment(assignmentId: string | null): void {
+  selectedProjectAssignment = assignmentId
+}
 
 export function getStoredToken(): string | null {
   try {
@@ -365,6 +374,7 @@ export function getStoredToken(): string | null {
 }
 
 export function setStoredToken(token: string | null): void {
+  if (!token) selectedProjectAssignment = null
   try {
     if (token) {
       localStorage.setItem(TOKEN_KEY, token)
@@ -378,10 +388,10 @@ export function setStoredToken(token: string | null): void {
 
 export function getAuthHeaders(): Record<string, string> {
   const token = getStoredToken()
-  if (token) {
-    return { Authorization: `Bearer ${token}` }
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(selectedProjectAssignment ? { 'X-Project-Assignment': selectedProjectAssignment } : {}),
   }
-  return {}
 }
 
 export async function registerUser(data: {

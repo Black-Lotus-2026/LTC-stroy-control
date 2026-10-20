@@ -47,6 +47,43 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "incidents"
 
+    workflow_version: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    legacy_duplicate: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    row_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    case_kind: Mapped[str] = mapped_column(
+        String(24), default="construction", server_default="construction"
+    )
+    area_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("responsibility_areas.id", ondelete="RESTRICT")
+    )
+    origin_participation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("project_organizations.id", ondelete="RESTRICT")
+    )
+    responsible_participation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("project_organizations.id", ondelete="RESTRICT")
+    )
+    assignee_assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("project_assignments.id", ondelete="RESTRICT")
+    )
+    source_safety_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("safety_events.id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    detected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    reaction_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remediation_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_origin: Mapped[str | None] = mapped_column(String(24))
+
     # Короткий код для людей: он же показывается в интерфейсе и называется
     # в разговоре («проверь INC-247»). Внутренние связи идут по id.
     code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
@@ -145,7 +182,7 @@ class Incident(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     camera: Mapped[Camera | None] = relationship()
     schedule_task: Mapped[ScheduleTask | None] = relationship()
     rule_set: Mapped[RuleSet | None] = relationship()
-    assignee: Mapped[User | None] = relationship()
+    assignee: Mapped[User | None] = relationship(foreign_keys=[assigned_user_id])
 
     events: Mapped[list[IncidentEvent]] = relationship(
         back_populates="incident",
