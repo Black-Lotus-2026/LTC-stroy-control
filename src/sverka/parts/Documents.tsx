@@ -126,8 +126,8 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     <h3>Документы проекта и агент техники</h3>
     <p>Загрузите ПОС или ППР. После анализа агент обновит подтверждённые требования к технике и покажет, что изменилось. Любое изменение можно отменить.</p>
     {agentStatus && <div className={`doc-key-status ${agentStatus.configured ? 'is-ready' : 'is-missing'}`} role={agentStatus.configured ? 'status' : 'alert'}>
-      <strong>API-ключ агента: {agentStatus.key_configured ? 'указан' : 'не указан'}</strong>
-      <span>{agentStatus.configured ? `Модель: ${agentStatus.model}. Ключ хранится на сервере.` : agentStatus.key_configured ? 'Проверьте адрес API и имя модели на сервере.' : 'Добавьте DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY в конфигурацию API и worker, затем перезапустите сервисы.'}</span>
+      <strong>{agentStatus.provider === 'gigachat' ? 'GigaChat' : 'Внешний API'} · ключ: {agentStatus.key_configured ? 'указан' : 'не указан'}</strong>
+      <span>{agentStatus.configured ? `Модель: ${agentStatus.model}. Ключ хранится на сервере.` : agentStatus.key_configured ? 'Проверьте модель, адрес API, scope и сертификат на сервере.' : agentStatus.provider === 'gigachat' ? 'Добавьте GIGACHAT_CREDENTIALS в конфигурацию API и worker, затем перезапустите сервисы.' : 'Добавьте DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY в конфигурацию API и worker, затем перезапустите сервисы.'}</span>
     </div>}
     <p className="doc-limitation">Анализ документа определяет плановое требование. Текущая CV-модель работает в режиме наблюдения; отсутствие техники по кадрам автоматически не подтверждается.</p>
     {error && <p className="err-line" role="alert">{error}</p>}

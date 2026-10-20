@@ -52,6 +52,7 @@ export interface DocumentAnalysis {
 }
 
 export interface DocumentAgentStatus {
+  provider: 'openai_compatible' | 'gigachat'
   configured: boolean
   key_configured: boolean
   model: string

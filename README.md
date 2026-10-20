@@ -252,6 +252,9 @@ API: `GET /api/v1/projects/{project_id}/weather` читает сохранённ
 правила техники, покажет цитаты и список изменений; каждое можно отменить.
 Агент использует внешний OpenAI-совместимый API; ключ задаётся в
 `backend/.env` как `DOCUMENT_LLM_API_KEY` или `OPENROUTER_API_KEY`.
+Для GigaChat 3 Ultra установите `DOCUMENT_LLM_PROVIDER=gigachat` и задайте
+`GIGACHAT_CREDENTIALS` (ключ API физлица) в том же файле. Сертификат НУЦ
+Минцифры находится в `backend/certs` и используется только для GigaChat.
 Подробности, ограничения и шаги локальной проверки — в
 [описании агента](docs/pos-ppr-agent-task-draft.md).
 

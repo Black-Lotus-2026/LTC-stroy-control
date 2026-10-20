@@ -221,6 +221,7 @@ def test_rule_change_during_run_prevents_automatic_application(state):
 
 def test_agent_key_status_exposes_presence_only(state, monkeypatch):
     db, _, owner, _, project, _, _, _ = state
+    monkeypatch.setattr(settings, "document_llm_provider", "openai_compatible")
     monkeypatch.setattr(settings, "document_llm_api_key", SecretStr(""))
     monkeypatch.setattr(settings, "openrouter_api_key", SecretStr(""))
     empty = agent_status(project.id, db, owner)

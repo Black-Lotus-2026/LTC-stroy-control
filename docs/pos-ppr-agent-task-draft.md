@@ -26,6 +26,35 @@
 указать в корневом `.env` релиза как `DOCUMENT_LLM_API_KEY` или
 `OPENROUTER_API_KEY`, затем пересоздать `api` и `worker`.
 
+### GigaChat 3 Ultra
+
+В `backend/.env` задайте `DOCUMENT_LLM_PROVIDER=gigachat`,
+`GIGACHAT_CREDENTIALS=<ключ авторизации GigaChat API>` и
+`GIGACHAT_SCOPE=GIGACHAT_API_PERS`. Модель по умолчанию —
+`GIGACHAT_MODEL=GigaChat-3-Ultra`, адрес — `https://api.giga.chat/v1`.
+Ultra [доступна в API физическим лицам в режиме freemium](https://developers.sber.ru/docs/ru/gigachat/models/gigachat-3-ultra).
+Это отдельный ключ; `OPENROUTER_API_KEY` для неё не используется.
+
+Проверенный корневой сертификат НУЦ Минцифры находится в
+`backend/certs/russian_trusted_root_ca.pem`; клиент GigaChat использует его
+с включённой проверкой TLS. Его отпечаток SHA-256 —
+`D26D2D0231B7C39F92CC738512BA54103519E4405D68B5BD703E9788CA8ECF31`.
+При обновлении сертификата берите новую версию с
+[официальной страницы Госуслуг](https://www.gosuslugi.ru/crt) и сверяйте
+отпечаток. [Инструкция Sber по сертификату](https://developers.sber.ru/docs/ru/gigachat/certificates).
+
+После настройки выполните `docker compose up --build -d api worker`.
+Для пробного запроса к модели выполните
+`docker compose exec api python -m app.scripts.check_document_provider`.
+Команда проверяет JSON-ответ на коротком тестовом фрагменте и выводит только
+провайдера, модель, результат и тип ошибки — ключ и токен не печатаются.
+На сервере в корневом `.env` релиза нужно задать те же переменные и передать
+их обоим контейнерам. Статус в интерфейсе показывает наличие ключа и
+корректность локальной конфигурации; доступ к OAuth и модели подтверждается
+только реальным запросом. Для обмена ключа на токен SDK обращается к
+`ngw.devices.sberbank.ru:9443`; этот адрес должен быть доступен по сети.
+[Авторизация GigaChat API](https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/gigachat-api).
+
 ## Цель
 
 Для этапов, загруженных из календарного плана Excel/CSV, находить требования к

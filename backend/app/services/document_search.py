@@ -9,6 +9,7 @@ import uuid
 import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -214,8 +215,42 @@ class AgentFailed(RuntimeError):
     pass
 
 
+def _gigachat_ca_bundle() -> Path | None:
+    configured = settings.gigachat_ca_bundle_file.strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    return path if path.is_absolute() else Path(__file__).resolve().parents[2] / path
+
+
 def agent_configuration_status() -> dict:
     """Report configuration presence without exposing any credential."""
+    if settings.document_llm_provider == "gigachat":
+        model = settings.gigachat_model.strip()
+        endpoint = urlsplit(settings.gigachat_base_url.strip())
+        ca_bundle = _gigachat_ca_bundle()
+        key_configured = bool(settings.gigachat_credentials.get_secret_value())
+        return {
+            "provider": "gigachat",
+            "configured": bool(
+                key_configured
+                and model
+                and endpoint.scheme == "https"
+                and endpoint.hostname == "api.giga.chat"
+                and endpoint.path.rstrip("/") == "/v1"
+                and not endpoint.username
+                and not endpoint.password
+                and not endpoint.query
+                and not endpoint.fragment
+                and (ca_bundle is None or ca_bundle.is_file())
+                and (
+                    model != "GigaChat-3-Ultra"
+                    or settings.gigachat_scope == "GIGACHAT_API_PERS"
+                )
+            ),
+            "key_configured": key_configured,
+            "model": model,
+        }
     base_url = settings.document_llm_base_url.strip().rstrip("/")
     parsed = urlsplit(base_url)
     valid_endpoint = bool(
@@ -232,6 +267,7 @@ def agent_configuration_status() -> dict:
     )
     model = settings.document_llm_model.strip()
     return {
+        "provider": "openai_compatible",
         "configured": bool(key_configured and valid_endpoint and model),
         "key_configured": key_configured,
         "model": model,
@@ -239,6 +275,30 @@ def agent_configuration_status() -> dict:
 
 
 def _remote_llm():
+    if settings.document_llm_provider == "gigachat":
+        if not settings.gigachat_credentials.get_secret_value():
+            raise AgentUnavailable("Задайте GIGACHAT_CREDENTIALS для анализа документов")
+        if not agent_configuration_status()["configured"]:
+            raise AgentUnavailable(
+                "Проверьте GIGACHAT_MODEL, GIGACHAT_SCOPE, GIGACHAT_BASE_URL и сертификат"
+            )
+        from langchain_gigachat import GigaChat
+
+        options = {
+            "model": settings.gigachat_model.strip(),
+            "credentials": settings.gigachat_credentials.get_secret_value(),
+            "scope": settings.gigachat_scope,
+            "base_url": settings.gigachat_base_url.strip(),
+            "verify_ssl_certs": True,
+            "temperature": 0,
+            "max_tokens": 1500,
+            "timeout": settings.document_llm_timeout_seconds,
+            "max_retries": 0,
+        }
+        if ca_bundle := _gigachat_ca_bundle():
+            options["ca_bundle_file"] = str(ca_bundle)
+        return GigaChat(**options)
+
     from langchain_openai import ChatOpenAI
 
     base_url = settings.document_llm_base_url.strip().rstrip("/")

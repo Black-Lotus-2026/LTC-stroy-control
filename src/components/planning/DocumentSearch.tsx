@@ -120,7 +120,7 @@ export function DocumentSearch({ projectId, stageId, stageName, toast }: {
       <button className="button primary" type="button" disabled={busy || running || !hasSource || !agentStatus?.configured} onClick={analyze}>Проанализировать и обновить</button>
     </div>
     {agentStatus && <p className={agentStatus.configured ? 'document-muted' : 'planning-error'} role={agentStatus.configured ? 'status' : 'alert'}>
-      API-ключ агента: {agentStatus.key_configured ? 'указан' : 'не указан'}. {agentStatus.configured ? `Модель: ${agentStatus.model}.` : agentStatus.key_configured ? 'Проверьте адрес API и имя модели в конфигурации сервера.' : 'Добавьте ключ в конфигурацию API и worker и перезапустите сервисы.'}
+      {agentStatus.provider === 'gigachat' ? 'GigaChat' : 'Внешний API'} · ключ: {agentStatus.key_configured ? 'указан' : 'не указан'}. {agentStatus.configured ? `Модель: ${agentStatus.model}.` : agentStatus.key_configured ? 'Проверьте модель, адрес API, scope и сертификат на сервере.' : `Добавьте ${agentStatus.provider === 'gigachat' ? 'GIGACHAT_CREDENTIALS' : 'DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY'} в конфигурацию API и worker и перезапустите сервисы.`}
     </p>}
     <div className="document-upload-row">
       <label>Тип документа <select value={kind} disabled={busy} onChange={event => setKind(event.target.value as DocumentKind)}>

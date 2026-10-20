@@ -255,7 +255,7 @@ export interface DocumentRun {
     auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[]; finished_at: string }
   }
 }
-export interface DocumentAgentStatus { configured: boolean; key_configured: boolean; model: string }
+export interface DocumentAgentStatus { provider: 'openai_compatible' | 'gigachat'; configured: boolean; key_configured: boolean; model: string }
 export type DocumentSelection = { stage_id: string; class_code: string }
 export const documents = (projectId: string) => req<ProjectDocument[]>(`/projects/${projectId}/documents`)
 export const documentAgentStatus = (projectId: string) => req<DocumentAgentStatus>(`/projects/${projectId}/documents/agent-status`)

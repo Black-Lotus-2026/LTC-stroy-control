@@ -271,7 +271,8 @@ def analyze_plan(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
                 }
                 for doc in documents
             ],
-            "model": settings.document_llm_model,
+            "provider": settings.document_llm_provider,
+            "model": agent_configuration_status()["model"],
         },
         result={"stages": [], "applied": []},
     )

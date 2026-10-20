@@ -354,6 +354,9 @@ def test_agent_builds_external_api_chain(monkeypatch):
     from pydantic import SecretStr
 
     monkeypatch.setattr(
+        "app.services.document_search.settings.document_llm_provider", "openai_compatible"
+    )
+    monkeypatch.setattr(
         "app.services.document_search.settings.document_llm_base_url",
         "https://example-model-provider.test/v1",
     )
@@ -374,6 +377,9 @@ def test_agent_requires_api_key(monkeypatch):
     from pydantic import SecretStr
 
     monkeypatch.setattr(
+        "app.services.document_search.settings.document_llm_provider", "openai_compatible"
+    )
+    monkeypatch.setattr(
         "app.services.document_search.settings.document_llm_api_key", SecretStr("")
     )
     monkeypatch.setattr(
@@ -387,12 +393,65 @@ def test_agent_rejects_local_api_endpoint(monkeypatch):
     from pydantic import SecretStr
 
     monkeypatch.setattr(
+        "app.services.document_search.settings.document_llm_provider", "openai_compatible"
+    )
+    monkeypatch.setattr(
         "app.services.document_search.settings.document_llm_api_key",
         SecretStr("test-key"),
     )
     monkeypatch.setattr(
         "app.services.document_search.settings.document_llm_base_url",
         "http://127.0.0.1:11434/v1",
+    )
+    with pytest.raises(AgentUnavailable):
+        build_chain()
+
+
+def test_agent_builds_gigachat_ultra_chain(monkeypatch):
+    pytest.importorskip("langchain_gigachat")
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        "app.services.document_search.settings.document_llm_provider", "gigachat"
+    )
+    monkeypatch.setattr(
+        "app.services.document_search.settings.gigachat_credentials",
+        SecretStr("test-authorization-key"),
+    )
+    monkeypatch.setattr(
+        "app.services.document_search.settings.gigachat_scope", "GIGACHAT_API_PERS"
+    )
+    from app.services.document_search import agent_configuration_status
+
+    status = agent_configuration_status()
+    assert status == {
+        "provider": "gigachat",
+        "configured": True,
+        "key_configured": True,
+        "model": "GigaChat-3-Ultra",
+    }
+    assert "test-authorization-key" not in str(status)
+    chain = build_chain()
+    assert chain.steps[1].__class__.__name__ == "GigaChat"
+    assert chain.steps[1].model == "GigaChat-3-Ultra"
+
+
+def test_gigachat_ultra_requires_personal_key(monkeypatch):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(
+        "app.services.document_search.settings.document_llm_provider", "gigachat"
+    )
+    monkeypatch.setattr(
+        "app.services.document_search.settings.gigachat_credentials", SecretStr("")
+    )
+    with pytest.raises(AgentUnavailable, match="GIGACHAT_CREDENTIALS"):
+        build_chain()
+    monkeypatch.setattr(
+        "app.services.document_search.settings.gigachat_credentials", SecretStr("test")
+    )
+    monkeypatch.setattr(
+        "app.services.document_search.settings.gigachat_scope", "GIGACHAT_API_B2B"
     )
     with pytest.raises(AgentUnavailable):
         build_chain()
