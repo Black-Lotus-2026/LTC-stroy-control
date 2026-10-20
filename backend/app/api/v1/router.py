@@ -10,6 +10,7 @@ from app.api.v1 import (
     alerts,
     auth,
     camera_views,
+    documents,
     health,
     incidents,
     management,
@@ -18,6 +19,7 @@ from app.api.v1 import (
     safety,
     schedule,
     videos,
+    weather,
 )
 
 api_router = APIRouter()
@@ -26,6 +28,8 @@ api_router.include_router(alerts.router)
 api_router.include_router(health.router)
 api_router.include_router(reports.router)
 api_router.include_router(projects.router)
+api_router.include_router(weather.router)
+api_router.include_router(documents.router)
 api_router.include_router(camera_views.router)
 api_router.include_router(schedule.router)
 api_router.include_router(videos.router)

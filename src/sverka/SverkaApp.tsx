@@ -5,7 +5,7 @@ import { Engine } from './engine'
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
 import { DEFAULTS, ROLE_LABEL, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loadLocalRules, loadSettings, rightsFor, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { PROBLEM_WORD, turnWords } from './lib/view'
-import { CODES, MACH, type Code } from './lib/machinery'
+import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
 import { Seg, ToastProvider, useToast } from './parts/common'
@@ -753,10 +753,26 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
 
   /* rules */
-  /* rules: the level goes to the server (shared); "не учитывать" and own timings stay in this browser */
+  /* Rule levels are shared; the browser only keeps timing and the skip label. */
   const writeLocal = (stageId: string, next: LocalRules) => {
     saveLocalRules(stageId, next)
     setLocalRules((m) => new Map(m).set(stageId, next))
+  }
+  const syncLocalSkippedRules = async () => {
+    for (const item of stages) {
+      const local = localRules.get(item.id) ?? loadLocalRules(item.id)
+      const skipped = CODES.filter(code => local[code]?.skip)
+      if (!skipped.length) continue
+      const profile = await api.profile(item.id)
+      const overrides: Record<string, string> = {}
+      for (const code of skipped) {
+        const rule = profile.probabilities.find(probability => toCode(probability.machinery_code) === code)
+        if (rule && rule.source !== 'document') overrides[MACH[code].api] = 'NEUTRAL'
+      }
+      if (!Object.keys(overrides).length) continue
+      const saved = await api.putOverrides(item.id, overrides)
+      setApiProfiles(current => new Map(current).set(item.id, saved))
+    }
   }
   const applyRule = async (stageId: string, code: Code, d: { lvl: Level; warnAfter: number | null; errAfter: number | null }) => {
     const r = profiles.get(stageId)!.rules[code]
@@ -766,7 +782,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     rec.skip = d.lvl === 'skip' || undefined
     rec.warnAfter = d.warnAfter ?? undefined
     rec.errAfter = d.errAfter ?? undefined
-    const target = d.lvl === 'skip' ? serverLvl : d.lvl
+    const target = d.lvl === 'skip' ? 'ok' : d.lvl
     if (target !== serverLvl) {
       const res = await api.putOverrides(stageId, { [MACH[code].api]: LV_TO_CLS[target as Exclude<Level, 'skip'>] })
       setApiProfiles((m) => new Map(m).set(stageId, res))
@@ -1080,6 +1096,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           </button>
         )}
         <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')}>Безопасность</button>
+        <button type="button" className="btn small safety-entry" disabled={!project} onClick={() => setSheet('documents')}>Документы</button>
         <button type="button" className="icon-btn" onClick={() => setSheet('control')} aria-label="Настройки контроля">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
             <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
@@ -1225,6 +1242,31 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           tab={sheet}
           recordingCameraId={safetyRecordingCameraId}
           onRecordingCamera={(id) => { setSafetyRecordingCameraId(id); engine.setSafetyRecordingCamera(id || undefined) }}
+          onBeforeDocumentAnalysis={syncLocalSkippedRules}
+          onDocumentRulesChanged={async (changes) => {
+            const stageIds = [...new Set(changes.map(item => item.stage_id))]
+            const refreshed = await Promise.all(stageIds.map(async id => [id, await api.profile(id)] as const))
+            setApiProfiles(current => {
+              const next = new Map(current)
+              refreshed.forEach(([id, profile]) => next.set(id, profile))
+              return next
+            })
+            for (const stageId of stageIds) {
+              const local = { ...(localRules.get(stageId) ?? loadLocalRules(stageId)) }
+              let changed = false
+              for (const selection of changes.filter(item => item.stage_id === stageId)) {
+                const code = toCode(selection.class_code)
+                const profile = refreshed.find(([id]) => id === stageId)?.[1]
+                const source = profile?.probabilities.find(item => toCode(item.machinery_code) === code)?.source
+                if (!code || source !== 'document' || !local[code]?.skip) continue
+                const rule = { ...local[code], skip: undefined }
+                if (rule.warnAfter == null && rule.errAfter == null) delete local[code]
+                else local[code] = rule
+                changed = true
+              }
+              if (changed) writeLocal(stageId, local)
+            }
+          }}
           settings={settings}
           onSettings={setSettings}
           obs={obs}

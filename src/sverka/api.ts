@@ -181,6 +181,7 @@ export interface ApiMachinery {
   probability: number
   classification: 'MANDATORY' | 'RECOMMENDED' | 'NEUTRAL' | 'UNCHARACTERISTIC'
   requirement_level: string
+  source?: 'catalog' | 'document' | 'manual'
 }
 export interface ApiProfile {
   stage_id: string
@@ -194,6 +195,97 @@ export const updateStage = (stageId: string, data: { planned_start: string; plan
   req<StageItem>(`/schedule/stages/${stageId}`, json('PUT', data), 'Не удалось сохранить сроки этапа')
 /** Always scoped to the object: without project_id the server clears the plans of every object. */
 export const clearPlan = (projectId: string) => req<{ deleted_count: number }>(`/schedule/clear?project_id=${projectId}`, { method: 'POST' }, 'Не удалось очистить план')
+
+/* POS/PPR document agent */
+export type DocumentKind = 'POS' | 'PPR' | 'TER'
+export interface ProjectDocument {
+  id: string
+  kind: DocumentKind
+  filename: string
+  size_bytes: number
+  created_at: string
+  chunk_count: number
+}
+export interface DocumentFinding {
+  name: string
+  purpose: string
+  document_id: string
+  document_name: string
+  document_kind: DocumentKind
+  chunk_id: string
+  locator: string
+  quote: string
+  class_code: string | null
+  requirement: 'required' | 'recommended' | 'mentioned'
+  review_status: string
+  mapping_method?: 'catalog' | 'agent' | 'unmapped'
+}
+export interface DocumentProposal {
+  class_code: string
+  class_name: string
+  current_probability: number | null
+  baseline_probability: number | null
+  proposed_probability: number | null
+  status: 'ready' | 'conflict' | 'manual_override' | 'unchanged'
+  source: string
+  change_kind?: 'document_requirement' | 'replaced_baseline'
+  evidence: DocumentFinding[]
+}
+export interface DocumentStageResult {
+  stage_id: string
+  stage_name: string
+  summary: string
+  reviewed_chunks: number
+  status: 'completed' | 'failed'
+  error?: string
+  findings: DocumentFinding[]
+  proposals: DocumentProposal[]
+  trace?: { step: string; selected_chunks?: number; claims?: number; accepted?: number; proposals?: number; terms?: string[]; status?: string }[]
+}
+export interface DocumentRun {
+  id: string
+  project_id: string
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed'
+  stage_count: number
+  completed_count: number
+  created_at: string
+  error: string | null
+  result: {
+    stages: DocumentStageResult[]
+    applied: { stage_id: string; class_code: string; applied_at: string; mode?: 'automatic' | 'manual'; change_kind?: 'document_requirement' | 'replaced_baseline'; previous_probability?: number | null; new_probability?: number; reverted_at?: string }[]
+    auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[]; finished_at: string }
+  }
+}
+export interface DocumentAgentStatus { provider: 'openai_compatible' | 'gigachat'; configured: boolean; key_configured: boolean; model: string }
+export type DocumentSelection = { stage_id: string; class_code: string }
+export const documents = (projectId: string) => req<ProjectDocument[]>(`/projects/${projectId}/documents`)
+export const documentAgentStatus = (projectId: string) => req<DocumentAgentStatus>(`/projects/${projectId}/documents/agent-status`)
+export const latestDocumentRun = (projectId: string) => req<DocumentRun | null>(`/projects/${projectId}/documents/analysis-runs/latest`)
+export const documentRuns = (projectId: string) => req<DocumentRun[]>(`/projects/${projectId}/documents/analysis-runs`)
+export const documentRun = (projectId: string, runId: string) => req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}`)
+export const analyzeDocuments = (projectId: string) => req<DocumentRun>(`/projects/${projectId}/documents/analyze-plan`, { method: 'POST' }, 'Не удалось запустить анализ')
+export const applyDocumentProposals = (projectId: string, runId: string, selections: DocumentSelection[]) =>
+  req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}/apply`, json('POST', { selections }), 'Не удалось применить предложения')
+export const revertDocumentProposals = (projectId: string, runId: string, selections: DocumentSelection[]) =>
+  req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}/revert`, json('POST', { selections }), 'Не удалось отменить изменения')
+export const uploadDocument = (projectId: string, file: File, kind: DocumentKind) => {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('kind', kind)
+  return req<ProjectDocument>(`/projects/${projectId}/documents`, { method: 'POST', body }, 'Не удалось загрузить документ')
+}
+export const deleteDocument = (projectId: string, documentId: string) =>
+  req<void>(`/projects/${projectId}/documents/${documentId}`, { method: 'DELETE' }, 'Не удалось удалить документ')
+export async function downloadDocument(projectId: string, doc: ProjectDocument) {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${doc.id}/file`, { headers: authHeaders() })
+  if (!response.ok) throw new ApiError('Не удалось скачать документ', response.status)
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = doc.filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
 export const profile = (stageId: string) => req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`)
 export const putOverrides = (stageId: string, overrides: Record<string, unknown>) =>
   req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`, json('PUT', { overrides }), 'Не удалось сохранить правило')

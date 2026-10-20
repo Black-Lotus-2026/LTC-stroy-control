@@ -50,6 +50,23 @@ class Settings(BaseSettings):
     management_queue_timeout_seconds: int = 300
     management_run_timeout_seconds: int = 90
 
+    # Provider for the POS/PPR document agent.
+    document_llm_provider: Literal["openai_compatible", "gigachat"] = "openai_compatible"
+    # External OpenAI-compatible API (OpenRouter by default).
+    document_llm_base_url: str = "https://openrouter.ai/api/v1"
+    document_llm_model: str = "openai/gpt-4o-mini"
+    document_llm_api_key: SecretStr = SecretStr("")
+    # GigaChat SDK exchanges this authorization key for short-lived access tokens.
+    gigachat_credentials: SecretStr = SecretStr("")
+    gigachat_scope: Literal[
+        "GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"
+    ] = "GIGACHAT_API_PERS"
+    gigachat_model: str = "GigaChat-3-Ultra"
+    gigachat_base_url: str = "https://api.giga.chat/v1"
+    gigachat_ca_bundle_file: str = "certs/russian_trusted_root_ca.pem"
+    document_llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    document_llm_max_chunks: int = Field(default=12, ge=4, le=30)
+
     # --- Хранилище кадров ---
     storage_backend: Literal["local"] = "local"
     storage_local_root: Path = Path("./var/storage")
@@ -91,7 +108,8 @@ class Settings(BaseSettings):
 
     # --- Контроль нарушений спецтехники ---
     # Период проверки и фиксации нарушений (в секундах).
-    # Если за это время не появилась обязательная/рекомендованная техника или обнаружена лишняя — фиксируется нарушение.
+    # Если за это время не появилась обязательная/рекомендованная техника
+    # или обнаружена лишняя — фиксируется нарушение.
     violation_evaluation_window_seconds: int = 30
 
     # Production always uses the one pinned trained checkpoint. Historical profile

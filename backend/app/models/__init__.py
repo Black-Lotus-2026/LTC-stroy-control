@@ -32,6 +32,8 @@ from app.models.enums import (
 )
 from app.models.alert import AlertNotification
 from app.models.camera_view import CameraViewEvent
+from app.models.document import DocumentAnalysisRun, DocumentChunk, ProjectDocument
+from app.models.geocoding import GeocodingThrottle
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.project import (
@@ -57,8 +59,12 @@ from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
+from app.models.weather import WeatherForecast
 
 __all__ = [
+    "ProjectDocument",
+    "DocumentChunk",
+    "DocumentAnalysisRun",
     "SafetyDocument",
     "SafetyRequirement",
     "SafetySanction",
@@ -78,6 +84,8 @@ __all__ = [
     "Zone",
     "Camera",
     "CameraHealthEvent",
+    "WeatherForecast",
+    "GeocodingThrottle",
     "CameraViewEvent",
     # План и методика
     "ScheduleTask",

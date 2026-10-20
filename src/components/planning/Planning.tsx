@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { type PageKey } from '../../data'
 import { type StageItem, type MachineryProbabilityItem, getCurrentStageByDate, loadDemoSchedule, uploadScheduleFile, clearSchedule, updateStageDates, cascadeShiftStages, fetchStageProbabilities, updateStageProbabilities, resetStageProbabilities } from '../../api/stroyControlApi'
-import { getStageMachineryRules } from '../../domain/stageRules'
 import { Icon, Status } from '../ui/Primitives'
+import { DocumentSearch } from './DocumentSearch'
 import './planning.css'
 
 const DAY = 86400000
@@ -22,12 +22,13 @@ function plannedPeriod(stage: StageItem, now: number) {
   return 'Предстоит по плану'
 }
 
-export function Progress({ stages, setStages, activeProjectId, navigate, toast }: {
+export function Progress({ stages, setStages, activeProjectId, navigate, toast, onStageOverridesUpdated }: {
   stages: StageItem[]
   setStages: React.Dispatch<React.SetStateAction<StageItem[]>>
   activeProjectId?: string | null
   navigate?: (p: PageKey) => void
   toast: (s: string) => void
+  onStageOverridesUpdated?: () => void
 }) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -39,6 +40,9 @@ export function Progress({ stages, setStages, activeProjectId, navigate, toast }
   const [delayDays, setDelayDays] = useState(5)
   const [delayedStageId, setDelayedStageId] = useState('')
   const [now, setNow] = useState(Date.now)
+  const [stageProbabilities, setStageProbabilities] = useState<{ stageId: string; items: MachineryProbabilityItem[] } | null>(null)
+  const [rulesReload, setRulesReload] = useState(0)
+  const [rulesError, setRulesError] = useState(false)
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60000)
@@ -47,7 +51,23 @@ export function Progress({ stages, setStages, activeProjectId, navigate, toast }
 
   const selectedStage = stages.find((stage) => stage.id === selectedStageId)
     || getCurrentStageByDate(stages, new Date(now)) || stages[0]
-  const stageRules = selectedStage ? getStageMachineryRules(selectedStage.name) : null
+  useEffect(() => {
+    if (!selectedStage?.id) { setStageProbabilities(null); return }
+    let active = true
+    setStageProbabilities(null)
+    setRulesError(false)
+    fetchStageProbabilities(selectedStage.id).then(response => {
+      if (active) setStageProbabilities({ stageId: selectedStage.id, items: response.probabilities })
+    }).catch(() => { if (active) setRulesError(true) })
+    return () => { active = false }
+  }, [selectedStage?.id, rulesReload])
+  const mandatoryMachinery = stageProbabilities?.stageId === selectedStage?.id
+    ? stageProbabilities.items.filter(item => item.classification === 'MANDATORY').map(item => item.machinery_name_ru)
+    : null
+  const refreshRules = () => {
+    setRulesReload(value => value + 1)
+    onStageOverridesUpdated?.()
+  }
   const startTimes = stages.map((stage) => dateTime(stage.planned_start)).filter(Number.isFinite)
   const endTimes = stages.map((stage) => dateTime(stage.planned_end) + DAY).filter(Number.isFinite)
   const minTime = startTimes.length ? Math.min(...startTimes) : now
@@ -251,7 +271,8 @@ export function Progress({ stages, setStages, activeProjectId, navigate, toast }
               <label>Окончание<input type="date" required min={draftStart} disabled={isLoading} value={draftEnd} onChange={(event) => setDraftEnd(event.target.value)} /></label>
               <div className="planning-toolbar-actions"><button className="button primary" disabled={isLoading} type="submit">Сохранить</button><button className="button" type="button" disabled={isLoading} onClick={() => { setEditingStageId(null); setError('') }}>Отмена</button></div>
             </form> : <dl className="planning-stage-facts"><div><dt>Плановые сроки</dt><dd>{formatDate(selectedStage.planned_start)} — {formatDate(selectedStage.planned_end)}</dd></div><div><dt>Длительность</dt><dd>{selectedStage.duration_days} дн.</dd></div></dl>}
-            {stageRules && <p className="planning-requirements">По справочнику обязательно: {stageRules.mandatory.join(', ') || 'не задано'}.</p>}
+            <p className="planning-requirements">По действующим правилам обязательно: {mandatoryMachinery ? mandatoryMachinery.join(', ') || 'не задано' : rulesError ? 'не удалось загрузить правила' : 'загружаем правила…'}.</p>
+            {activeProjectId && <DocumentSearch key={activeProjectId} projectId={activeProjectId} stageId={selectedStage.id} stageName={selectedStage.name} toast={toast} onRulesChanged={refreshRules} />}
           </section>}
         </>}
 

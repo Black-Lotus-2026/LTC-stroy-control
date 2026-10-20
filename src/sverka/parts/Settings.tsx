@@ -1,7 +1,8 @@
 import { SafetyPanel } from './Safety'
 import { PhotoInspection } from './PhotoInspection'
+import { DocumentsPanel } from './Documents'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
+import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, DocumentSelection, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import { mediaUrl } from '../api'
 import type { NumKey, Observation, Settings as S, SourceView } from '../model'
 import { DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
@@ -12,7 +13,7 @@ import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo' | 'safety'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo' | 'safety' | 'documents'
 
 /** The server side of tasks: who answers for the object's events, the deadlines, the user's email. */
 export interface TaskActions {
@@ -66,10 +67,14 @@ export function SettingsSheet({
   views,
   recordingCameraId,
   onRecordingCamera,
+  onDocumentRulesChanged,
+  onBeforeDocumentAnalysis,
 }: {
   tab: SheetTab
   recordingCameraId: string
   onRecordingCamera: (id: string) => void
+  onDocumentRulesChanged: (changes: DocumentSelection[]) => Promise<void>
+  onBeforeDocumentAnalysis: () => Promise<void>
   settings: S
   onSettings: (s: S) => void
   obs: Observation
@@ -182,6 +187,7 @@ export function SettingsSheet({
               ['control', 'Контроль'],
               ['sources', 'Источники'],
               ['safety', 'Безопасность'],
+              ['documents', 'Документы'],
               ['photo', 'Фото'],
               ['shift', 'Смена'],
               ['tasks', 'Задачи'],
@@ -195,6 +201,7 @@ export function SettingsSheet({
           <i className="bar-ind" ref={ind} />
         </div>
         <div className="sheet-body">
+          {tab === 'documents' && <DocumentsPanel key={project.id} projectId={project.id} canWrite={user.role !== 'viewer'} beforeAnalyze={onBeforeDocumentAnalysis} onRulesChanged={onDocumentRulesChanged} />}
           {tab === 'safety' && <SafetyPanel key={project.id} projectId={project.id} cameras={cameras} obs={obs} user={user} recordingCameraId={recordingCameraId} onRecordingCamera={onRecordingCamera} onDirtyChange={setSafetyDirty} />}
           {tab === 'control' && (
             <>

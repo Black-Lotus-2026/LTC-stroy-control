@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession, OptionalUser
@@ -13,6 +13,7 @@ from app.models.enums import CameraStatus, UserRole, ZoneRiskLevel
 from app.models.project import Camera, Project, Zone
 from app.models.schedule import ScheduleTask
 from app.models.user import User
+from app.models.weather import WeatherForecast
 from app.schemas.stroy_control import (
     CameraCreate,
     CameraItem,
@@ -288,7 +289,14 @@ def update_project(
     if data.code is not None and data.code.strip():
         project.code = data.code.strip()
     if data.address is not None:
-        project.address = data.address.strip() if data.address.strip() else None
+        new_address = data.address.strip() or None
+        if new_address != project.address:
+            project.address = new_address
+            project.geocoded_address = None
+            project.weather_location_name = None
+            project.latitude = None
+            project.longitude = None
+            db.execute(delete(WeatherForecast).where(WeatherForecast.project_id == project.id))
     if data.object_kind is not None and data.object_kind.strip():
         project.object_kind = data.object_kind.strip()
     if data.status is not None and data.status.strip():

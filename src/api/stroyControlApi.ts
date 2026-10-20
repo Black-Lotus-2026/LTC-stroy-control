@@ -21,6 +21,63 @@ export interface StageItem {
   status: string
 }
 
+export type DocumentKind = 'POS' | 'PPR' | 'TER'
+
+export interface ProjectDocumentItem {
+  id: string
+  kind: DocumentKind
+  filename: string
+  size_bytes: number
+  created_at: string
+  chunk_count: number
+}
+
+export interface DocumentMachineryItem {
+  name: string
+  purpose: string
+  document_id: string
+  document_name: string
+  document_kind: DocumentKind
+  chunk_id: string
+  locator: string
+  quote: string
+}
+
+export interface DocumentAnalysis {
+  stage_id: string
+  summary: string
+  reviewed_chunks: number
+  document_count: number
+  items: DocumentMachineryItem[]
+}
+
+export interface DocumentAgentStatus {
+  provider: 'openai_compatible' | 'gigachat'
+  configured: boolean
+  key_configured: boolean
+  model: string
+}
+
+export interface DocumentPlanRun {
+  id: string
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed'
+  stage_count: number
+  completed_count: number
+  error: string | null
+  result: {
+    stages: {
+      stage_id: string
+      stage_name: string
+      summary: string
+      status: 'completed' | 'failed'
+      findings: (DocumentMachineryItem & { review_status: string })[]
+      proposals: { class_code: string; class_name: string; current_probability: number | null; proposed_probability: number | null; status: string; change_kind?: 'document_requirement' | 'replaced_baseline'; evidence: DocumentMachineryItem[] }[]
+    }[]
+    applied: { stage_id: string; class_code: string; mode?: string; reverted_at?: string }[]
+    auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[] }
+  }
+}
+
 export interface CascadeShiftResponse {
   delayed_stage_id: string
   delay_days: number
@@ -165,6 +222,36 @@ export interface ProjectItem {
   alert_error_deadline_minutes?: number
   alert_warning_deadline_minutes?: number
   escalation_user_id?: string | null
+}
+
+export interface WeatherDay {
+  forecast_date: string
+  fetched_at: string
+  provider: string
+  weather_code: number | null
+  temperature_min_c: number | null
+  temperature_max_c: number | null
+  precipitation_mm: number | null
+  snowfall_cm: number | null
+  wind_gust_kmh: number | null
+  conditions: string[]
+  warnings: string[]
+}
+
+export interface WeatherForecast {
+  project_id: string
+  timezone: string
+  location_configured: boolean
+  resolved_address: string | null
+  days: WeatherDay[]
+}
+
+export function fetchWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather`, {}, 'Не удалось загрузить прогноз')
+}
+
+export function refreshWeather(projectId: string): Promise<WeatherForecast> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/weather/refresh`, { method: 'POST' }, 'Не удалось обновить прогноз')
 }
 
 export interface ProjectAlertSettings {
@@ -654,6 +741,60 @@ export const DEMO_REFERENCE_STAGES: StageItem[] = [
 export async function fetchStages(projectId?: string): Promise<StageItem[]> {
   if (!isValidUuid(projectId)) throw new Error('Выберите объект')
   return checkedJson(`${API_PREFIX}/schedule/stages?project_id=${projectId}`, {}, 'Не удалось загрузить график')
+}
+
+export async function fetchProjectDocuments(projectId: string): Promise<ProjectDocumentItem[]> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents`, {}, 'Не удалось загрузить документы')
+}
+
+export const fetchDocumentAgentStatus = (projectId: string): Promise<DocumentAgentStatus> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/agent-status`, {}, 'Не удалось проверить API-ключ агента')
+
+export const fetchLatestDocumentPlanRun = (projectId: string): Promise<DocumentPlanRun | null> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/latest`, {}, 'Не удалось загрузить последний анализ')
+
+export const fetchDocumentPlanRun = (projectId: string, runId: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/${runId}`, {}, 'Не удалось получить результат анализа')
+
+export const startDocumentPlanRun = (projectId: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analyze-plan`, { method: 'POST' }, 'Не удалось запустить анализ')
+
+export const revertDocumentPlanRule = (projectId: string, runId: string, stageId: string, classCode: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/${runId}/revert`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selections: [{ stage_id: stageId, class_code: classCode }] }),
+  }, 'Не удалось отменить изменение техники')
+
+export async function uploadProjectDocument(projectId: string, file: File, kind: DocumentKind): Promise<ProjectDocumentItem> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('kind', kind)
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents`, { method: 'POST', body }, 'Не удалось загрузить документ')
+}
+
+export async function deleteProjectDocument(projectId: string, documentId: string): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${documentId}`, {
+    method: 'DELETE', headers: getAuthHeaders(),
+  })
+  if (!response.ok) throw new Error('Не удалось удалить документ')
+}
+
+export async function downloadProjectDocument(projectId: string, item: ProjectDocumentItem): Promise<void> {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${item.id}/file`, { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error('Не удалось скачать документ')
+  const blobUrl = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = blobUrl
+  anchor.download = item.filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+}
+
+export async function analyzeProjectDocuments(projectId: string, stageId: string): Promise<DocumentAnalysis> {
+  return checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analyze`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stage_id: stageId }),
+  }, 'Не удалось проанализировать документы')
 }
 
 export async function loadDemoSchedule(projectId?: string): Promise<StageItem[]> {

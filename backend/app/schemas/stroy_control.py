@@ -132,6 +132,7 @@ class MachineryProbabilityItem(BaseModel):
     requirement_level: str = Field(
         ..., description="Обязательная / Рекомендованная / Допустимая / Не допускается"
     )
+    source: str = "catalog"
 
 
 class StageProbabilityResponse(BaseModel):

@@ -175,6 +175,7 @@ export function RuleEditor({
       <div className="meta">
         Этап {stage.n} · {stage.name}
       </div>
+      <div className="meta">Источник требования: {r.source === 'document' ? 'ПОС/ППР · цитата во вкладке «Документы»' : r.source === 'manual' ? 'ручная правка' : 'справочник этапов'}</div>
       <div className="field">
         <span className="lbl" id="segLbl">
           Требование на этом этапе
@@ -236,7 +237,7 @@ export function RuleEditor({
         {(draft.lvl === 'skip' || r.ownTiming || draft.warnAfter !== settings.warnAfter || draft.errAfter !== settings.errAfter) && (
           <>
             <br />
-            «Не учитывать» и свои пороги времени хранятся в этом браузере; уровень требования сохраняется на сервере.
+            «Не учитывать» снимает требование на сервере. Пометка и свои пороги времени хранятся в этом браузере; агент может восстановить требование по документу.
           </>
         )}
       </div>
