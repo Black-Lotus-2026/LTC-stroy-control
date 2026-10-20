@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     management_run_timeout_seconds: int = 90
 
     # Provider for the POS/PPR document agent.
-    document_llm_provider: Literal["openai_compatible", "gigachat"] = "openai_compatible"
+    document_llm_provider: Literal["openai_compatible", "gigachat"] = "gigachat"
     # External OpenAI-compatible API (OpenRouter by default).
     document_llm_base_url: str = "https://openrouter.ai/api/v1"
     document_llm_model: str = "openai/gpt-4o-mini"
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
     # Original PPR documents must never be mounted as public media.
     ppr_storage_root: Path = Path("./var/documents")
-    ppr_provider: Literal["openrouter", "ollama"] = "openrouter"
+    ppr_provider: Literal["gigachat", "openrouter", "ollama"] = "gigachat"
     ppr_ollama_url: str = "http://ppr_llm:11434"
     ppr_analysis_model: str = ""
     camera_allow_rtsp_capture: bool = False

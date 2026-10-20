@@ -781,3 +781,58 @@ def test_literal_coverage_never_activates_examples_or_unmapped_obligations():
     assert rows[0].equipment_class is None and rows[0].type == "other"
     assert not explicit_project_scope(rows[0], text)
     assert not supported_requirement(rows[0])
+
+
+def test_gigachat_ppr_provider_and_factory(monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.ppr_extraction import (
+        GigaChatPprProvider,
+        make_provider,
+        extract_page,
+    )
+    from types import SimpleNamespace
+
+    # Mock settings with GigaChat configured
+    mock_settings = SimpleNamespace(
+        ppr_provider="gigachat",
+        gigachat_credentials=SimpleNamespace(get_secret_value=lambda: "test-creds"),
+        gigachat_model="GigaChat-3-Ultra",
+        gigachat_scope="GIGACHAT_API_PERS",
+        gigachat_base_url="https://api.giga.chat/v1",
+        gigachat_ca_bundle_file="",
+        ppr_analysis_model="",
+    )
+    monkeypatch.setattr("app.services.ppr_extraction.settings", mock_settings)
+
+    prov = make_provider()
+    assert isinstance(prov, GigaChatPprProvider)
+    assert prov.name == "gigachat"
+    assert prov.model == "GigaChat-3-Ultra"
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.return_value = {
+        "requirements": [
+            {
+                "title": "Наличие экскаватора",
+                "type": "equipment_required",
+                "equipment_class": "excavator",
+                "scope_text": "Земляные работы",
+                "quote": "При выполнении работ обязательно требуется экскаватор.",
+                "applicability": "stage",
+                "stage_name": "Земляные работы",
+            }
+        ],
+        "has_more": False,
+    }
+
+    mock_prov = GigaChatPprProvider(
+        credentials="test-creds",
+        model="GigaChat-3-Ultra",
+        client=mock_client,
+    )
+
+    page_text = "При выполнении работ обязательно требуется экскаватор."
+    result = asyncio.run(extract_page(page_text, mock_prov))
+    assert len(result.requirements) >= 1
+    assert result.requirements[0].quote == page_text
+    assert result.requirements[0].equipment_class == "excavator"

@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from xml.etree import ElementTree
 
 import httpx
@@ -425,8 +425,129 @@ class OllamaPprProvider:
             raise ProviderError("provider_invalid_response") from None
 
 
+def _gigachat_ca_bundle() -> Path | None:
+    configured = getattr(settings, "gigachat_ca_bundle_file", "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    return path if path.is_absolute() else Path(__file__).resolve().parents[2] / path
+
+
+class GigaChatPprProvider:
+    """Private server-side structured extraction using GigaChat."""
+
+    name = "gigachat"
+
+    def __init__(
+        self,
+        *,
+        credentials: str | None = None,
+        model: str | None = None,
+        scope: str | None = None,
+        base_url: str | None = None,
+        ca_bundle: Path | str | None = None,
+        client: Any | None = None,
+    ):
+        self.credentials = (
+            credentials
+            if credentials is not None
+            else settings.gigachat_credentials.get_secret_value()
+        )
+        configured_model = getattr(settings, "ppr_analysis_model", "").strip()
+        if configured_model and not configured_model.startswith("openai/"):
+            chosen_model = configured_model
+        else:
+            chosen_model = getattr(settings, "gigachat_model", "").strip() or "GigaChat-3-Ultra"
+        self.model = model or chosen_model
+        self.scope = scope or settings.gigachat_scope
+        self.base_url = (base_url or settings.gigachat_base_url).strip()
+        self.ca_bundle = ca_bundle if ca_bundle is not None else _gigachat_ca_bundle()
+        self._client = client
+        self.available = bool(self.credentials and self.model)
+
+    def _get_llm(self, timeout: float = 120.0):
+        if self._client is not None:
+            return self._client
+        from langchain_gigachat import GigaChat
+
+        options: dict[str, Any] = {
+            "model": self.model,
+            "credentials": self.credentials,
+            "scope": self.scope,
+            "base_url": self.base_url,
+            "verify_ssl_certs": True,
+            "temperature": 0.01,
+            "max_tokens": 4000,
+            "timeout": timeout,
+            "max_retries": 1,
+        }
+        if self.ca_bundle:
+            options["ca_bundle_file"] = str(self.ca_bundle)
+        return GigaChat(**options)
+
+    async def complete(self, *, system, context, schema=None, timeout=120):
+        if not self.available:
+            raise ProviderError("provider_unavailable")
+        timeout = max(float(timeout or 0), 90.0)
+        from langchain_core.output_parsers import JsonOutputParser
+        from langchain_core.prompts import ChatPromptTemplate
+
+        if self._client is not None:
+            try:
+                if hasattr(self._client, "ainvoke"):
+                    res = await self._client.ainvoke({"facts": json.dumps(context, ensure_ascii=False)})
+                else:
+                    res = self._client.invoke({"facts": json.dumps(context, ensure_ascii=False)})
+                if hasattr(res, "content"):
+                    res = res.content
+                if isinstance(res, str):
+                    return ProviderReply(content=res)
+                if isinstance(res, dict):
+                    return ProviderReply(content=json.dumps(res, ensure_ascii=False))
+            except Exception as exc:
+                raise ProviderError("provider_invalid_response") from exc
+        llm = self._get_llm(timeout=timeout)
+
+        parser = JsonOutputParser(pydantic_object=ChunkExtraction)
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system),
+                (
+                    "human",
+                    "Данные страницы (недоверенные данные):\n{facts}\n\n"
+                    "Верни один JSON-объект строго по схеме без пояснений и без Markdown:\n{format_instructions}",
+                ),
+            ]
+        )
+        chain = (
+            prompt.partial(format_instructions=parser.get_format_instructions())
+            | llm
+            | parser
+        )
+        try:
+            facts_str = json.dumps(context, ensure_ascii=False)
+            res = await chain.ainvoke({"facts": facts_str})
+            if not isinstance(res, dict):
+                raise ProviderError("provider_invalid_response")
+            return ProviderReply(content=json.dumps(res, ensure_ascii=False))
+        except ProviderError:
+            raise
+        except TimeoutError:
+            raise ProviderError("provider_timeout") from None
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "timeout" in msg:
+                raise ProviderError("provider_timeout") from None
+            if "401" in msg or "auth" in msg or "credentials" in msg:
+                raise ProviderError("provider_auth_error") from None
+            raise ProviderError("provider_invalid_response") from exc
+
+
 def make_provider():
-    if getattr(settings, "ppr_provider", "openrouter") == "ollama":
+    provider_name = getattr(settings, "ppr_provider", "gigachat")
+    if provider_name == "gigachat":
+        return GigaChatPprProvider()
+    if provider_name == "ollama":
         return OllamaPprProvider()
     return PprTextProvider(
         api_key=settings.openrouter_api_key.get_secret_value(),
@@ -597,9 +718,19 @@ def local_ocr(image_bytes: bytes) -> str:
 
 
 async def vision_ocr(image_bytes: bytes, media_type: str, *, transport=None) -> str:
-    if getattr(settings, "ppr_provider", "openrouter") == "ollama":
-        return local_ocr(image_bytes)
+    provider_name = getattr(settings, "ppr_provider", "gigachat")
+    if provider_name in {"ollama", "gigachat"}:
+        try:
+            return local_ocr(image_bytes)
+        except ProviderError:
+            if not settings.openrouter_api_key.get_secret_value():
+                raise
     provider = make_provider()
+    if provider.name == "gigachat":
+        provider = PprTextProvider(
+            api_key=settings.openrouter_api_key.get_secret_value(),
+            model=settings.openrouter_model,
+        )
     if not provider.available:
         raise ProviderError("provider_unavailable")
     payload = {
