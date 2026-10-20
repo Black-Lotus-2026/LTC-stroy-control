@@ -160,7 +160,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     {run && ['completed', 'partial'].includes(run.status) && <div className="doc-change-summary" role="status">
       <strong>{automatic.length ? `Агент изменил ${automatic.length} ${automatic.length === 1 ? 'правило' : 'правил'} техники` : 'Автоматических изменений нет'}</strong>
       {appliedSummary.length > 0 && <ul>{appliedSummary.map(({ item, stage, proposal }) => <li key={key(item.stage_id, item.class_code)}>
-        {stage?.stage_name || 'Этап'} · {proposal?.class_name || item.class_code}: {pct(item.previous_probability ?? null)} → {pct(item.new_probability ?? null)}{item.reverted_at ? ' · отменено' : ''}
+        {stage?.stage_name || 'Этап'} · {proposal?.class_name || item.class_code}: {pct(item.previous_probability ?? null)} → {pct(item.new_probability ?? null)}{item.change_kind === 'replaced_baseline' ? ' · снята оценка по названию этапа' : ''}{item.reverted_at ? ' · отменено' : ''}
       </li>)}</ul>}
       {run.result.auto_apply?.skipped.map((item, index) => <p key={`${item.stage_id || 'all'}-${item.class_code || index}`}>
         Не изменено: {item.class_code || 'все этапы'} · {skipReason[item.reason] || item.reason}.
@@ -179,6 +179,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
           <div className="doc-proposal-title">
             <strong>{proposal.class_name}</strong>
             <span>{pct(proposal.current_probability)} → {pct(proposal.proposed_probability)}</span>
+            {proposal.change_kind === 'replaced_baseline' && <small>Заменена оценка по названию этапа; техника не запрещена</small>}
             <small>{isApplied ? 'Изменено агентом' : reverted.has(id) ? 'Отменено пользователем' : proposal.status === 'conflict' ? 'Противоречивые требования' : proposal.status === 'manual_override' ? 'Сохранена ручная правка' : proposal.status === 'unchanged' ? 'Уже совпадает' : 'Не применено'}</small>
             {isApplied && canWrite && <button className="btn small ghost" disabled={busy} onClick={() => revert({ stage_id: stage.stage_id, class_code: proposal.class_code })}>Отменить</button>}
           </div>

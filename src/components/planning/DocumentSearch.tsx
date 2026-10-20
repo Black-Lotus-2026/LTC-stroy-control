@@ -10,11 +10,12 @@ const KIND_LABELS: Record<DocumentKind, string> = { POS: 'ПОС', PPR: 'ППР'
 const pct = (value: number | null) => value == null ? 'нет оценки' : `${Math.round(value * 100)}%`
 const ruleKey = (stageId: string, code: string) => `${stageId}:${code}`
 
-export function DocumentSearch({ projectId, stageId, stageName, toast }: {
+export function DocumentSearch({ projectId, stageId, stageName, toast, onRulesChanged }: {
   projectId: string
   stageId: string
   stageName: string
   toast: (message: string) => void
+  onRulesChanged?: () => void
 }) {
   const [documents, setDocuments] = useState<ProjectDocumentItem[]>([])
   const [kind, setKind] = useState<DocumentKind>('PPR')
@@ -61,6 +62,7 @@ export function DocumentSearch({ projectId, stageId, stageName, toast }: {
     if (!run || !['completed', 'partial', 'failed'].includes(run.status) || !startedHere.current.has(run.id) || announced.current.has(run.id)) return
     announced.current.add(run.id)
     const count = run.result.applied.filter(item => item.mode === 'automatic' && !item.reverted_at).length
+    if (count) onRulesChanged?.()
     toast(run.status === 'failed' ? 'Анализ документов не завершён' : count
       ? `Агент изменил ${count} правил техники. Изменения можно отменить.`
       : 'Анализ завершён. Новых подтверждённых изменений нет.')
@@ -104,6 +106,7 @@ export function DocumentSearch({ projectId, stageId, stageName, toast }: {
     if (!run) return
     void act(async () => {
       setRun(await revertDocumentPlanRule(projectId, run.id, stageId, code))
+      onRulesChanged?.()
       toast('Правило техники возвращено к прежнему значению')
     })
   }
@@ -144,7 +147,7 @@ export function DocumentSearch({ projectId, stageId, stageName, toast }: {
         const id = ruleKey(stageId, proposal.class_code)
         const isApplied = applied.has(id)
         return <li key={id}>
-          <strong>{proposal.class_name}</strong> · {pct(proposal.current_probability)} → {pct(proposal.proposed_probability)} · {isApplied ? 'изменено агентом' : reverted.has(id) ? 'отменено' : proposal.status === 'manual_override' ? 'сохранена ручная правка' : proposal.status === 'conflict' ? 'спорное требование' : 'без изменения'}
+          <strong>{proposal.class_name}</strong> · {pct(proposal.current_probability)} → {pct(proposal.proposed_probability)} · {proposal.change_kind === 'replaced_baseline' ? 'снята оценка по названию этапа; техника не запрещена · ' : ''}{isApplied ? 'изменено агентом' : reverted.has(id) ? 'отменено' : proposal.status === 'manual_override' ? 'сохранена ручная правка' : proposal.status === 'conflict' ? 'спорное требование' : 'без изменения'}
           {isApplied && <button className="button document-source" disabled={busy} onClick={() => revert(proposal.class_code)}>Вернуть прежнее</button>}
           {proposal.evidence.map(item => <blockquote key={`${item.chunk_id}-${item.quote}`}>«{item.quote}» <small>{item.document_name} · {item.locator}</small></blockquote>)}
         </li>

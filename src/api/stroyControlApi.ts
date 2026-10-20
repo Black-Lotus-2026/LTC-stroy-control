@@ -71,7 +71,7 @@ export interface DocumentPlanRun {
       summary: string
       status: 'completed' | 'failed'
       findings: (DocumentMachineryItem & { review_status: string })[]
-      proposals: { class_code: string; class_name: string; current_probability: number | null; proposed_probability: number | null; status: string; evidence: DocumentMachineryItem[] }[]
+      proposals: { class_code: string; class_name: string; current_probability: number | null; proposed_probability: number | null; status: string; change_kind?: 'document_requirement' | 'replaced_baseline'; evidence: DocumentMachineryItem[] }[]
     }[]
     applied: { stage_id: string; class_code: string; mode?: string; reverted_at?: string }[]
     auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[] }

@@ -33,6 +33,7 @@ from app.models.user import User
 from app.schemas.stroy_control import StageMachineryOverrideRequest
 from app.services.document_plan_agent import execute_document_run, stage_proposals
 from app.services.machinery_rules import code_for_name, effective_cv_probabilities
+from app.services.stage_matcher import StageMachineryService
 
 
 @compiles(JSONB, "sqlite")
@@ -157,6 +158,92 @@ def test_agent_run_apply_and_revert(state):
     db.refresh(stage)
     assert stage.machinery_probabilities == {}
     assert stage.machinery_rule_sources == {}
+
+
+def test_new_document_machine_replaces_name_based_requirements(state):
+    db, factory, owner, _, project, stage, document, run = state
+    baseline = (
+        StageMachineryService().estimate_machinery_probabilities(stage.name).probabilities
+    )
+    stage.machinery_probabilities = baseline
+    snapshot = dict(run.snapshot)
+    snapshot["stages"] = [{**snapshot["stages"][0], "probabilities": baseline}]
+    run.snapshot = snapshot
+    document.chunks[0].text = "Разработка грунта: требуется автокран."
+    db.commit()
+
+    class NewMachineAgent(CitedAgent):
+        async def ainvoke(self, payload):
+            result = await super().ainvoke(payload)
+            result["items"][0].update(
+                name="Автокран",
+                quote="требуется автокран",
+                suggested_code="MACHINERY_TRUCK_CRANE",
+            )
+            return result
+
+    result = asyncio.run(
+        execute_document_run(
+            str(run.id), chain=NewMachineAgent(), session_factory=factory
+        )
+    )
+    db.expire_all()
+    assert result["applied"] > 1
+    proposals = {p["class_code"]: p for p in run.result["stages"][0]["proposals"]}
+    assert proposals["MACHINERY_TRUCK_CRANE"]["proposed_probability"] == 0.95
+    assert proposals["MACHINERY_EXCAVATOR"]["proposed_probability"] == 0.4
+    assert proposals["MACHINERY_EXCAVATOR"]["change_kind"] == "replaced_baseline"
+    effective = effective_cv_probabilities(stage.machinery_probabilities)
+    assert effective["truck_crane"] == 0.95
+    assert effective["excavator"] == 0.4
+    assert stage.machinery_rule_sources["MACHINERY_EXCAVATOR"]["source"] == "document"
+
+    reverted = revert_analysis(
+        project.id,
+        run.id,
+        SelectionRequest(
+            selections=[
+                ProposalSelection(stage_id=stage.id, class_code="MACHINERY_EXCAVATOR"),
+                ProposalSelection(stage_id=stage.id, class_code="MACHINERY_TRUCK_CRANE"),
+            ]
+        ),
+        db,
+        owner,
+    )
+    assert (
+        sum(bool(item.get("reverted_at")) for item in reverted["result"]["applied"])
+        == 2
+    )
+    db.refresh(stage)
+    restored = effective_cv_probabilities(stage.machinery_probabilities)
+    assert restored["excavator"] == 1.0
+    assert restored["truck_crane"] < 0.6
+
+
+def test_new_document_machine_preserves_manual_rule():
+    baseline = (
+        StageMachineryService()
+        .estimate_machinery_probabilities("Разработка грунта")
+        .probabilities
+    )
+    findings = [
+        {
+            "name": "Автокран",
+            "quote": "требуется автокран",
+            "requirement": "required",
+            "suggested_code": "MACHINERY_TRUCK_CRANE",
+        }
+    ]
+    _, proposals = stage_proposals(
+        {
+            "name": "Разработка грунта",
+            "probabilities": baseline,
+            "sources": {"MACHINERY_EXCAVATOR": {"source": "manual"}},
+        },
+        findings,
+    )
+    assert any(p["class_code"] == "MACHINERY_TRUCK_CRANE" for p in proposals)
+    assert not any(p["class_code"] == "MACHINERY_EXCAVATOR" for p in proposals)
 
 
 def test_manual_change_after_analysis_blocks_application(state):

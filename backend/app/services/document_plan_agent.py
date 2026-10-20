@@ -29,7 +29,7 @@ def explicit_requirement(quote: str) -> str:
 
 
 def stage_proposals(stage: dict, findings: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Convert model claims to reviewable suggestions; never infer absence."""
+    """Convert cited claims to stage rules, replacing name-based rules when warranted."""
     values = stage.get("probabilities") or {}
     sources = stage.get("sources") or {}
     baseline = (
@@ -113,11 +113,63 @@ def stage_proposals(stage: dict, findings: list[dict]) -> tuple[list[dict], list
                 "current_probability": current,
                 "baseline_probability": base,
                 "proposed_probability": target,
+                "change_kind": "document_requirement",
                 "status": status,
                 "source": origin.get("source", "manual" if legacy_manual else "catalog"),
                 "evidence": evidence,
             }
         )
+
+    # A newly cited *required* class replaces the automatic equipment set for
+    # this stage. Demote only old name-based requirements, never manual rules.
+    # Neutral (0.4) means "not required by this document"; it is not a ban.
+    replacement = next(
+        (
+            proposal
+            for proposal in proposals
+            if proposal["status"] == "ready"
+            and proposal["proposed_probability"] == 0.95
+            and (
+                proposal["current_probability"]
+                if proposal["current_probability"] is not None
+                else proposal["baseline_probability"] or 0
+            )
+            < 0.6
+        ),
+        None,
+    )
+    if replacement and all(item["review_status"] == "cited" for item in enriched):
+        for code in BY_CODE:
+            if code in grouped:
+                continue
+            base = current_probability(baseline, code)
+            current = current_probability(values, code)
+            effective = current if current is not None else base
+            origin = sources.get(code, {})
+            if (
+                effective is None
+                or effective < 0.6
+                or origin.get("source") not in (None, "catalog")
+                or (
+                    current is not None
+                    and base is not None
+                    and abs(current - base) > 0.001
+                )
+            ):
+                continue
+            proposals.append(
+                {
+                    "class_code": code,
+                    "class_name": BY_CODE[code][1],
+                    "current_probability": current,
+                    "baseline_probability": base,
+                    "proposed_probability": 0.4,
+                    "change_kind": "replaced_baseline",
+                    "status": "ready",
+                    "source": "catalog",
+                    "evidence": replacement["evidence"],
+                }
+            )
     proposals.sort(key=lambda row: row["class_name"])
     return enriched, proposals
 

@@ -228,6 +228,7 @@ export interface DocumentProposal {
   proposed_probability: number | null
   status: 'ready' | 'conflict' | 'manual_override' | 'unchanged'
   source: string
+  change_kind?: 'document_requirement' | 'replaced_baseline'
   evidence: DocumentFinding[]
 }
 export interface DocumentStageResult {
@@ -251,7 +252,7 @@ export interface DocumentRun {
   error: string | null
   result: {
     stages: DocumentStageResult[]
-    applied: { stage_id: string; class_code: string; applied_at: string; mode?: 'automatic' | 'manual'; previous_probability?: number | null; new_probability?: number; reverted_at?: string }[]
+    applied: { stage_id: string; class_code: string; applied_at: string; mode?: 'automatic' | 'manual'; change_kind?: 'document_requirement' | 'replaced_baseline'; previous_probability?: number | null; new_probability?: number; reverted_at?: string }[]
     auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[]; finished_at: string }
   }
 }

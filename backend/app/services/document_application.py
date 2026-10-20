@@ -43,6 +43,7 @@ def apply_document_rule(
     )
     sources[code] = {
         "source": "document",
+        "change_kind": proposal.get("change_kind", "document_requirement"),
         "run_id": str(run.id),
         "evidence": [
             {
@@ -62,6 +63,7 @@ def apply_document_rule(
         "applied_by": str(actor_id),
         "applied_at": utcnow().isoformat(),
         "mode": mode,
+        "change_kind": proposal.get("change_kind", "document_requirement"),
         "previous_probability": proposal["current_probability"],
         "new_probability": proposal["proposed_probability"],
     }

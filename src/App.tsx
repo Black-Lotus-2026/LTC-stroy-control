@@ -2148,6 +2148,7 @@ export default function App() {
             activeProjectId={activeProjectId}
             navigate={allowedNav.some(item => item.id === 'analytics') ? setPage : undefined}
             toast={toast}
+            onStageOverridesUpdated={() => setStageOverridesVersion((v) => v + 1)}
           />
         )
       case 'analytics':
