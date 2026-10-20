@@ -172,7 +172,12 @@ async def upload_document(
                 },
             ) from None
         db.refresh(document)
-        ensure_analysis(db, document)
+        analysis = ensure_analysis(db, document)
+        try:
+            from app.workers.ppr_tasks import analyze_ppr_task
+            analyze_ppr_task.delay(str(analysis.id))
+        except Exception:
+            pass
         return document
     finally:
         path.unlink(missing_ok=True)
@@ -243,6 +248,11 @@ def start_analysis(
     # Commit the durable run and receipt together under the project lock.
     save_receipt(db, ctx, route, key, context_id, {}, analysis.id)
     db.commit()
+    try:
+        from app.workers.ppr_tasks import analyze_ppr_task
+        analyze_ppr_task.delay(str(analysis.id))
+    except Exception:
+        pass
     return analysis_detail(db, analysis)
 
 

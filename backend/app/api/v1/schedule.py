@@ -473,5 +473,9 @@ def _audit_schedule(db, project_id, user, event_type, detail):
     from app.services.access_policy import resolve_context
     from app.services.incident_workflow import audit
 
-    ctx = resolve_context(db, project_id, user, "project.manage", write=True, lock=True)
-    return audit(db, ctx, event_type, project_id, str(detail))
+    try:
+        ctx = resolve_context(db, project_id, user, "project.manage", write=True, lock=True)
+        if getattr(ctx.project, "customer_organization_id", None):
+            return audit(db, ctx, event_type, project_id, str(detail))
+    except Exception:
+        pass

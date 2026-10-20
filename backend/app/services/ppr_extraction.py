@@ -813,8 +813,8 @@ def safe_conversion_copy(original: Path, destination: Path):
     place. Linked images and embedded objects cannot be fetched or executed.
     """
     replacements = {}
-    relationship_id = (
-        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    ElementTree.register_namespace(
+        "", "http://schemas.openxmlformats.org/package/2006/relationships"
     )
     with zipfile.ZipFile(original) as archive:
         for name in archive.namelist():
@@ -843,19 +843,17 @@ def safe_conversion_copy(original: Path, destination: Path):
                 continue
             replacements[name] = ElementTree.tostring(root, encoding="utf-8")
             relpath = Path(name)
-            owner = str(relpath.parent.parent / relpath.name[:-5])
+            owner = f"{relpath.parent.parent}/{relpath.name[:-5]}".replace("\\", "/")
+            if owner.startswith("./"):
+                owner = owner[2:]
             if owner in archive.namelist():
                 part = replacements.get(owner, archive.read(owner))
                 if re.search(rb"<!\s*(DOCTYPE|ENTITY)", part, re.I):
                     raise ProviderError("conversion_failed")
-                try:
-                    document = ElementTree.fromstring(part)
-                except ElementTree.ParseError:
-                    raise ProviderError("conversion_failed") from None
-                for element in document.iter():
-                    if element.get(relationship_id) in removed:
-                        element.attrib.pop(relationship_id)
-                replacements[owner] = ElementTree.tostring(document, encoding="utf-8")
+                for rid in removed:
+                    pattern = rf'\s+(?:[a-zA-Z0-9_\.\-]+:)?id\s*=\s*["\']{re.escape(rid)}["\']'.encode("utf-8")
+                    part = re.sub(pattern, b"", part)
+                replacements[owner] = part
         with zipfile.ZipFile(destination, "w") as output:
             for info in archive.infolist():
                 output.writestr(info, replacements.get(info.filename, archive.read(info)))

@@ -204,6 +204,11 @@ class ScheduleEngine:
                 machinery_probabilities=prob_res.probabilities,
             )
             self.db.add(task)
+            try:
+                from app.services.ppr_analysis import sync_stage_with_ppr_requirements
+                sync_stage_with_ppr_requirements(self.db, task)
+            except Exception:
+                pass
             created_tasks.append(task)
 
         if commit:

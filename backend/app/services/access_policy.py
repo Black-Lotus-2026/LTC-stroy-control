@@ -1,6 +1,7 @@
 """One current database context per request; historical attribution is never a grant."""
 
 from __future__ import annotations
+from app.models.enums import UserRole
 
 import uuid
 from dataclasses import dataclass
@@ -84,6 +85,8 @@ class AccessContext:
     def permissions(self):
         if self.is_demo:
             return VIEWER
+        if self.assignment is None and (self.user.username == self.project.owner_username or getattr(self.user, "role", None) == UserRole.ADMIN):
+            return MANAGER
         if self.role == ProjectRole.CUSTOMER_MANAGER and self.side == "customer":
             permissions = set(MANAGER)
             if not self.membership.can_manage_members:
@@ -158,6 +161,11 @@ def resolve_context(
             query = query.where(ProjectAssignment.id == selector)
         rows = db.execute(query.execution_options(populate_existing=True)).all()
         if len(rows) != 1:
+            if not rows and (user.username == project.owner_username or getattr(user, "role", None) == UserRole.ADMIN):
+                ctx = AccessContext(project, user, None, None, None, is_demo=False)
+                if permission not in ctx.permissions:
+                    fail("ACTION_FORBIDDEN", 403)
+                return ctx
             fail("RESOURCE_NOT_FOUND", 404, "Выберите доступное назначение")
         assignment, participation, membership = rows[0]
         if lock:
