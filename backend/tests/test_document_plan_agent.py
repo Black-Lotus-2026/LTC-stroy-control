@@ -246,6 +246,113 @@ def test_new_document_machine_preserves_manual_rule():
     assert not any(p["class_code"] == "MACHINERY_EXCAVATOR" for p in proposals)
 
 
+def test_ppr_work_method_restores_manually_removed_machinery(state):
+    db, factory, owner, _, project, stage, document, run = state
+    stage.name = "Выемка грунта котлована под фундамент"
+    stage.machinery_probabilities = (
+        StageMachineryService()
+        .estimate_machinery_probabilities(stage.name)
+        .probabilities
+    )
+    document.chunks[0].text = (
+        "- разработка грунта котлована гидравлическими экскаваторами, "
+        "оборудованными ковшом обратная лопата, с погрузкой в автосамосвалы;"
+    )
+    document.chunks.append(
+        DocumentChunk(
+            ordinal=1,
+            locator="абзац 70",
+            text=(
+                "- доработка грунта и зачистка основания котлована "
+                "бульдозерами, средствами малой механизации либо вручную."
+            ),
+        )
+    )
+    db.commit()
+    update_stage_probabilities(
+        str(stage.id),
+        StageMachineryOverrideRequest(
+            overrides={
+                "MACHINERY_EXCAVATOR": "NEUTRAL",
+                "MACHINERY_BULLDOZER": "NEUTRAL",
+            }
+        ),
+        db,
+        owner,
+    )
+    snapshot = dict(run.snapshot)
+    snapshot["stages"] = [
+        {
+            **snapshot["stages"][0],
+            "name": stage.name,
+            "probabilities": stage.machinery_probabilities,
+            "sources": stage.machinery_rule_sources,
+        }
+    ]
+    run.snapshot = snapshot
+    db.commit()
+
+    class WorkMethodAgent:
+        async def ainvoke(self, payload):
+            fragments = json.loads(payload["facts_json"])["fragments"]
+            return {
+                "items": [
+                    {
+                        "name": "Гидравлические экскаваторы",
+                        "purpose": "разработка грунта",
+                        "chunk_id": fragments[0]["id"],
+                        "quote": fragments[0]["text"],
+                        "requirement": "mentioned",
+                        "suggested_code": "MACHINERY_EXCAVATOR",
+                    },
+                    {
+                        "name": "Бульдозеры",
+                        "purpose": "зачистка основания",
+                        "chunk_id": fragments[1]["id"],
+                        "quote": fragments[1]["text"],
+                        "requirement": "mentioned",
+                        "suggested_code": "MACHINERY_BULLDOZER",
+                    },
+                ],
+                "summary": "Найдены способы производства работ",
+            }
+
+    result = asyncio.run(
+        execute_document_run(
+            str(run.id), chain=WorkMethodAgent(), session_factory=factory
+        )
+    )
+    db.expire_all()
+    assert result["applied"] == 2
+    findings = run.result["stages"][0]["findings"]
+    assert [item["review_status"] for item in findings] == ["cited", "cited"]
+    assert [item["requirement"] for item in findings] == ["required", "recommended"]
+    effective = effective_cv_probabilities(stage.machinery_probabilities)
+    assert effective["excavator"] == 0.95
+    assert effective["bulldozer"] == 0.75
+    assert stage.machinery_rule_sources["MACHINERY_EXCAVATOR"][
+        "previous_source"
+    ] == {"source": "manual"}
+
+    revert_analysis(
+        project.id,
+        run.id,
+        SelectionRequest(
+            selections=[
+                ProposalSelection(stage_id=stage.id, class_code="MACHINERY_EXCAVATOR"),
+                ProposalSelection(stage_id=stage.id, class_code="MACHINERY_BULLDOZER"),
+            ]
+        ),
+        db,
+        owner,
+    )
+    db.refresh(stage)
+    restored = effective_cv_probabilities(stage.machinery_probabilities)
+    assert restored["excavator"] == 0.4
+    assert restored["bulldozer"] == 0.4
+    assert stage.machinery_rule_sources["MACHINERY_EXCAVATOR"] == {"source": "manual"}
+
+
 def test_manual_change_after_analysis_blocks_application(state):
     db, factory, owner, _, project, stage, _, run = state
     stage.machinery_rule_sources = {"MACHINERY_EXCAVATOR": {"source": "manual"}}
@@ -255,7 +362,7 @@ def test_manual_change_after_analysis_blocks_application(state):
     )
     db.expire_all()
     assert run.result["applied"] == []
-    assert run.result["auto_apply"]["skipped"][0]["reason"] == "manual_override"
+    assert run.result["auto_apply"]["skipped"][0]["reason"] == "rule_changed"
     choice = SelectionRequest(
         selections=[
             ProposalSelection(stage_id=stage.id, class_code="MACHINERY_EXCAVATOR")
@@ -409,15 +516,15 @@ def test_conflicting_document_requirements_are_not_applicable():
     assert proposals[0]["proposed_probability"] is None
 
 
-def test_agent_requirement_must_agree_with_citation():
+def test_general_catalogue_mention_cannot_create_required_rule():
     stage = {"name": "Разработка грунта", "probabilities": {}, "sources": {}}
     findings, proposals = stage_proposals(
         stage,
         [
             {
                 "name": "Экскаватор",
-                "quote": "требуется экскаватор",
-                "requirement": "recommended",
+                "quote": "экскаватор указан в общем перечне техники",
+                "requirement": "required",
                 "suggested_code": "MACHINERY_EXCAVATOR",
             }
         ],

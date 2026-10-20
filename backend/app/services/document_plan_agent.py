@@ -19,11 +19,25 @@ from app.services.stage_matcher import StageMachineryService
 
 def explicit_requirement(quote: str) -> str:
     text = quote.lower().replace("ё", "е")
-    if re.search(r"\bне\s+(?:треб|нуж|примен|использ|предусмотр)", text):
+    if re.search(
+        r"\b(?:не|без)\s+(?:треб|нуж|необходим|примен|использ|предусмотр)",
+        text,
+    ):
         return "mentioned"
-    if "рекоменд" in text:
+    if re.search(
+        r"рекоменд|при необходимости|при наличии|\bлибо\b|\bили вручную\b",
+        text,
+    ):
         return "recommended"
     if re.search(r"необходим|требу|предусмотр|должн|нужн|обязател", text):
+        return "required"
+    # A PPR work-method statement specifies the machine without "требуется".
+    if re.search(
+        r"разработк|доработк|зачистк|погрузк|планировк|уплотнен|"
+        r"монтаж|укладк|бетонирован|транспортировк|подач|"
+        r"выполня|производ|осуществ|применя|использу",
+        text,
+    ):
         return "required"
     return "mentioned"
 
@@ -55,12 +69,16 @@ def stage_proposals(stage: dict, findings: list[dict]) -> tuple[list[dict], list
         code = lexical_code or (hinted if hinted in BY_CODE and not generic else None)
         cue = explicit_requirement(item["quote"])
         claimed_requirement = item.get("requirement")
-        requirement = cue if claimed_requirement == cue else "mentioned"
+        # The cited work method wins over a conservative model label. A model
+        # claim without a matching cue remains unverified.
+        requirement = cue
         item["class_code"] = code
         item["mapping_method"] = (
             "catalog" if lexical_code else "agent" if code else "unmapped"
         )
         item["requirement"] = requirement
+        if claimed_requirement != cue:
+            item["agent_requirement"] = claimed_requirement
         if code is None:
             item["review_status"] = "unmapped"
         elif hinted and hinted != code:
@@ -100,8 +118,6 @@ def stage_proposals(stage: dict, findings: list[dict]) -> tuple[list[dict], list
         status = (
             "conflict"
             if target is None
-            else "manual_override"
-            if origin.get("source") == "manual" or legacy_manual
             else "unchanged"
             if current is not None and abs(current - target) < 0.001
             else "ready"
@@ -129,12 +145,7 @@ def stage_proposals(stage: dict, findings: list[dict]) -> tuple[list[dict], list
             for proposal in proposals
             if proposal["status"] == "ready"
             and proposal["proposed_probability"] == 0.95
-            and (
-                proposal["current_probability"]
-                if proposal["current_probability"] is not None
-                else proposal["baseline_probability"] or 0
-            )
-            < 0.6
+            and (proposal["baseline_probability"] or 0) < 0.6
         ),
         None,
     )

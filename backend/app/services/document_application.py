@@ -70,9 +70,10 @@ def apply_document_rule(
 
 
 def auto_apply_ready(run: DocumentAnalysisRun, db) -> dict:
-    """Apply ready suggestions once, skipping stale or manually edited rules."""
+    """Apply ready suggestions once, skipping rules edited after the snapshot."""
     applied = list(run.result.get("applied", []))
     skipped = []
+    snapshot_stages = {row["id"]: row for row in run.snapshot["stages"]}
     if not documents_unchanged(run, db):
         outcome = {
             "applied_count": 0,
@@ -109,16 +110,16 @@ def auto_apply_ready(run: DocumentAnalysisRun, db) -> dict:
                 for item in applied
             ):
                 reason = "already_applied"
-            elif (stage.machinery_rule_sources or {}).get(code, {}).get(
-                "source"
-            ) == "manual":
-                reason = "manual_override"
             else:
                 current = current_probability(stage.machinery_probabilities or {}, code)
                 previous = proposal["current_probability"]
+                current_source = (stage.machinery_rule_sources or {}).get(code)
+                snapshot_source = (
+                    snapshot_stages.get(stage_id, {}).get("sources") or {}
+                ).get(code)
                 if (current is None) != (previous is None) or (
                     current is not None and abs(current - previous) > 0.001
-                ):
+                ) or current_source != snapshot_source:
                     reason = "rule_changed"
             if reason:
                 skipped.append(

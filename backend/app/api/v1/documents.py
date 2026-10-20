@@ -348,6 +348,7 @@ def apply_analysis(
         for row in run.result.get("stages", [])
         for p in row.get("proposals", [])
     }
+    snapshot_stages = {row["id"]: row for row in run.snapshot["stages"]}
     applied = list(run.result.get("applied", []))
     changes = []
     for stage_id, code in selected:
@@ -379,8 +380,11 @@ def apply_analysis(
         ):
             raise HTTPException(409, "Правило этапа изменилось. Запустите анализ заново")
         origin = (stage.machinery_rule_sources or {}).get(code)
-        if origin and origin.get("source") == "manual":
-            raise HTTPException(409, "Ручное правило имеет приоритет")
+        snapshot_origin = (
+            snapshot_stages.get(stage_id, {}).get("sources") or {}
+        ).get(code)
+        if origin != snapshot_origin:
+            raise HTTPException(409, "Правило этапа изменилось. Запустите анализ заново")
         changes.append((stage, code, pair[1]))
     for stage, _code, proposal in changes:
         applied.append(
