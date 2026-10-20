@@ -26,6 +26,8 @@ import { Intro, Showcase } from './parts/Intro'
 import { PprDocuments } from './parts/PprDocuments'
 import { pprCitationFingerprint } from './pprApi'
 import { CustomerWorkspace, roleName, contextKey, can, canReadFullPlan, type WorkspaceAccess } from './parts/CustomerWorkspace'
+import { roleBadgeInfo } from './customerContext'
+import { JoinByKeyModal, ProjectInviteManagerModal } from './parts/ProjectInviteModal'
 import { CustomerPanel, type CustomerSection } from './parts/CustomerPanel'
 import { CustomerCases } from './parts/CustomerCases'
 import { participants, savedVideoPlayback, type ParticipantOptionsDTO } from './customerApi'
@@ -149,7 +151,22 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [safetyRecordingCameraId, setSafetyRecordingCameraId] = useState('')
   const [sheet, setSheet] = useState<SheetTab | null>(null)
   const [pprOpen, setPprOpen] = useState(false)
-  const [customerSection, setCustomerSection] = useState<CustomerSection | null>(context.role === 'pto_engineer' ? 'documents' : null)
+  const [customerSection, setCustomerSection] = useState<CustomerSection | null>(
+    context.role === 'pto_engineer' ? 'documents' : context.role === 'contractor_foreman' ? 'cases' : null
+  )
+  const [joinByKeyOpen, setJoinByKeyOpen] = useState(false)
+  const [inviteManagerOpen, setInviteManagerOpen] = useState(false)
+
+  useEffect(() => {
+    if (context.role === 'pto_engineer') {
+      setCustomerSection('documents')
+    } else if (context.role === 'contractor_foreman') {
+      setCustomerSection('cases')
+    } else {
+      setCustomerSection(null)
+    }
+  }, [context.role, context.assignment_id])
+
   const canReadPlan = canReadFullPlan(context)
   const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
@@ -1178,6 +1195,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const ruleProf = rule ? profiles.get(rule.stageId) : null
   const setupVisible = setupOpen && !projectsError && !loadError
   const pending = events.filter((e) => e.status === 'pending' && e.kind !== 'stream')
+  const roleBadge = roleBadgeInfo(context)
 
   return (
     <div className="app" id="app">
@@ -1186,9 +1204,15 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
           СК
         </button>
         <button type="button" className="ctx" onClick={(e) => setMenu({ kind: 'project', anchor: e.currentTarget.getBoundingClientRect() })} aria-haspopup="menu">
-          <small>{context.organization_name} · {roleName(context)}</small>
+          <small>{context.organization_name}</small>
           <span>{context.project_name}</span>
         </button>
+
+        <div className="role-header-pill" title={roleBadge.desc}>
+          <span className="role-dot" style={{ backgroundColor: roleBadge.color }} />
+          <span className="role-text" style={{ color: roleBadge.color }}>{roleBadge.title}</span>
+        </div>
+
         {canReadSources && zones.length > 0 && (
           <>
             <span className="slash" aria-hidden="true">
@@ -1202,19 +1226,100 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
         )}
         <div className="grow" />
         <TimePill obs={obs} onExit={closeRecording} />
-        <button type="button" className="icon-btn tasks-btn" onClick={() => setCustomerSection('notifications')} aria-label="Уведомления" title="Уведомления">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5z" /><path d="M10 20.5a2.2 2.2 0 0 0 4 0" /></svg>
-        </button>
-        <button type="button" className="btn small ppr-entry" onClick={() => setCustomerSection('documents')} disabled={!can(context, 'document.read')} aria-label="Документы ППР текущего объекта">ППР</button>
-        <button type="button" className="btn small safety-entry" disabled={!project} onClick={() => setSheet('documents')}>Документы</button>
-        {canManageControl && <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')} aria-label="Безопасность" title="Безопасность"><svg className="safety-entry-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/></svg><span className="safety-entry-label">Безопасность</span></button>}
-        {canReadSources && <button type="button" className="icon-btn" onClick={() => setSheet('sources')} aria-label="Доступные источники">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-            <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-            <circle cx="16" cy="7" r="2" />
-            <circle cx="10" cy="17" r="2" />
-          </svg>
-        </button>}
+
+        {/* Role-tailored action buttons */}
+        {context.role === 'pto_engineer' ? (
+          <>
+            <button
+              type="button"
+              className="btn small ppr-entry primary"
+              onClick={() => setCustomerSection('documents')}
+              aria-label="Документы ППР"
+            >
+              ППР и график
+            </button>
+            <button
+              type="button"
+              className="btn small safety-entry"
+              disabled={!project}
+              onClick={() => setSheet('documents')}
+            >
+              Чертежи и ПОС
+            </button>
+          </>
+        ) : context.role === 'contractor_foreman' ? (
+          <>
+            <button
+              type="button"
+              className="btn small primary"
+              onClick={() => setCustomerSection('cases')}
+              aria-label="Задачи и замечания прораба"
+            >
+              Мои задачи
+            </button>
+            <button
+              type="button"
+              className="icon-btn tasks-btn"
+              onClick={() => setCustomerSection('notifications')}
+              aria-label="Уведомления"
+              title="Уведомления"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5z" /><path d="M10 20.5a2.2 2.2 0 0 0 4 0" /></svg>
+            </button>
+          </>
+        ) : context.role === 'customer_manager' || user.role === 'admin' ? (
+          <>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setCustomerSection('cases')}
+              aria-label="Решения заказчика"
+            >
+              Решения
+            </button>
+            <button
+              type="button"
+              className="btn small ppr-entry"
+              onClick={() => setCustomerSection('documents')}
+              aria-label="Документы ППР"
+            >
+              ППР
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setCustomerSection('reports')}
+              aria-label="Отчёты"
+            >
+              Отчёты
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setInviteManagerOpen(true)}
+              title="Ключи приглашений в проект"
+            >
+              🔑 Ключи
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: '12px', color: 'var(--fg-3)', padding: '0 8px' }}>
+            Только просмотр
+          </span>
+        )}
+
+        {canManageControl && context.role !== 'pto_engineer' && (
+          <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')} aria-label="Безопасность" title="Безопасность"><svg className="safety-entry-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/></svg><span className="safety-entry-label">Безопасность</span></button>
+        )}
+        {canReadSources && (
+          <button type="button" className="icon-btn" onClick={() => setSheet('sources')} aria-label="Доступные источники">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+              <circle cx="16" cy="7" r="2" />
+              <circle cx="10" cy="17" r="2" />
+            </svg>
+          </button>
+        )}
         <button type="button" className="avatar-btn" onClick={(e) => setMenu({ kind: 'user', anchor: e.currentTarget.getBoundingClientRect() })} aria-label={`Пользователь ${user.username}`} aria-haspopup="menu">
           <span className="avatar">{user.username.slice(0, 2).toUpperCase()}</span>
         </button>
@@ -1435,6 +1540,16 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
               <div className="m-k kicker">Организация / объект / назначение</div>
               {contexts.map(item => <button key={contextKey(item)} type="button" className="m-item" role="menuitemradio" aria-checked={contextKey(item) === contextKey(context)} onClick={() => { setMenu(null); onContextChange(contextKey(item)) }}><span className="chk">✓</span><span><b>{item.project_name}</b><small>{item.organization_name} · {roleName(item)}</small></span></button>)}
               <div className="m-sep" />
+              <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setJoinByKeyOpen(true) }}>
+                <span />
+                <span><b>Подключиться по ключу…</b><small>Присоединиться к объекту по коду</small></span>
+              </button>
+              {(can(context, 'assignment.manage') || user.role === 'admin' || context.role === 'customer_manager') && (
+                <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setInviteManagerOpen(true) }}>
+                  <span />
+                  <span><b>Ключи приглашений в проект</b><small>Генерация и отзыв ключей ролей</small></span>
+                </button>
+              )}
               <button type="button" className="m-item" role="menuitem" disabled={accessLoading} onClick={() => { setMenu(null); onRefreshAccess() }}><span /><span><b>Обновить доступы</b></span></button>
               <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setCustomerSection('organizations') }}><span /><span><b>Организации и приглашения</b></span></button>
             </>
@@ -1466,6 +1581,17 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
           )}
         </Menu>
       )}
+
+      <JoinByKeyModal
+        open={joinByKeyOpen}
+        onClose={() => setJoinByKeyOpen(false)}
+        onSuccess={() => onRefreshAccess()}
+      />
+      <ProjectInviteManagerModal
+        open={inviteManagerOpen}
+        context={context}
+        onClose={() => setInviteManagerOpen(false)}
+      />
     </div>
   )
 }

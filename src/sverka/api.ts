@@ -539,3 +539,41 @@ export async function viewAsset(url: string, signal?: AbortSignal): Promise<Blob
   if (!res.ok) throw new ApiError('Утверждённый кадр не загрузился', res.status)
   return res.blob()
 }
+
+export interface ProjectInviteKeyItem {
+  id: string
+  project_id: string
+  key: string
+  role: string
+  created_by_user_id: string | null
+  expires_at: string | null
+  max_uses: number | null
+  uses_count: number
+  is_active: boolean
+  created_at: string
+}
+
+export interface JoinByKeyResult {
+  success: boolean
+  message: string
+  project_id: string
+  project_name: string
+  role: string
+  side: string
+  assignment_id: string
+  organization_id: string
+  organization_name: string
+}
+
+export const createProjectInvite = (projectId: string, data: { role: string; max_uses?: number | null; expires_in_days?: number | null }) =>
+  req<ProjectInviteKeyItem>(`/projects/${projectId}/invites`, json('POST', data), 'Не удалось создать ключ приглашения')
+
+export const listProjectInvites = (projectId: string) =>
+  req<ProjectInviteKeyItem[]>(`/projects/${projectId}/invites`, {}, 'Не удалось загрузить ключи приглашений')
+
+export const deleteProjectInvite = (projectId: string, inviteId: string) =>
+  req<{ ok: boolean; message: string }>(`/projects/${projectId}/invites/${inviteId}`, { method: 'DELETE' }, 'Не удалось деактивировать ключ')
+
+export const joinProjectByKey = (key: string) =>
+  req<JoinByKeyResult>('/projects/join-by-key', json('POST', { key }), 'Не удалось подключиться по ключу приглашения')
+

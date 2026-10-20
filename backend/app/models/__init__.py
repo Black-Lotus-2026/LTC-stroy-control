@@ -43,6 +43,7 @@ from app.models.project import (
     Camera,
     CameraHealthEvent,
     Project,
+    ProjectInviteKey,
     ProjectSettings,
     Zone,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "WorkType",
     # Площадка
     "Project",
+    "ProjectInviteKey",
     "ProjectSettings",
     "Zone",
     "Camera",

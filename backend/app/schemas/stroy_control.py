@@ -412,3 +412,53 @@ class FrameDetectionResponse(BaseModel):
     confidence_calibrated: bool = False
     compliance_enabled: bool = False
     evaluable_classes: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Project Invite Keys & Auto-Onboarding
+# ---------------------------------------------------------------------------
+
+
+class ProjectInviteKeyCreate(BaseModel):
+    role: str = Field(
+        default="contractor_foreman",
+        description="Роль в проекте: contractor_foreman, pto_engineer, customer_manager, project_viewer",
+    )
+    max_uses: int | None = Field(
+        default=None, description="Максимальное количество использований"
+    )
+    expires_in_days: int | None = Field(
+        default=30, description="Срок действия в днях (null для бессрочного)"
+    )
+
+
+class ProjectInviteKeyItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    key: str
+    role: str
+    created_by_user_id: uuid.UUID | None = None
+    expires_at: datetime | None = None
+    max_uses: int | None = None
+    uses_count: int = 0
+    is_active: bool = True
+    created_at: datetime
+
+
+class JoinByKeyRequest(BaseModel):
+    key: str = Field(..., description="Ключ приглашения в проект")
+
+
+class JoinByKeyResponse(BaseModel):
+    success: bool
+    message: str
+    project_id: uuid.UUID
+    project_name: str
+    role: str
+    side: str
+    assignment_id: uuid.UUID
+    organization_id: uuid.UUID
+    organization_name: str
+

@@ -91,6 +91,9 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     settings: Mapped[ProjectSettings | None] = relationship(
         back_populates="project", cascade="all, delete-orphan", uselist=False
     )
+    invite_keys: Mapped[list[ProjectInviteKey]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Project {self.code}>"
@@ -285,3 +288,36 @@ class CameraHealthEvent(UUIDPrimaryKeyMixin, Base):
     reason: Mapped[str | None] = mapped_column(Text, default=None)
 
     camera: Mapped[Camera] = relationship()
+
+
+class ProjectInviteKey(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Ключ-приглашение для автоматического подключения пользователя к проекту в заданной роли."""
+
+    __tablename__ = "project_invite_keys"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
+    max_uses: Mapped[int | None] = mapped_column(Integer, default=None, nullable=True)
+    uses_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+
+    project: Mapped[Project] = relationship(back_populates="invite_keys")
+

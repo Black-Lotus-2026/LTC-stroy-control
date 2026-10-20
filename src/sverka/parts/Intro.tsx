@@ -7,6 +7,7 @@ import type { CustomerAccess } from './CustomerWorkspace'
 import { contextKey, roleName } from '../customerContext'
 import { introPresentation } from '../introContext'
 import { SideSwitch, Sides, useSide, type Side } from './IntroSides'
+import { JoinByKeyModal } from './ProjectInviteModal'
 
 const SceneCtx = createContext<WireScene | null>(null)
 
@@ -79,6 +80,7 @@ export function Intro({ user, access, leaving, onContinue }: { user: UserProfile
   const [idx, setIdx] = useState(0)
   const [side, setSide] = useSide()
   const [switched, setSwitched] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(false)
   const aim = useRef({ x: 0, y: 0 })
   const pickSide = (s: Side) => {
     setSwitched(true)
@@ -166,6 +168,9 @@ export function Intro({ user, access, leaving, onContinue }: { user: UserProfile
           <small>{access.context ? `${access.context.organization_name} / ${access.context.project_name}` : user.username}</small>
           <small className="it-task" role={access.accessError ? 'alert' : 'status'}>{presentation.task}</small>
           {access.contexts.length > 1 && <select className="it-context-select" aria-label="Назначение на заставке" value={access.context ? contextKey(access.context) : ''} onChange={event => access.onContextChange(event.target.value)}><option value="" disabled>Выберите назначение</option>{access.contexts.map(item => <option key={contextKey(item)} value={contextKey(item)}>{item.organization_name} / {item.project_name} / {roleName(item)}</option>)}</select>}
+          <button type="button" className="btn small join-by-key-btn" onClick={() => setJoinOpen(true)}>
+            + Войти по ключу приглашения
+          </button>
         </div>
         <ol className="it-steps" aria-label="Что на заставке">
           {SUBJECTS.map((s, i) => (
@@ -193,6 +198,7 @@ export function Intro({ user, access, leaving, onContinue }: { user: UserProfile
           </svg>
         </button>
       </footer>
+      <JoinByKeyModal open={joinOpen} onClose={() => setJoinOpen(false)} onSuccess={() => access.onRefreshAccess()} />
     </>
   )
 }

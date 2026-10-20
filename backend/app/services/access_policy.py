@@ -85,7 +85,7 @@ class AccessContext:
     def permissions(self):
         if self.is_demo:
             return VIEWER
-        if self.assignment is None and (self.user.username == self.project.owner_username or getattr(self.user, "role", None) == UserRole.ADMIN):
+        if self.assignment is None and bool(self.project.owner_username and self.user.username == self.project.owner_username):
             return MANAGER
         if self.role == ProjectRole.CUSTOMER_MANAGER and self.side == "customer":
             permissions = set(MANAGER)
@@ -161,7 +161,7 @@ def resolve_context(
             query = query.where(ProjectAssignment.id == selector)
         rows = db.execute(query.execution_options(populate_existing=True)).all()
         if len(rows) != 1:
-            if not rows and (user.username == project.owner_username or getattr(user, "role", None) == UserRole.ADMIN):
+            if not rows and bool(project.owner_username and user.username == project.owner_username):
                 ctx = AccessContext(project, user, None, None, None, is_demo=False)
                 if permission not in ctx.permissions:
                     fail("ACTION_FORBIDDEN", 403)

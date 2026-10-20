@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import secrets
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, DbSession
-from app.models.enums import CameraStatus, ZoneRiskLevel
-from app.models.project import Camera, Project, Zone
+from app.models.customer_control import (
+    AssignmentArea,
+    Organization,
+    OrganizationMembership,
+    ProjectAssignment,
+    ProjectOrganization,
+    ProjectRole,
+    ResponsibilityArea,
+)
+from app.models.enums import CameraStatus, UserRole, ZoneRiskLevel
+from app.models.project import Camera, Project, ProjectInviteKey, Zone
 from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.weather import WeatherForecast
@@ -18,9 +29,13 @@ from app.schemas.stroy_control import (
     CameraCreate,
     CameraItem,
     CameraUpdate,
+    JoinByKeyRequest,
+    JoinByKeyResponse,
     ProjectAlertSettings,
     ProjectAlertSettingsUpdate,
     ProjectCreate,
+    ProjectInviteKeyCreate,
+    ProjectInviteKeyItem,
     ProjectItem,
     ProjectUpdate,
     ZoneCreate,
@@ -68,6 +83,346 @@ def create_project(
             "message": "Создание объекта требует действующего членства организации",
         },
     )
+
+
+def _generate_invite_key() -> str:
+    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    part1 = "".join(secrets.choice(alphabet) for _ in range(4))
+    part2 = "".join(secrets.choice(alphabet) for _ in range(4))
+    return f"PRJ-{part1}-{part2}"
+
+
+@router.post("/join-by-key", response_model=JoinByKeyResponse)
+def join_by_key(
+    data: JoinByKeyRequest, db: DbSession, current_user: CurrentUser
+) -> JoinByKeyResponse:
+    cleaned_key = data.key.strip().upper()
+    invite = db.scalar(
+        select(ProjectInviteKey).where(
+            func.upper(ProjectInviteKey.key) == cleaned_key
+        )
+    )
+    if not invite or not invite.is_active:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="Ключ приглашения не найден или был деактивирован",
+        )
+    now = datetime.now(UTC)
+    if invite.expires_at:
+        exp = invite.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=UTC)
+        if exp < now:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Срок действия данного ключа приглашения истёк",
+            )
+    if invite.max_uses is not None and invite.uses_count >= invite.max_uses:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Превышено максимальное количество использований этого ключа",
+        )
+
+    project = db.get(Project, invite.project_id)
+    if not project or project.status == "archived":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Объект строительства недоступен или находится в архиве",
+        )
+
+    role_str = invite.role
+    if role_str == "inspector":
+        target_role = ProjectRole.CUSTOMER_MANAGER
+        side = "customer"
+    elif role_str in (ProjectRole.CUSTOMER_MANAGER.value, "customer_manager"):
+        target_role = ProjectRole.CUSTOMER_MANAGER
+        side = "customer"
+    elif role_str in (ProjectRole.PROJECT_VIEWER.value, "project_viewer"):
+        target_role = ProjectRole.PROJECT_VIEWER
+        side = "customer"
+    elif role_str in (ProjectRole.CONTRACTOR_FOREMAN.value, "contractor_foreman"):
+        target_role = ProjectRole.CONTRACTOR_FOREMAN
+        side = "contractor"
+    elif role_str in (ProjectRole.PTO_ENGINEER.value, "pto_engineer"):
+        target_role = ProjectRole.PTO_ENGINEER
+        side = "contractor"
+    else:
+        target_role = ProjectRole.PROJECT_VIEWER
+        side = "customer"
+
+    scope_kind = "project" if side == "customer" else "areas"
+    area = None
+
+    if side == "customer":
+        org = None
+        if project.customer_organization_id:
+            org = db.get(Organization, project.customer_organization_id)
+
+        if not org:
+            org = Organization(
+                id=uuid.uuid4(),
+                name=f"Служба заказчика ({project.name})",
+                status="active",
+            )
+            db.add(org)
+            db.flush()
+            project.customer_organization_id = org.id
+
+        party = db.scalar(
+            select(ProjectOrganization).where(
+                ProjectOrganization.project_id == project.id,
+                ProjectOrganization.organization_id == org.id,
+                ProjectOrganization.side == "customer",
+            )
+        )
+        if not party:
+            party = ProjectOrganization(
+                id=uuid.uuid4(),
+                project_id=project.id,
+                organization_id=org.id,
+                side="customer",
+                status="active",
+            )
+            db.add(party)
+            db.flush()
+        elif party.status != "active":
+            party.status = "active"
+
+        member = db.scalar(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == org.id,
+                OrganizationMembership.user_id == current_user.id,
+            )
+        )
+        if not member:
+            member = OrganizationMembership(
+                id=uuid.uuid4(),
+                organization_id=org.id,
+                user_id=current_user.id,
+                status="active",
+                can_manage_members=(target_role == ProjectRole.CUSTOMER_MANAGER),
+                can_create_projects=(target_role == ProjectRole.CUSTOMER_MANAGER),
+            )
+            db.add(member)
+            db.flush()
+        elif member.status != "active":
+            member.status = "active"
+        if target_role == ProjectRole.CUSTOMER_MANAGER:
+            member.can_manage_members = True
+            member.can_create_projects = True
+
+    else:  # contractor
+        party = db.scalar(
+            select(ProjectOrganization).where(
+                ProjectOrganization.project_id == project.id,
+                ProjectOrganization.side == "contractor",
+                ProjectOrganization.status == "active",
+            )
+        )
+        if not party:
+            org = Organization(
+                id=uuid.uuid4(),
+                name=f"Генподрядчик ({project.name})",
+                status="active",
+            )
+            db.add(org)
+            db.flush()
+            party = ProjectOrganization(
+                id=uuid.uuid4(),
+                project_id=project.id,
+                organization_id=org.id,
+                side="contractor",
+                status="active",
+            )
+            db.add(party)
+            db.flush()
+        else:
+            org = db.get(Organization, party.organization_id)
+
+        member = db.scalar(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == org.id,
+                OrganizationMembership.user_id == current_user.id,
+            )
+        )
+        if not member:
+            member = OrganizationMembership(
+                id=uuid.uuid4(),
+                organization_id=org.id,
+                user_id=current_user.id,
+                status="active",
+            )
+            db.add(member)
+            db.flush()
+        elif member.status != "active":
+            member.status = "active"
+
+        area = db.scalar(
+            select(ResponsibilityArea).where(
+                ResponsibilityArea.project_id == project.id
+            )
+        )
+        if not area:
+            first_zone = db.scalar(select(Zone).where(Zone.project_id == project.id))
+            if not first_zone:
+                first_zone = Zone(
+                    id=uuid.uuid4(),
+                    project_id=project.id,
+                    name="Основная площадка",
+                    code=f"Z-{secrets.token_hex(2).upper()}",
+                )
+                db.add(first_zone)
+                db.flush()
+            area = ResponsibilityArea(
+                id=uuid.uuid4(),
+                project_id=project.id,
+                name=f"Зона ответственности ({project.name})",
+                zone_id=first_zone.id,
+            )
+            db.add(area)
+            db.flush()
+
+    assignment = db.scalar(
+        select(ProjectAssignment).where(
+            ProjectAssignment.participation_id == party.id,
+            ProjectAssignment.membership_id == member.id,
+            ProjectAssignment.role == target_role,
+        )
+    )
+    if not assignment:
+        assignment = ProjectAssignment(
+            id=uuid.uuid4(),
+            participation_id=party.id,
+            membership_id=member.id,
+            role=target_role,
+            scope_kind=scope_kind,
+            status="active",
+        )
+        db.add(assignment)
+        db.flush()
+    else:
+        assignment.status = "active"
+        assignment.scope_kind = scope_kind
+        assignment.row_version += 1
+
+    if scope_kind == "areas" and area:
+        existing_link = db.scalar(
+            select(AssignmentArea).where(
+                AssignmentArea.assignment_id == assignment.id,
+                AssignmentArea.area_id == area.id,
+            )
+        )
+        if not existing_link:
+            db.add(AssignmentArea(assignment_id=assignment.id, area_id=area.id))
+
+    invite.uses_count += 1
+    project.authorization_version += 1
+    db.commit()
+
+    return JoinByKeyResponse(
+        success=True,
+        message=f"Вы успешно подключены к объекту '{project.name}' в роли '{target_role.value}'",
+        project_id=project.id,
+        project_name=project.name,
+        role=target_role.value,
+        side=party.side,
+        assignment_id=assignment.id,
+        organization_id=org.id,
+        organization_name=org.name,
+    )
+
+
+@router.post(
+    "/{project_id}/invites",
+    response_model=ProjectInviteKeyItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_invite(
+    project_id: uuid.UUID,
+    data: ProjectInviteKeyCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+) -> ProjectInviteKeyItem:
+    project = _configuration_project(db, project_id, current_user, write=True)
+
+    valid_roles = {
+        ProjectRole.CUSTOMER_MANAGER.value,
+        ProjectRole.CONTRACTOR_FOREMAN.value,
+        ProjectRole.PTO_ENGINEER.value,
+        ProjectRole.PROJECT_VIEWER.value,
+        "inspector",
+    }
+    if data.role not in valid_roles:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Недопустимая роль. Доступные роли: {', '.join(sorted(valid_roles))}",
+        )
+
+    for _ in range(10):
+        candidate_key = _generate_invite_key()
+        if not db.scalar(
+            select(ProjectInviteKey).where(ProjectInviteKey.key == candidate_key)
+        ):
+            break
+    else:
+        candidate_key = f"PRJ-{uuid.uuid4().hex[:8].upper()}"
+
+    expires_at = None
+    if data.expires_in_days:
+        expires_at = datetime.now(UTC) + timedelta(days=data.expires_in_days)
+
+    invite = ProjectInviteKey(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        key=candidate_key,
+        role=data.role,
+        created_by_user_id=current_user.id,
+        expires_at=expires_at,
+        max_uses=data.max_uses,
+        uses_count=0,
+        is_active=True,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
+@router.get("/{project_id}/invites", response_model=list[ProjectInviteKeyItem])
+def list_project_invites(
+    project_id: uuid.UUID, db: DbSession, current_user: CurrentUser
+) -> list[ProjectInviteKeyItem]:
+    project = _configuration_project(db, project_id, current_user, write=False)
+    invites = list(
+        db.scalars(
+            select(ProjectInviteKey)
+            .where(ProjectInviteKey.project_id == project.id)
+            .order_by(ProjectInviteKey.created_at.desc())
+        )
+    )
+    return invites
+
+
+@router.delete("/{project_id}/invites/{invite_id}")
+def delete_project_invite(
+    project_id: uuid.UUID,
+    invite_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    project = _configuration_project(db, project_id, current_user, write=True)
+    invite = db.scalar(
+        select(ProjectInviteKey).where(
+            ProjectInviteKey.id == invite_id,
+            ProjectInviteKey.project_id == project.id,
+        )
+    )
+    if not invite:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Ключ приглашения не найден")
+    invite.is_active = False
+    db.commit()
+    return {"ok": True, "message": "Ключ приглашения успешно деактивирован"}
+
 
 
 @router.get("/{project_id}", response_model=ProjectItem)
@@ -458,7 +813,7 @@ def _project_item(db: DbSession, project: Project, user) -> ProjectItem:
     full = ctx.is_demo or (
         str(ctx.side) == "customer"
         and str(ctx.role) in {"customer_manager", "project_viewer"}
-        and ctx.assignment.scope_kind == "project"
+        and (ctx.assignment is None or ctx.assignment.scope_kind == "project")
     )
     zones = (
         list(db.scalars(select(Zone).where(Zone.project_id == project.id)))
