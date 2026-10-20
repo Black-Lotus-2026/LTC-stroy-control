@@ -81,7 +81,7 @@ export class Engine {
   modelSince?: number
   frames = 0
   evaluationRevision = 0
-  conf = 60
+  conf = 75
   windowMs = 30_000
   stageName?: string
   safetyProjectId?: string

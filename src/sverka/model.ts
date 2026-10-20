@@ -37,12 +37,12 @@ export interface Settings {
   shiftTo: number
   startGrace: number // s after shift start before absence counts
 }
-export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
+export const DEFAULTS: Settings = { window: 30, conf: 75, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
 export const DEMO_DEFAULTS: Settings = { ...DEFAULTS, warnAfter: 30, errAfter: 60, oopAfter: 30, startGrace: 0 }
 export type NumKey = keyof Settings
 export const STEPS: Record<NumKey, number[]> = {
   window: [10, 15, 30, 60, 120],
-  conf: [40, 50, 60, 70, 80, 90],
+  conf: [40, 50, 60, 70, 75, 80, 90],
   warnAfter: [30, 60, 120, 180, 300, 600, 900, 1200, 1800],
   errAfter: [60, 120, 300, 600, 900, 1200, 1800, 2700, 3600, 5400],
   oopAfter: [30, 60, 120, 300, 600],

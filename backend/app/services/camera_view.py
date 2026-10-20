@@ -790,9 +790,14 @@ def capture_http_frame(url: str, *, timeout: float = 5.0) -> bytes | None:
 
 
 def capture_frame(camera: Camera) -> bytes | None:
-    url = camera.stream_url or ""
-    if url.startswith(("http://", "https://")):
-        return capture_http_frame(url)
+    url = (camera.stream_url or "").strip()
+    if not url:
+        return None
+    is_hls = ".m3u8" in url.lower()
+    if url.startswith(("http://", "https://")) and not is_hls:
+        frame = capture_http_frame(url)
+        if frame:
+            return frame
     if url.startswith("rtsp://") and not getattr(
         settings, "camera_allow_rtsp_capture", False
     ):
@@ -804,22 +809,19 @@ def capture_frame(camera: Camera) -> bytes | None:
     try:
         import cv2
 
-        capture = cv2.VideoCapture(
-            pinned,
-            cv2.CAP_FFMPEG,
-            [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000],
-        )
+        target = url if (is_hls or url.startswith("https://")) else pinned
+        capture = cv2.VideoCapture(target)
         try:
             if not capture.isOpened():
                 return None
             ok, image = capture.read()
-            if not ok:
+            if not ok or image is None:
                 return None
-            encoded, data = cv2.imencode(".jpg", image)
+            encoded, data = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
             return data.tobytes() if encoded else None
         finally:
             capture.release()
-    except ImportError:
+    except (ImportError, Exception):
         return None
 
 

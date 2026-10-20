@@ -129,7 +129,7 @@ export interface StreamCheck { status: 'online' | 'offline' | 'warning' | 'unkno
 export const checkStream = (cameraId: string) => req<StreamCheck>(`/videos/check-stream?camera_id=${encodeURIComponent(cameraId)}`)
 export const proxyUrl = (cameraId: string) => `${API_PREFIX}/videos/proxy-stream?camera_id=${encodeURIComponent(cameraId)}`
 /** Read one bounded frame from an authorized persisted camera and close MJPEG immediately. */
-export async function grabFrame(cameraId: string, timeoutMs = 6000): Promise<HTMLImageElement> {
+export async function grabFrame(cameraId: string, timeoutMs = 12000): Promise<HTMLImageElement> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let imageUrl = ''

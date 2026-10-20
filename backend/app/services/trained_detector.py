@@ -91,7 +91,7 @@ class TrainedConstructionDetector:
         weights,
         *,
         device=None,
-        confidence=0.5,
+        confidence=0.75,
         imgsz=960,
         policy="shadow",
         approved_classes=(),

@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     )
     construction_device: str | None = None
     construction_imgsz: int = Field(default=960, ge=32, le=4096)
-    construction_confidence: float = Field(default=0.5, gt=0, lt=1)
+    construction_confidence: float = Field(default=0.75, gt=0, lt=1)
     # Only independently validated semantic classes may drive rules in enforce.
     construction_approved_classes: list[str] = Field(default_factory=list)
 

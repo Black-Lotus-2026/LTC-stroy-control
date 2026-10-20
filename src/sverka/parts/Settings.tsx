@@ -475,7 +475,7 @@ export function CameraForm({
         </label>
         <label>
           Адрес потока
-          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={initial ? "Оставьте пустым, чтобы сохранить подключение" : "https://camera.example/mjpeg"} required={!initial} />
+          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={initial ? "Оставьте пустым, чтобы сохранить подключение" : "https://camera.example/live.m3u8 или /mjpeg"} required={!initial} />
         </label>
       </div>
       <div className="form-grid two-col">
@@ -497,7 +497,7 @@ export function CameraForm({
           </label>
         )}
       </div>
-      {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/MJPEG-адрес или серверный шлюз.</p>}
+      {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/HLS/MJPEG-адрес или серверный шлюз.</p>}
       {state.msg && <p className={state.s === 'error' ? 'err-line' : 'hint'}>{state.msg}</p>}
       <div className="form-actions">
         <button type="submit" className="btn small primary" disabled={state.s === 'busy'}>
