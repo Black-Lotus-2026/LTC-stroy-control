@@ -19,16 +19,18 @@ from app.core.config import settings
 from app.db.base import utcnow
 from app.models.document import DocumentAnalysisRun, DocumentChunk, ProjectDocument
 from app.models.schedule import ScheduleTask
+from app.services.document_application import apply_document_rule, documents_unchanged
 from app.services.document_search import (
     MAX_FILE_BYTES,
     AgentFailed,
     AgentUnavailable,
     DocumentParseError,
+    agent_configuration_status,
     build_chain,
     extract_chunks,
 )
 from app.services.document_workflow import DocumentMachineryWorkflow
-from app.services.machinery_rules import aliases_for, current_probability, set_probability
+from app.services.machinery_rules import aliases_for, current_probability
 from app.services.management.context import require_project
 
 router = APIRouter(prefix="/projects/{project_id}/documents", tags=["Документы объекта"])
@@ -83,6 +85,12 @@ def list_documents(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
         .order_by(ProjectDocument.created_at.desc())
     ).all()
     return [_info(doc, len(doc.chunks)) for doc in documents]
+
+
+@router.get("/agent-status")
+def agent_status(project_id: uuid.UUID, db: DbSession, user: CurrentUser):
+    require_project(db, project_id, user)
+    return agent_configuration_status()
 
 
 @router.post("", response_model=DocumentInfo, status_code=201)
@@ -313,14 +321,8 @@ def get_analysis(
 
 
 def _validate_run_sources(run: DocumentAnalysisRun, db) -> None:
-    for source in run.snapshot["documents"]:
-        doc = db.get(ProjectDocument, uuid.UUID(source["id"]))
-        if (
-            doc is None
-            or doc.project_id != run.project_id
-            or doc.sha256 != source["sha256"]
-        ):
-            raise HTTPException(409, "Документы изменились. Запустите анализ заново")
+    if not documents_unchanged(run, db):
+        raise HTTPException(409, "Документы изменились. Запустите анализ заново")
 
 
 @router.post("/analysis-runs/{run_id}/apply")
@@ -379,36 +381,9 @@ def apply_analysis(
         if origin and origin.get("source") == "manual":
             raise HTTPException(409, "Ручное правило имеет приоритет")
         changes.append((stage, code, pair[1]))
-    for stage, code, proposal in changes:
-        values = stage.machinery_probabilities or {}
-        previous_values = {key: values[key] for key in aliases_for(code) if key in values}
-        sources = dict(stage.machinery_rule_sources or {})
-        previous_source = sources.get(code)
-        stage.machinery_probabilities = set_probability(
-            values, code, proposal["proposed_probability"]
-        )
-        sources[code] = {
-            "source": "document",
-            "run_id": str(run.id),
-            "evidence": [
-                {
-                    "document_id": e["document_id"],
-                    "chunk_id": e["chunk_id"],
-                    "locator": e["locator"],
-                }
-                for e in proposal["evidence"]
-            ],
-            "previous_values": previous_values,
-            "previous_source": previous_source,
-        }
-        stage.machinery_rule_sources = sources
+    for stage, _code, proposal in changes:
         applied.append(
-            {
-                "stage_id": str(stage.id),
-                "class_code": code,
-                "applied_by": str(user.id),
-                "applied_at": utcnow().isoformat(),
-            }
+            apply_document_rule(run, stage, proposal, actor_id=user.id, mode="manual")
         )
     run.result = {**run.result, "applied": applied}
     db.commit()

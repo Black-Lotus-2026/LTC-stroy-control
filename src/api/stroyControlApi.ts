@@ -51,6 +51,32 @@ export interface DocumentAnalysis {
   items: DocumentMachineryItem[]
 }
 
+export interface DocumentAgentStatus {
+  configured: boolean
+  key_configured: boolean
+  model: string
+}
+
+export interface DocumentPlanRun {
+  id: string
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed'
+  stage_count: number
+  completed_count: number
+  error: string | null
+  result: {
+    stages: {
+      stage_id: string
+      stage_name: string
+      summary: string
+      status: 'completed' | 'failed'
+      findings: (DocumentMachineryItem & { review_status: string })[]
+      proposals: { class_code: string; class_name: string; current_probability: number | null; proposed_probability: number | null; status: string; evidence: DocumentMachineryItem[] }[]
+    }[]
+    applied: { stage_id: string; class_code: string; mode?: string; reverted_at?: string }[]
+    auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[] }
+  }
+}
+
 export interface CascadeShiftResponse {
   delayed_stage_id: string
   delay_days: number
@@ -719,6 +745,24 @@ export async function fetchStages(projectId?: string): Promise<StageItem[]> {
 export async function fetchProjectDocuments(projectId: string): Promise<ProjectDocumentItem[]> {
   return checkedJson(`${API_PREFIX}/projects/${projectId}/documents`, {}, 'Не удалось загрузить документы')
 }
+
+export const fetchDocumentAgentStatus = (projectId: string): Promise<DocumentAgentStatus> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/agent-status`, {}, 'Не удалось проверить API-ключ агента')
+
+export const fetchLatestDocumentPlanRun = (projectId: string): Promise<DocumentPlanRun | null> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/latest`, {}, 'Не удалось загрузить последний анализ')
+
+export const fetchDocumentPlanRun = (projectId: string, runId: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/${runId}`, {}, 'Не удалось получить результат анализа')
+
+export const startDocumentPlanRun = (projectId: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analyze-plan`, { method: 'POST' }, 'Не удалось запустить анализ')
+
+export const revertDocumentPlanRule = (projectId: string, runId: string, stageId: string, classCode: string): Promise<DocumentPlanRun> =>
+  checkedJson(`${API_PREFIX}/projects/${projectId}/documents/analysis-runs/${runId}/revert`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selections: [{ stage_id: stageId, class_code: classCode }] }),
+  }, 'Не удалось отменить изменение техники')
 
 export async function uploadProjectDocument(projectId: string, file: File, kind: DocumentKind): Promise<ProjectDocumentItem> {
   const body = new FormData()

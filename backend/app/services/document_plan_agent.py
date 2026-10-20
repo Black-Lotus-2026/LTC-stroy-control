@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.db.base import utcnow
 from app.db.session import SessionLocal
 from app.models.document import DocumentAnalysisRun, DocumentChunk
+from app.services.document_application import auto_apply_ready
 from app.services.document_search import build_chain, search_machinery
 from app.services.machinery_rules import BY_CODE, code_for_name, current_probability
 from app.services.stage_matcher import StageMachineryService
@@ -214,7 +215,12 @@ async def execute_document_run(
                 row.completed_count = len(results)
                 db.commit()
         with session_factory() as db:
-            row = db.get(DocumentAnalysisRun, parsed)
+            row = db.scalar(
+                select(DocumentAnalysisRun)
+                .where(DocumentAnalysisRun.id == parsed)
+                .with_for_update()
+            )
+            auto_apply = auto_apply_ready(row, db)
             row.status = (
                 "partial"
                 if any(item["status"] == "failed" for item in results)
@@ -222,7 +228,11 @@ async def execute_document_run(
             )
             row.finished_at = utcnow()
             db.commit()
-        return {"claimed": True, "completed": len(results)}
+        return {
+            "claimed": True,
+            "completed": len(results),
+            "applied": auto_apply["applied_count"],
+        }
     except Exception as exc:
         with session_factory() as db:
             row = db.get(DocumentAnalysisRun, parsed)

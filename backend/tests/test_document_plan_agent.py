@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
+from pydantic import SecretStr
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
@@ -15,12 +16,14 @@ from sqlalchemy.orm import sessionmaker
 from app.api.v1.documents import (
     ProposalSelection,
     SelectionRequest,
+    agent_status,
     analyze_plan,
     apply_analysis,
     get_analysis,
     revert_analysis,
 )
 from app.api.v1.schedule import update_stage_probabilities
+from app.core.config import settings
 from app.db.base import Base
 from app.models.document import DocumentAnalysisRun, DocumentChunk, ProjectDocument
 from app.models.enums import UserRole
@@ -132,7 +135,7 @@ def test_agent_run_apply_and_revert(state):
     result = asyncio.run(
         execute_document_run(str(run.id), chain=CitedAgent(), session_factory=factory)
     )
-    assert result == {"claimed": True, "completed": 1}
+    assert result == {"claimed": True, "completed": 1, "applied": 1}
     db.expire_all()
     payload = get_analysis(project.id, run.id, db, owner)
     proposal = payload["result"]["stages"][0]["proposals"][0]
@@ -143,8 +146,9 @@ def test_agent_run_apply_and_revert(state):
             ProposalSelection(stage_id=stage.id, class_code="MACHINERY_EXCAVATOR")
         ]
     )
-    applied = apply_analysis(project.id, run.id, choice, db, owner)
+    applied = payload
     assert applied["result"]["applied"][0]["class_code"] == "MACHINERY_EXCAVATOR"
+    assert applied["result"]["applied"][0]["mode"] == "automatic"
     db.refresh(stage)
     assert effective_cv_probabilities(stage.machinery_probabilities)["excavator"] == 0.95
     assert stage.machinery_rule_sources["MACHINERY_EXCAVATOR"]["source"] == "document"
@@ -157,12 +161,14 @@ def test_agent_run_apply_and_revert(state):
 
 def test_manual_change_after_analysis_blocks_application(state):
     db, factory, owner, _, project, stage, _, run = state
+    stage.machinery_rule_sources = {"MACHINERY_EXCAVATOR": {"source": "manual"}}
+    db.commit()
     asyncio.run(
         execute_document_run(str(run.id), chain=CitedAgent(), session_factory=factory)
     )
     db.expire_all()
-    stage.machinery_rule_sources = {"MACHINERY_EXCAVATOR": {"source": "manual"}}
-    db.commit()
+    assert run.result["applied"] == []
+    assert run.result["auto_apply"]["skipped"][0]["reason"] == "manual_override"
     choice = SelectionRequest(
         selections=[
             ProposalSelection(stage_id=stage.id, class_code="MACHINERY_EXCAVATOR")
@@ -171,6 +177,60 @@ def test_manual_change_after_analysis_blocks_application(state):
     with pytest.raises(HTTPException) as error:
         apply_analysis(project.id, run.id, choice, db, owner)
     assert error.value.status_code == 409
+
+
+def test_document_change_during_run_prevents_automatic_application(state):
+    db, factory, _, _, _, stage, document, run = state
+
+    class ChangedSource(CitedAgent):
+        async def ainvoke(self, payload):
+            with factory() as changing_db:
+                changing_db.get(ProjectDocument, document.id).sha256 = "b" * 64
+                changing_db.commit()
+            return await super().ainvoke(payload)
+
+    asyncio.run(
+        execute_document_run(str(run.id), chain=ChangedSource(), session_factory=factory)
+    )
+    db.expire_all()
+    assert run.result["applied"] == []
+    assert run.result["auto_apply"]["skipped"][0]["reason"] == "documents_changed"
+    assert stage.machinery_probabilities == {}
+
+
+def test_rule_change_during_run_prevents_automatic_application(state):
+    db, factory, _, _, _, stage, _, run = state
+
+    class ChangedRule(CitedAgent):
+        async def ainvoke(self, payload):
+            with factory() as changing_db:
+                changing_db.get(ScheduleTask, stage.id).machinery_probabilities = {
+                    "MACHINERY_EXCAVATOR": 0.3
+                }
+                changing_db.commit()
+            return await super().ainvoke(payload)
+
+    asyncio.run(
+        execute_document_run(str(run.id), chain=ChangedRule(), session_factory=factory)
+    )
+    db.expire_all()
+    assert run.result["applied"] == []
+    assert run.result["auto_apply"]["skipped"][0]["reason"] == "rule_changed"
+    assert stage.machinery_probabilities == {"MACHINERY_EXCAVATOR": 0.3}
+
+
+def test_agent_key_status_exposes_presence_only(state, monkeypatch):
+    db, _, owner, _, project, _, _, _ = state
+    monkeypatch.setattr(settings, "document_llm_api_key", SecretStr(""))
+    monkeypatch.setattr(settings, "openrouter_api_key", SecretStr(""))
+    empty = agent_status(project.id, db, owner)
+    assert empty["key_configured"] is False
+    assert empty["configured"] is False
+    monkeypatch.setattr(settings, "document_llm_api_key", SecretStr("test-private-value"))
+    configured = agent_status(project.id, db, owner)
+    assert configured["key_configured"] is True
+    assert configured["configured"] is True
+    assert "test-private-value" not in str(configured)
 
 
 def test_other_project_cannot_read_agent_run(state):

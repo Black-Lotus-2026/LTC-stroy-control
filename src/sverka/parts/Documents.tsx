@@ -1,36 +1,49 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
-import type { DocumentKind, DocumentRun, DocumentSelection, ProjectDocument } from '../api'
+import type { DocumentAgentStatus, DocumentKind, DocumentRun, DocumentSelection, ProjectDocument } from '../api'
+import { useToast } from './common'
 
 const kindName: Record<DocumentKind, string> = { POS: 'ПОС', PPR: 'ППР', TER: 'ТЕР' }
 const key = (stageId: string, code: string) => `${stageId}:${code}`
 const pct = (value: number | null) => value == null ? 'нет оценки' : `${Math.round(value * 100)}%`
+const skipReason: Record<string, string> = {
+  documents_changed: 'документы изменились во время анализа',
+  stage_changed: 'этап изменился во время анализа',
+  rule_changed: 'правило было изменено во время анализа',
+  manual_override: 'сохранена ручная правка',
+  already_applied: 'правило уже применено',
+}
 
 export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
   projectId: string
   canWrite: boolean
   onRulesChanged: (stageIds: string[]) => Promise<void>
 }) {
+  const toast = useToast()
   const [docs, setDocs] = useState<ProjectDocument[]>([])
   const [kind, setKind] = useState<DocumentKind>('PPR')
   const [run, setRun] = useState<DocumentRun | null>(null)
   const [history, setHistory] = useState<DocumentRun[]>([])
-  const [selected, setSelected] = useState<string[]>([])
+  const [agentStatus, setAgentStatus] = useState<DocumentAgentStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
+  const startedHere = useRef(new Set<string>())
+  const reported = useRef(new Set<string>())
 
   useEffect(() => {
     let live = true
     setReady(false)
     setRun(null)
     setDocs([])
+    setAgentStatus(null)
     setError('')
-    Promise.all([api.documents(projectId), api.documentRuns(projectId)]).then(([documents, runs]) => {
+    Promise.all([api.documents(projectId), api.documentRuns(projectId), api.documentAgentStatus(projectId)]).then(([documents, runs, status]) => {
       if (!live) return
       setDocs(documents)
       setHistory(runs)
       setRun(runs[0] || null)
+      setAgentStatus(status)
       setReady(true)
     }, (cause: Error) => {
       if (!live) return
@@ -55,11 +68,15 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
   }, [projectId, run?.id, run?.status])
 
   useEffect(() => {
-    if (!run || (run.status !== 'completed' && run.status !== 'partial')) return
-    const applied = new Set(run.result.applied.filter(item => !item.reverted_at).map(item => key(item.stage_id, item.class_code)))
-    setSelected(run.result.stages.flatMap(stage => stage.proposals
-      .filter(proposal => proposal.status === 'ready' && !applied.has(key(stage.stage_id, proposal.class_code)))
-      .map(proposal => key(stage.stage_id, proposal.class_code))))
+    if (!run || !['completed', 'partial', 'failed'].includes(run.status) || reported.current.has(run.id)) return
+    reported.current.add(run.id)
+    const changed = run.result.applied.filter(item => !item.reverted_at)
+    if (changed.length) void onRulesChanged([...new Set(changed.map(item => item.stage_id))]).catch((cause: Error) => setError(cause.message))
+    if (startedHere.current.has(run.id)) {
+      toast(run.status === 'failed' ? 'Анализ документов не завершён' : changed.length
+        ? `Агент обновил ${changed.length} ${changed.length === 1 ? 'правило техники' : 'правил техники'}. Изменения можно отменить во вкладке «Документы».`
+        : 'Анализ завершён. Новых подтверждённых изменений техники нет.', { error: run.status === 'failed' })
+    }
   }, [run?.id, run?.status])
 
   const act = async (task: () => Promise<void>) => {
@@ -79,25 +96,11 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     })
   }
   const start = () => void act(async () => {
-    setSelected([])
     const created = await api.analyzeDocuments(projectId)
+    startedHere.current.add(created.id)
     setRun(created)
     setHistory(previous => [created, ...previous])
   })
-  const apply = () => {
-    if (!run || !selected.length) return
-    const selections: DocumentSelection[] = selected.map(value => {
-      const split = value.indexOf(':')
-      return { stage_id: value.slice(0, split), class_code: value.slice(split + 1) }
-    })
-    void act(async () => {
-      const result = await api.applyDocumentProposals(projectId, run.id, selections)
-      setRun(result)
-      setHistory(previous => previous.map(item => item.id === result.id ? result : item))
-      setSelected([])
-      await onRulesChanged([...new Set(selections.map(item => item.stage_id))])
-    })
-  }
   const revert = (selection: DocumentSelection) => {
     if (!run) return
     void act(async () => {
@@ -105,15 +108,27 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
       setRun(result)
       setHistory(previous => previous.map(item => item.id === result.id ? result : item))
       await onRulesChanged([selection.stage_id])
+      toast('Правило техники возвращено к прежнему значению')
     })
   }
   const applied = new Set((run?.result.applied || []).filter(item => !item.reverted_at).map(item => key(item.stage_id, item.class_code)))
+  const reverted = new Set((run?.result.applied || []).filter(item => !!item.reverted_at).map(item => key(item.stage_id, item.class_code)))
+  const automatic = (run?.result.applied || []).filter(item => item.mode === 'automatic')
+  const appliedSummary = automatic.map(item => {
+    const stage = run?.result.stages.find(row => row.stage_id === item.stage_id)
+    const proposal = stage?.proposals.find(row => row.class_code === item.class_code)
+    return { item, stage, proposal }
+  })
   const hasSource = docs.some(doc => doc.kind === 'POS' || doc.kind === 'PPR')
   const running = run?.status === 'queued' || run?.status === 'running'
 
   return <div className="doc-panel">
     <h3>Документы проекта и агент техники</h3>
-    <p>Загрузите ПОС или ППР. Агент через внешний API сопоставит их с этапами графика и покажет цитаты перед изменением правил.</p>
+    <p>Загрузите ПОС или ППР. После анализа агент обновит подтверждённые требования к технике и покажет, что изменилось. Любое изменение можно отменить.</p>
+    {agentStatus && <div className={`doc-key-status ${agentStatus.configured ? 'is-ready' : 'is-missing'}`} role={agentStatus.configured ? 'status' : 'alert'}>
+      <strong>API-ключ агента: {agentStatus.key_configured ? 'указан' : 'не указан'}</strong>
+      <span>{agentStatus.configured ? `Модель: ${agentStatus.model}. Ключ хранится на сервере.` : agentStatus.key_configured ? 'Проверьте адрес API и имя модели на сервере.' : 'Добавьте DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY в конфигурацию API и worker, затем перезапустите сервисы.'}</span>
+    </div>}
     <p className="doc-limitation">Анализ документа определяет плановое требование. Текущая CV-модель работает в режиме наблюдения; отсутствие техники по кадрам автоматически не подтверждается.</p>
     {error && <p className="err-line" role="alert">{error}</p>}
     {!ready && <p role="status">Загружаем документы…</p>}
@@ -134,7 +149,7 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
     </li>)}</ul>
     {!docs.length && ready && <p>Документы пока не загружены.</p>}
     <div className="doc-actions">
-      {canWrite && <button className="btn small primary" disabled={busy || running || !hasSource} onClick={start}>Проанализировать этапы</button>}
+      {canWrite && <button className="btn small primary" disabled={busy || running || !hasSource || !agentStatus?.configured} onClick={start}>Проанализировать и обновить технику</button>}
       {run && <span role="status">{running ? `Обработано ${run.completed_count} из ${run.stage_count} этапов` : run.status === 'failed' ? 'Анализ не завершён' : `Проверено ${run.completed_count} из ${run.stage_count} этапов`}</span>}
     </div>
     {history.length > 1 && <label className="doc-history">История анализов <select className="select" value={run?.id || ''} onChange={event => {
@@ -142,6 +157,16 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
       if (chosen) void act(async () => setRun(await api.documentRun(projectId, chosen.id)))
     }}>{history.map(item => <option key={item.id} value={item.id}>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.status}</option>)}</select></label>}
     {run?.error && <p className="err-line">Ошибка запуска: {run.error}</p>}
+    {run && ['completed', 'partial'].includes(run.status) && <div className="doc-change-summary" role="status">
+      <strong>{automatic.length ? `Агент изменил ${automatic.length} ${automatic.length === 1 ? 'правило' : 'правил'} техники` : 'Автоматических изменений нет'}</strong>
+      {appliedSummary.length > 0 && <ul>{appliedSummary.map(({ item, stage, proposal }) => <li key={key(item.stage_id, item.class_code)}>
+        {stage?.stage_name || 'Этап'} · {proposal?.class_name || item.class_code}: {pct(item.previous_probability ?? null)} → {pct(item.new_probability ?? null)}{item.reverted_at ? ' · отменено' : ''}
+      </li>)}</ul>}
+      {run.result.auto_apply?.skipped.map((item, index) => <p key={`${item.stage_id || 'all'}-${item.class_code || index}`}>
+        Не изменено: {item.class_code || 'все этапы'} · {skipReason[item.reason] || item.reason}.
+      </p>)}
+      {!automatic.length && !run.result.auto_apply?.skipped.length && <p>В документах не найдено новых однозначных требований. Действующие правила сохранены.</p>}
+    </div>}
     {run && run.result.stages.map(stage => <section className="doc-stage" key={stage.stage_id}>
       <h4>{stage.stage_name}</h4>
       <p>{stage.summary}</p>
@@ -152,10 +177,9 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
         const isApplied = applied.has(id)
         return <div className="doc-proposal" key={id}>
           <div className="doc-proposal-title">
-            {proposal.status === 'ready' && !isApplied && canWrite && <input type="checkbox" aria-label={`Применить ${proposal.class_name} для этапа ${stage.stage_name}`} checked={selected.includes(id)} disabled={busy} onChange={event => setSelected(previous => event.target.checked ? [...previous, id] : previous.filter(value => value !== id))} />}
             <strong>{proposal.class_name}</strong>
             <span>{pct(proposal.current_probability)} → {pct(proposal.proposed_probability)}</span>
-            <small>{isApplied ? 'Применено' : proposal.status === 'conflict' ? 'Противоречивые требования' : proposal.status === 'manual_override' ? 'Сохранена ручная правка' : proposal.status === 'unchanged' ? 'Уже совпадает' : 'Предложение'}</small>
+            <small>{isApplied ? 'Изменено агентом' : reverted.has(id) ? 'Отменено пользователем' : proposal.status === 'conflict' ? 'Противоречивые требования' : proposal.status === 'manual_override' ? 'Сохранена ручная правка' : proposal.status === 'unchanged' ? 'Уже совпадает' : 'Не применено'}</small>
             {isApplied && canWrite && <button className="btn small ghost" disabled={busy} onClick={() => revert({ stage_id: stage.stage_id, class_code: proposal.class_code })}>Отменить</button>}
           </div>
           {proposal.evidence.map(item => <blockquote key={item.chunk_id + item.quote}>
@@ -168,6 +192,5 @@ export function DocumentsPanel({ projectId, canWrite, onRulesChanged }: {
         <blockquote>«{item.quote}»<cite>{item.document_name} · {item.locator}</cite></blockquote>
       </div>)}
     </section>)}
-    {canWrite && run && selected.length > 0 && <div className="doc-apply"><button className="btn small primary" disabled={busy || running} onClick={apply}>Применить выбранные ({selected.length})</button></div>}
   </div>
 }

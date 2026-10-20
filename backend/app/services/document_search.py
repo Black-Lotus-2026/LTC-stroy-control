@@ -214,6 +214,30 @@ class AgentFailed(RuntimeError):
     pass
 
 
+def agent_configuration_status() -> dict:
+    """Report configuration presence without exposing any credential."""
+    base_url = settings.document_llm_base_url.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    valid_endpoint = bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
+    key_configured = bool(
+        settings.document_llm_api_key.get_secret_value()
+        or settings.openrouter_api_key.get_secret_value()
+    )
+    model = settings.document_llm_model.strip()
+    return {
+        "configured": bool(key_configured and valid_endpoint and model),
+        "key_configured": key_configured,
+        "model": model,
+    }
+
+
 def _remote_llm():
     from langchain_openai import ChatOpenAI
 
@@ -227,15 +251,7 @@ def _remote_llm():
         raise AgentUnavailable(
             "Задайте DOCUMENT_LLM_API_KEY или OPENROUTER_API_KEY для анализа документов"
         )
-    parsed = urlsplit(base_url)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
+    if not agent_configuration_status()["configured"]:
         raise AgentUnavailable("DOCUMENT_LLM_BASE_URL должен быть внешним HTTPS API")
     return ChatOpenAI(
         model=model_name,

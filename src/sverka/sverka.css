@@ -765,6 +765,12 @@ button { cursor: pointer; background: none; border: 0; padding: 0; touch-action:
 .doc-panel h3 { margin: 0 0 8px; font: 400 22px/1.25 var(--f-display); }
 .doc-panel > p { color: var(--fg-3); line-height: 1.5; font-size: 13px; }
 .doc-panel .doc-limitation { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.doc-key-status, .doc-change-summary { display: grid; gap: 6px; margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; font-size: 13px; line-height: 1.5; }
+.doc-key-status.is-ready { border-color: var(--ok); }
+.doc-key-status.is-missing { border-color: var(--err); }
+.doc-key-status span, .doc-change-summary p { color: var(--fg-3); margin: 0; }
+.doc-change-summary ul { margin: 4px 0; padding-left: 20px; }
+.doc-change-summary li { margin: 3px 0; }
 .doc-upload-row, .doc-actions, .doc-proposal-title, .doc-list li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .doc-upload-row { margin: 20px 0; }
 .doc-upload-row label:first-child { display: flex; align-items: center; gap: 8px; font-size: 13px; }

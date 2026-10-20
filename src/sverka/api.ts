@@ -251,11 +251,14 @@ export interface DocumentRun {
   error: string | null
   result: {
     stages: DocumentStageResult[]
-    applied: { stage_id: string; class_code: string; applied_at: string; reverted_at?: string }[]
+    applied: { stage_id: string; class_code: string; applied_at: string; mode?: 'automatic' | 'manual'; previous_probability?: number | null; new_probability?: number; reverted_at?: string }[]
+    auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[]; finished_at: string }
   }
 }
+export interface DocumentAgentStatus { configured: boolean; key_configured: boolean; model: string }
 export type DocumentSelection = { stage_id: string; class_code: string }
 export const documents = (projectId: string) => req<ProjectDocument[]>(`/projects/${projectId}/documents`)
+export const documentAgentStatus = (projectId: string) => req<DocumentAgentStatus>(`/projects/${projectId}/documents/agent-status`)
 export const latestDocumentRun = (projectId: string) => req<DocumentRun | null>(`/projects/${projectId}/documents/analysis-runs/latest`)
 export const documentRuns = (projectId: string) => req<DocumentRun[]>(`/projects/${projectId}/documents/analysis-runs`)
 export const documentRun = (projectId: string, runId: string) => req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}`)
