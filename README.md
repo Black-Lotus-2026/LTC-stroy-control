@@ -140,6 +140,8 @@
 
 ### 1. Запуск в Docker Compose (Рекомендуемый)
 
+[Обновление фронтенда на сервере, адрес API и CORS](docs/frontend-deployment.md).
+
 Убедитесь, что установлены **Docker** ($\ge 24.0$) и **Docker Compose** ($\ge 2.20$).
 
 ```bash

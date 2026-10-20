@@ -132,7 +132,11 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     environment:
-      VITE_API_URL: http://127.0.0.1:8000
+      # Empty: the browser uses the site's hostname and API port 8000.
+      # Set an explicit public API origin when using a domain or HTTPS proxy.
+      VITE_API_URL: ${VITE_API_URL:-}
+      # Vite accepts IP addresses by default; explicitly allow the server domain.
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${FRONTEND_HOST:-localhost}
     volumes:
       - ./src:/app/src
       - ./public:/app/public

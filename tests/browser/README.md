@@ -7,3 +7,7 @@ set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable.
 The tests intercept API requests with fixtures and delayed/error responses. They
 check the real React interface without creating records on a backend.
 `npm run test:ui` runs the API, domain and observation engine checks separately.
+
+To check an already running frontend container, set
+`PLAYWRIGHT_BASE_URL=http://127.0.0.1:5174` before `npm run test:browser`.
+In this mode Playwright uses the container and does not start another Vite process.
