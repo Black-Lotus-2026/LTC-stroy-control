@@ -271,8 +271,8 @@ export interface ApiIncident {
     reason?: string
     /** a camera view recheck: the match of each fresh frame with the approved view */
     view_match?: number[]
-    /** how a camera view event closed: accepted (new view approved) or restored (camera put back) */
-    resolution?: 'accepted' | 'restored'
+    /** how the event closed: a camera view accepted (new view approved) or restored (camera put back); a loop when an administrator saw the live picture */
+    resolution?: 'accepted' | 'restored' | 'admin_confirmed_live'
     resolved_by?: string
   }
 }
@@ -290,7 +290,7 @@ export interface IncidentCreate {
   observation_key?: string
   model_status?: 'valid' | 'unavailable' | 'failed'
   severity: 'ERROR' | 'WARNING'
-  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE' | 'VIEW_CHANGED'
+  discrepancy_type: 'MISSING_MANDATORY' | 'MISSING_RECOMMENDED' | 'UNCHARACTERISTIC_PRESENT' | 'STREAM_OFFLINE' | 'STREAM_LOST' | 'STREAM_ONLINE' | 'STREAM_LOOP' | 'VIEW_CHANGED'
   machinery_type?: string | null
   stage_probability?: number
   observed_count?: number

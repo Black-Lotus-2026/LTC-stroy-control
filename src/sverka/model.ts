@@ -167,6 +167,18 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
 /* ── Observation (provided by the engine) ───────────────── */
 export interface Det { code: ObservationCode; c: number; x: number; y: number; w: number; h: number }
 export type SourceStatus = 'connecting' | 'live' | 'stale' | 'offline' | 'unsupported' | 'idle'
+/** The camera's frames repeat a recording: what period, since when, and which earlier frame. */
+export interface LoopCheck {
+  looped: true
+  period?: number
+  since?: number
+  thenAt?: number
+  thenSnap?: string
+  /** how close the repeats are, relative to the motion: 0 is an exact copy */
+  closeness?: number
+}
+/** A camera that replays a recording says nothing about the site: its frames are not used. */
+export const loopBlocked = (s: { loop?: LoopCheck }) => !!s.loop?.looped
 /** Is the camera looking where it was approved to look. none: no approved view yet; move: an agreed move is on. */
 export interface ViewCheck {
   state: 'none' | 'pending' | 'ok' | 'changed' | 'move'
@@ -199,6 +211,7 @@ export interface SourceView {
   lastFrame?: number // observation time of the last analyzed frame
   snapshot?: string
   dets: Det[]
+  loop?: LoopCheck
   view?: ViewCheck
 }
 export interface Observation {
@@ -255,7 +268,7 @@ export function evaluate(obs: Observation, stage: Stage | null, prof: Profile | 
   const shiftEnd = d0 + s.shiftTo * 1000
   const graceEnd = shiftStart + s.startGrace * 1000
   const inShift = t >= shiftStart && t <= shiftEnd
-  const live = obs.sources.filter((x) => x.status === 'live' && !viewBlocked(x))
+  const live = obs.sources.filter((x) => x.status === 'live' && !loopBlocked(x) && !viewBlocked(x))
   const analyzable = obs.sources.filter((x) => x.status !== 'unsupported' && x.status !== 'idle')
   const covStart = obs.coverageStart(t)
   const covered = obs.model === 'ready' && covStart != null && live.length > 0
@@ -305,7 +318,7 @@ export type EventStatus = 'pending' | 'confirmed' | 'false_positive' | 'in_progr
 export interface UiEvent {
   id: string
   code: string
-  kind: 'missing' | 'oop' | 'stream' | 'view' | 'other'
+  kind: 'missing' | 'oop' | 'stream' | 'loop' | 'view' | 'other'
   /** discrepancy type as the server stores it, e.g. MISSING_RECOMMENDED or STREAM_LOST */
   type: string
   mach: Code | null
@@ -372,7 +385,9 @@ export function rightsFor(e: UiEvent, user: UserProfile, owner?: string | null):
   if (admin || e.assigneeId === user.id || (!e.assigneeId && owner === user.username)) return { act: true, dismiss: admin }
   return { act: false, dismiss: false, reason: `Событие назначено${e.assignee ? `: ${e.assignee}` : ' другому пользователю'}. Решение принимает ответственный или администратор.` }
 }
-export const statusWord = (e: UiEvent) => (e.kind === 'stream' ? 'Видеопоток' : viewDecision(e) ?? STATUS_WORD[e.status])
+export const statusWord = (e: UiEvent) => (e.kind === 'stream' ? 'Видеопоток' : loopDecision(e) ?? viewDecision(e) ?? STATUS_WORD[e.status])
+/** A loop closes only when an administrator has seen the live picture. */
+export const loopDecision = (e: UiEvent) => (e.kind === 'loop' && e.status === 'resolved' && e.checkDetails.resolution === 'admin_confirmed_live' ? 'Видео живое' : null)
 /** How a closed camera-view event ended: the new view was approved, or the camera was put back. */
 export const viewDecision = (e: UiEvent) =>
   e.kind !== 'view' || e.status !== 'resolved' ? null : e.checkDetails.resolution === 'accepted' ? 'Смещение согласовано' : e.check === 'passed' ? 'Камера возвращена' : null
@@ -380,7 +395,7 @@ export const viewDecision = (e: UiEvent) =>
 export const toneOf = (e: UiEvent) => (e.type === 'STREAM_ONLINE' ? 'info' : e.sev)
 export function toEvent(a: ApiIncident, media: (u?: string | null) => string | undefined): UiEvent {
   const type = a.discrepancy_type || ''
-  const kind = type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : type.startsWith('MISSING') ? 'missing' : type.startsWith('STREAM_') ? 'stream' : type.startsWith('VIEW_') ? 'view' : 'other'
+  const kind = type === 'UNCHARACTERISTIC_PRESENT' ? 'oop' : type.startsWith('MISSING') ? 'missing' : type === 'STREAM_LOOP' ? 'loop' : type.startsWith('STREAM_') ? 'stream' : type.startsWith('VIEW_') ? 'view' : 'other'
   const raw = (a.status || 'pending').toLowerCase()
   const status = (['pending', 'confirmed', 'false_positive', 'in_progress', 'resolved'].includes(raw) ? raw : 'pending') as EventStatus
   const description = a.description || ''
@@ -396,7 +411,7 @@ export function toEvent(a: ApiIncident, media: (u?: string | null) => string | u
     kind,
     type,
     // the server answers «Экскаватор» for an event without machinery; a camera event has none
-    mach: kind === 'stream' || kind === 'view' ? null : toCode(a.machinery_type),
+    mach: kind === 'stream' || kind === 'loop' || kind === 'view' ? null : toCode(a.machinery_type),
     sev: a.severity === 'ERROR' ? 'err' : 'warn',
     status,
     title: a.title || a.code,
@@ -491,8 +506,8 @@ export function verdictOf(ctx: {
       ? { tone: 'none', title: 'Подключаемся к источникам', sub: 'Первый анализ появится через несколько секунд после получения кадра.' }
       : { tone: 'nodata', title: 'Нет кадров ни с одного источника', sub: 'Выводов об отсутствии техники нет, пока кадры не приходят.', actions: [{ label: 'Проверить камеры', act: 'settings:sources', primary: true }] }
   }
-  // every camera that gives frames looks away from its approved view, or is being moved
-  if (!live.some((x) => !viewBlocked(x))) return viewVerdict(live[0], events)
+  // every camera that gives frames replays a recording, looks away from its approved view, or is being moved
+  if (!live.some((x) => !loopBlocked(x) && !viewBlocked(x))) return loopBlocked(live[0]) ? loopVerdict(live[0], events) : viewVerdict(live[0], events)
   if (!prof) return { tone: 'none', title: 'Загружаем профиль техники этапа', sub: `Этап ${ev.stage.n} «${ev.stage.name}»: какая техника для него нужна, придёт с сервера через секунду.` }
   if (!ev.covered) return { tone: 'none', title: 'Анализируем первые кадры', sub: 'Сверка начнётся после первого распознанного кадра.' }
 
@@ -543,6 +558,11 @@ export function verdictOf(ctx: {
     const c = off[0]
     return { tone: 'warn', title: `Источник «${c.name}» ${c.status === 'stale' ? 'присылает застывший кадр' : 'без сигнала'}`, sub: `Работают ${live.length} из ${obs.sources.length}. Для зоны этого источника вывод об отсутствии техники не делается.`, actions: [{ label: 'Проверить', act: 'settings:sources', primary: true }] }
   }
+  const looped = live.find(loopBlocked)
+  if (looped) {
+    const v = loopVerdict(looped, events)
+    return { ...v, sub: `${v.sub} Сверка идёт по остальным ${live.length - 1} из ${obs.sources.length} источников.` }
+  }
   const turned = live.find(viewBlocked)
   if (turned) {
     const v = viewVerdict(turned, events)
@@ -565,6 +585,17 @@ export function verdictOf(ctx: {
   }
 }
 const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1)
+
+function loopVerdict(c: SourceView, events: UiEvent[]): Verdict {
+  const l = c.loop!
+  const e = events.find((x) => x.kind === 'loop' && isOpen(x) && x.cameraId === c.id)
+  return {
+    tone: 'err',
+    title: `Камера «${c.name}» повторяет запись`,
+    sub: `Кадры повторяются${l.period ? ` с периодом около ${durShort(l.period)}` : ''}${l.since ? ` с ${hhmm(l.since)}` : ''}: живая площадка так не повторяется. Пока повтор идёт, вывод о технике по этой камере не делается.`,
+    actions: e ? [{ label: 'Разобрать', act: 'case', id: e.id, primary: true }] : [{ label: 'Источники', act: 'settings:sources', primary: true }],
+  }
+}
 
 function viewVerdict(c: SourceView, events: UiEvent[]): Verdict {
   const v = c.view!

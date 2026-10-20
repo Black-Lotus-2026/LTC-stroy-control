@@ -124,6 +124,7 @@ export function Stage({
               <i className="dot" />
               <span>{obs.mode === 'recording' && src.status === 'live' ? 'Запись' : STATUS_WORD[src.status]}</span>
             </span>
+            {src.status === 'live' && src.loop?.looped && <span className="chip-mat loop-chip">Повтор записи</span>}
             {src.status === 'live' && src.view && src.view.state !== 'none' && (
               <span className="chip-mat view-chip" data-state={src.view.state}>
                 {viewChip(src.view)}
@@ -150,6 +151,12 @@ export function Stage({
             </div>
             <span className="mono">{hhmmss(obs.t)}</span>
           </div>
+          {src.status === 'live' && src.loop?.looped && (
+            <div className="f-loop">
+              <strong>Камера повторяет запись{src.loop.period ? `: период около ${durShort(src.loop.period)}` : ''}</strong>
+              <span>{src.loop.since ? `С ${hhmm(src.loop.since)} ` : ''}кадры возвращаются кадр в кадр. Пока повтор идёт, они не учитываются в сверке техники.</span>
+            </div>
+          )}
           <div className="f-state" data-on={String(!!overlay)}>
             <div className="hatch" />
             {overlay && (
