@@ -158,10 +158,13 @@ export class Engine {
   private async loadRef(id: string, url: string) {
     try {
       const bmp = await api.viewImage(url)
-      const r = this.viewRefs.get(id)
-      if (!r || r.url !== url) return
-      r.ref = this.featuresOf(bmp, bmp.width, bmp.height)
-      bmp.close()
+      try {
+        const r = this.viewRefs.get(id)
+        if (!r || r.url !== url) return
+        r.ref = this.featuresOf(bmp, bmp.width, bmp.height)
+      } finally {
+        bmp.close()
+      }
     } catch {
       const r = this.viewRefs.get(id)
       if (r && r.url === url) r.failed = true
@@ -255,6 +258,7 @@ export class Engine {
     }
   }
   stop() {
+    this.generation++
     clearInterval(this.timer)
     clearInterval(this.statusTimer)
     this.timer = 0
@@ -277,6 +281,8 @@ export class Engine {
   dispose() {
     this.stop()
     this.reset()
+    clearTimeout(this.emitPending)
+    this.emitPending = 0
     this.pool?.remove()
     this.pool = null
   }
@@ -475,15 +481,21 @@ export class Engine {
 
   /** Camera: take one frame from the stream through the server proxy, show it, analyse it. */
   private async pullFrame(rt: Rt) {
+    const generation = this.generation
     rt.inFlight = true
     rt.lastCapture = Date.now()
     try {
       const frame = await api.grabFrame(rt.view.url!)
       rt.inFlight = false
-      this.capture(rt, frame)
-      frame.removeAttribute('src') // closes the stream connection
+      try {
+        if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+        this.capture(rt, frame)
+      } finally {
+        frame.removeAttribute('src') // closes the stream connection, including a discarded frame
+      }
     } catch (e) {
       rt.inFlight = false
+      if (generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
       rt.fails++
       if (rt.fails >= OFFLINE_AFTER_FAILS || rt.view.status !== 'live') {
         this.setStatus(rt, 'offline', e instanceof Error ? e.message : 'Камера не отдала кадр.')
@@ -628,12 +640,15 @@ export class Engine {
   }
 
   private async pollStatus() {
+    const generation = this.generation
     try {
       const s = await api.detectorStatus()
+      if (generation !== this.generation) return
       this.setCompliance(s)
       if (!s.ready) this.setModel('down', s.message || 'модель не загружена')
       else if (this.model !== 'ready') this.setModel('ready')
     } catch (e) {
+      if (generation !== this.generation) return
       this.setModel('down', e instanceof Error ? e.message : 'сервис не ответил')
     }
   }

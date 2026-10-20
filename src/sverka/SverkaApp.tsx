@@ -85,7 +85,7 @@ function useObservation(engine: Engine): Observation {
     const un = engine.subscribe(() => setObs(engine.snapshot()))
     return () => {
       un()
-      engine.stop()
+      engine.dispose()
     }
   }, [engine])
   return obs
@@ -119,7 +119,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const [cameras, setCameras] = useState<CameraItem[]>([])
   const [views, setViews] = useState<api.CameraViewState[]>([])
   const [stages, setStages] = useState<Stage[]>([])
-  const [loaded, setLoaded] = useState(false)
+  const [loadedProject, setLoadedProject] = useState<{ id: string; token: number } | null>(null)
   const [apiProfiles, setApiProfiles] = useState<Map<string, ApiProfile>>(new Map())
   const [localRules, setLocalRules] = useState<Map<string, LocalRules>>(new Map())
   const [events, setEvents] = useState<UiEvent[]>([])
@@ -143,6 +143,9 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   // an event to open once its object has loaded (a task of another object)
   const wantCase = useRef<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [projectsError, setProjectsError] = useState<string | null>(null)
+  const [projectsRetry, setProjectsRetry] = useState(0)
+  const [projectRetry, setProjectRetry] = useState(0)
   const [creating, setCreating] = useState(false)
   const loadToken = useRef(0)
   const meta = useRef(new Map<string, { kind: 'missing' | 'oop'; code: Code; stageId: string }>())
@@ -158,13 +161,24 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   // the server gives a non-admin only the objects they own (an object without an owner is the administrator's)
   const visible = useMemo(() => (projects || []).filter((p) => user.role === 'admin' || p.owner_username === user.username), [projects, user])
   const project = creating ? null : visible.find((p) => p.id === projectId) ?? visible[0] ?? null
+  const isLoaded = () => !!project && loadedProject?.id === project.id && loadedProject.token === loadToken.current
+  const loaded = isLoaded()
+  const currentScope = () => {
+    const token = loadToken.current
+    return () => token === loadToken.current
+  }
 
   /* projects */
   useEffect(() => {
-    api.projects().then(setProjects, (e: Error) => {
-      setLoadError(e.message)
-      setProjects([])
-    })
+    let alive = true
+    setProjectsError(null)
+    api.projects().then(
+      (p) => { if (alive) setProjects(p) },
+      (e: Error) => { if (alive) setProjectsError(e.message) },
+    )
+    return () => { alive = false }
+  }, [projectsRetry])
+  useEffect(() => {
     api.admins().then(setAdmins, () => undefined)
   }, [])
 
@@ -202,15 +216,20 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
     created.current.clear()
     signal.current.clear()
     loopSent.current.clear()
-    setLoaded(false)
+    setLoadedProject(null)
+    setLoadError(null)
     setSelected(null)
     setCaseOpen(null)
     setRule(null)
     setJournal(null)
+    setSheet(null)
+    setDockOpen(false)
+    setSetupOpen(false)
     setWeather(null)
+    const invalidate = () => { ++loadToken.current }
     if (!project) {
       if (projects) setSetupOpen(true)
-      return
+      return invalidate
     }
     store.set('sverka:project', project.id)
     const local = loadSettings(project.id)
@@ -225,7 +244,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
         setStages(toStages(s))
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
         if (cfg) setSettingsState((x) => ({ ...x, window: cfg.violation_evaluation_window_seconds }))
-        setLoaded(true)
+        setLoadedProject({ id: project.id, token })
         setLoadError(null)
         const want = wantCase.current
         wantCase.current = null
@@ -235,10 +254,10 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       .catch((e: Error) => {
         if (token !== loadToken.current) return
         setLoadError(e.message)
-        setLoaded(true)
       })
     loadWeather(project.id, token)
-  }, [project?.id, projects == null])
+    return invalidate
+  }, [project?.id, projects == null, projectRetry])
 
   /* camera views: a server without them answers 404 and the comparison simply does not run */
   const loadViews = (id: string, token: number) =>
@@ -246,7 +265,6 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       (v) => {
         if (token !== loadToken.current) return
         setViews(v)
-        engine.setViews(v)
       },
       () => undefined,
     )
@@ -271,18 +289,19 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* refresh the journal now and then: decisions of others, deadlines, the server's rechecks */
   useEffect(() => {
-    if (!project) return
+    if (!project || !loaded) return
     const id = project.id
+    const isCurrent = currentScope()
     const timer = window.setInterval(() => {
       api.incidents(id).then((inc) => {
-        if (id !== project.id) return
+        if (!isCurrent()) return
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
       }, () => undefined)
       // approvals made by the administrator elsewhere
       loadViews(id, loadToken.current)
     }, 15_000)
     return () => clearInterval(timer)
-  }, [project])
+  }, [project, loaded])
 
   const setSettings = (s: Settings) => {
     const prev = settings
@@ -304,12 +323,12 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   engine.stageName = stage?.name
 
   // the server computes a profile per request (seconds each): never ask twice for the same stage
-  const inflight = useRef(new Set<string>())
+  const inflight = useRef(new Map<string, number>())
   const loadProfile = useCallback(
     (stageId: string) => {
-      if (apiProfiles.has(stageId) || inflight.current.has(stageId)) return Promise.resolve()
       const token = loadToken.current
-      inflight.current.add(stageId)
+      if (apiProfiles.has(stageId) || inflight.current.get(stageId) === token) return Promise.resolve()
+      inflight.current.set(stageId, token)
       return api
         .profile(stageId)
         .then(
@@ -317,9 +336,9 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
             if (token !== loadToken.current) return
             setApiProfiles((m) => new Map(m).set(stageId, p))
           },
-          (e: Error) => toast(`Профиль этапа не загрузился: ${e.message}`, { error: true }),
+          (e: Error) => { if (token === loadToken.current) toast(`Профиль этапа не загрузился: ${e.message}`, { error: true }) },
         )
-        .finally(() => inflight.current.delete(stageId))
+        .finally(() => { if (inflight.current.get(stageId) === token) inflight.current.delete(stageId) })
     },
     [apiProfiles, toast],
   )
@@ -364,7 +383,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* the system writes events itself, only when it really watched and the model answered */
   useEffect(() => {
-    if (!project || !stage || !prof || !ev.covered || !ev.inShift || !obs.complianceEnabled || obs.model !== 'ready') return
+    if (!project || !isLoaded() || !stage || !prof || !ev.covered || !ev.inShift || !obs.complianceEnabled || obs.model !== 'ready') return
+    const isCurrent = currentScope()
     const live = obs.sources.filter((s) => s.status === 'live')
     const names = live.map((s) => s.name).join(', ')
     const quality = `Качество данных: кадры дают ${live.length} из ${obs.sources.length} источников${live.length < obs.sources.length ? ', вывод ограничен' : ''}; распознавание работает, порог уверенности ${settings.conf}%, окно сверки ${settings.window} с.`
@@ -398,12 +418,14 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           album_snapshots: shots.map((x, i) => ({ camera_name: x.name, snapshot_base64: x.snapshot, is_primary: selected ? x.id === selected : i === 0 })),
         })
         .then((res) => {
+          if (!isCurrent()) return
           created.current.set(key, res.id)
           meta.current.set(res.id, { kind, code, stageId: stage.id })
           setEpisodes((m) => new Map(m).set(res.id, { from: since }))
           setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
         })
         .catch((e: Error) => {
+          if (!isCurrent()) return
           created.current.set(key, Date.now() + 30_000)
           if (Date.now() - lastSaveError.current > 60_000) {
             lastSaveError.current = Date.now()
@@ -473,7 +495,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   })
   /* camera signal goes to the journal as in the legacy UI: one record when it is lost, one when it is back */
   useEffect(() => {
-    if (!project || !loaded) return
+    if (!project || !isLoaded()) return
+    const isCurrent = currentScope()
     const now = Date.now()
     const total = obs.sources.length
     const liveN = obs.sources.filter((x) => x.status === 'live').length
@@ -495,6 +518,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           description: [`Наблюдение: ${observation}`, `Качество данных: ${quality}`].join('\n'),
         })
         .then((res) => {
+          if (!isCurrent()) return false
           setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
           return true
         })
@@ -505,7 +529,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
       if (src.status === 'live') {
         const lost = m.lost
         if (lost)
-          void lost.written.then((ok) => ok && write(src, 'STREAM_ONLINE', now, `Видеопоток восстановлен: ${src.name}`, `камера «${src.name}» снова присылает кадры с ${hhmmss(now)}; перерыв длился ${durShort(now - lost.at)}.`, `кадры дают ${liveN} из ${total} источников.`)).catch(() => undefined)
+          void lost.written.then((ok) => ok && isCurrent() && write(src, 'STREAM_ONLINE', now, `Видеопоток восстановлен: ${src.name}`, `камера «${src.name}» снова присылает кадры с ${hhmmss(now)}; перерыв длился ${durShort(now - lost.at)}.`, `кадры дают ${liveN} из ${total} источников.`)).catch(() => undefined)
         m.lost = undefined
         m.live = true
         continue
@@ -539,7 +563,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* a camera that looks away from its approved view: one event per turn, with the frame before and after */
   useEffect(() => {
-    if (!project || !loaded || !ev.inShift) return
+    if (!project || !isLoaded() || !ev.inShift) return
+    const isCurrent = currentScope()
     for (const src of obs.sources) {
       const v = src.view
       if (src.kind !== 'camera' || !v) continue
@@ -586,11 +611,13 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           ],
         })
         .then((res) => {
+          if (!isCurrent()) return
           viewSent.current.set(src.id, res.id)
           setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
           toast(`${what} · ${res.code}`, { error: true })
         })
         .catch((e: Error) => {
+          if (!isCurrent()) return
           viewSent.current.set(src.id, Date.now() + 30_000)
           if (Date.now() - lastSaveError.current > 60_000) {
             lastSaveError.current = Date.now()
@@ -602,7 +629,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* a camera that replays a recording: one event per camera, with the frame now and the same frame a period ago */
   useEffect(() => {
-    if (!project || !loaded) return
+    if (!project || !isLoaded()) return
+    const isCurrent = currentScope()
     for (const src of obs.sources) {
       const l = src.loop
       if (src.kind !== 'camera') continue
@@ -645,11 +673,13 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           ],
         })
         .then((res) => {
+          if (!isCurrent()) return
           loopSent.current.set(src.id, res.id)
           setEvents((list) => [toEvent(res, api.mediaUrl), ...list.filter((e) => e.id !== res.id)])
           toast(`Камера «${src.name}» повторяет запись · ${res.code}`, { error: true })
         })
         .catch((e: Error) => {
+          if (!isCurrent()) return
           loopSent.current.set(src.id, Date.now() + 30_000)
           if (Date.now() - lastSaveError.current > 60_000) {
             lastSaveError.current = Date.now()
@@ -817,15 +847,19 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
 
   /* camera views: proposals and moves go to the administrator; an administrator decides at once */
-  const applyView = (st: api.CameraViewState) => {
-    const next = views.some((x) => x.camera_id === st.camera_id) ? views.map((x) => (x.camera_id === st.camera_id ? st : x)) : [...views, st]
-    setViews(next)
-    engine.setViews(next)
+  const changeView = async (save: () => Promise<api.CameraViewState>) => {
+    const isCurrent = currentScope()
+    const st = await save()
+    if (!isCurrent()) return null
+    setViews((old) => old.some((x) => x.camera_id === st.camera_id) ? old.map((x) => x.camera_id === st.camera_id ? st : x) : [...old, st])
+    return st
   }
+  useEffect(() => { engine.setViews(views) }, [engine, views])
   const reloadEvents = () => {
     if (!project) return
     const id = project.id
-    api.incidents(id).then((inc) => id === project.id && setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old))), () => undefined)
+    const isCurrent = currentScope()
+    api.incidents(id).then((inc) => isCurrent() && setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old))), () => undefined)
   }
   const viewActions: ViewActions | null = project
     ? {
@@ -834,8 +868,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
         submit: async (cameraId, note) => {
           const snap = obs.sources.find((s) => s.id === cameraId)?.snapshot
           if (!snap) throw new Error('Нет текущего кадра с камеры: дождитесь, пока она пришлёт кадр')
-          const st = await api.submitView(project.id, cameraId, snap, note)
-          applyView(st)
+          const st = await changeView(() => api.submitView(project.id, cameraId, snap, note))
+          if (!st) return
           if (user.role === 'admin') {
             viewSent.current.delete(cameraId)
             reloadEvents()
@@ -843,32 +877,34 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
           } else toast(`Ракурс «${st.camera_name}» отправлен администратору на утверждение`)
         },
         approve: async (cameraId) => {
-          const st = await api.approveView(project.id, cameraId)
-          applyView(st)
+          const st = await changeView(() => api.approveView(project.id, cameraId))
+          if (!st) return
           viewSent.current.delete(cameraId)
           reloadEvents()
           toast(`Новый ракурс «${st.camera_name}» утверждён`)
         },
-        reject: async (cameraId, note) => applyView(await api.rejectView(project.id, cameraId, note)),
+        reject: async (cameraId, note) => { await changeView(() => api.rejectView(project.id, cameraId, note)) },
         requestMove: async (cameraId, until, reason) => {
-          const st = await api.requestMove(project.id, cameraId, until, reason)
-          applyView(st)
+          const st = await changeView(() => api.requestMove(project.id, cameraId, until, reason))
+          if (!st) return
           toast(st.move?.status === 'approved' ? `Перенос «${st.camera_name}» согласован` : `Запрос на перенос «${st.camera_name}» отправлен администратору`)
         },
         approveMove: async (cameraId) => {
-          const st = await api.approveMove(project.id, cameraId)
-          applyView(st)
+          const st = await changeView(() => api.approveMove(project.id, cameraId))
+          if (!st) return
           toast(`Перенос «${st.camera_name}» согласован`)
         },
-        rejectMove: async (cameraId, note) => applyView(await api.rejectMove(project.id, cameraId, note)),
-        cancelMove: async (cameraId) => applyView(await api.cancelMove(project.id, cameraId)),
+        rejectMove: async (cameraId, note) => { await changeView(() => api.rejectMove(project.id, cameraId, note)) },
+        cancelMove: async (cameraId) => { await changeView(() => api.cancelMove(project.id, cameraId)) },
       }
     : null
 
   /* sources */
   const addCamera = async (name: string, url: string, zoneId?: string | null, code?: string) => {
     if (!project) return
+    const isCurrent = currentScope()
     const cam = await api.createCamera(project.id, { name, code: code || undefined, stream_url: url, zone_id: zoneId === undefined ? zones[0]?.id ?? null : zoneId })
+    if (!isCurrent()) return
     const next = [...cameras, cam]
     setCameras(next)
     engine.setCameras(next)
@@ -876,8 +912,10 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
   const deleteCamera = async (id: string) => {
     if (!project) return
+    const isCurrent = currentScope()
     try {
       await api.deleteCamera(project.id, id)
+      if (!isCurrent()) return
       const next = cameras.filter((c) => c.id !== id)
       setCameras(next)
       engine.setCameras(next)
@@ -887,7 +925,9 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
   const updateCamera = async (id: string, name: string, url: string, zoneId: string | null, code?: string) => {
     if (!project) return
+    const isCurrent = currentScope()
     const cam = await api.updateCamera(project.id, id, { name, code: code || undefined, stream_url: url, zone_id: zoneId })
+    if (!isCurrent()) return
     const next = cameras.map((c) => (c.id === id ? cam : c))
     setCameras(next)
     engine.setCameras(next)
@@ -914,18 +954,24 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
   const createZone = async (d: { name: string; code: string; description: string }) => {
     if (!project) return
+    const isCurrent = currentScope()
     const z = await api.createZone(project.id, { name: d.name, code: d.code || undefined, description: d.description || undefined })
+    if (!isCurrent()) return
     setZones((l) => [...l, z])
   }
   const updateZone = async (id: string, d: { name: string; code: string; description: string }) => {
     if (!project) return
+    const isCurrent = currentScope()
     const z = await api.updateZone(project.id, id, d)
+    if (!isCurrent()) return
     setZones((l) => l.map((x) => (x.id === id ? z : x)))
   }
   const deleteZone = async (id: string) => {
     if (!project) return
+    const isCurrent = currentScope()
     try {
       await api.deleteZone(project.id, id)
+      if (!isCurrent()) return
       setZones((l) => l.filter((x) => x.id !== id))
       // the server unlinks the cameras of the zone (ON DELETE SET NULL)
       setCameras((l) => l.map((c) => (c.zone_id === id ? { ...c, zone_id: null } : c)))
@@ -961,7 +1007,9 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
 
   /* plan */
   const importPlan = async (fn: () => Promise<api.ImportResult>) => {
+    const isCurrent = currentScope()
     const res = await fn()
+    if (!isCurrent()) return res
     setStages(toStages(res.stages))
     setApiProfiles(new Map())
     return res
@@ -971,9 +1019,10 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const writeDates = async (list: { id: string; start: number; end: number }[]) => {
     if (!project) return
     const id = project.id
+    const isCurrent = currentScope()
     await Promise.all(list.map((c) => api.updateStage(c.id, { planned_start: isoDay(c.start), planned_end: isoDay(c.end), duration_days: Math.round((c.end - c.start) / DAY_MS) + 1 })))
     const fresh = await api.stages(id)
-    if (project?.id === id) setStages(toStages(fresh))
+    if (isCurrent()) setStages(toStages(fresh))
   }
   const saveSchedule = async (changes: { id: string; start: number; end: number }[]) => {
     const before = changes.map((c) => {
@@ -993,8 +1042,10 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   }
   const clearPlan = async () => {
     if (!project) return
+    const isCurrent = currentScope()
     try {
       await api.clearPlan(project.id)
+      if (!isCurrent()) return
       setStages([])
       setApiProfiles(new Map())
       setDockOpen(false)
@@ -1044,7 +1095,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
   const caseStage = caseEvent ? stages.find((s) => s.id === caseEvent.stageId) ?? stageAt(stages, caseEvent.at) : null
   const ruleStage = rule ? stages.find((s) => s.id === rule.stageId) : null
   const ruleProf = rule ? profiles.get(rule.stageId) : null
-  const setupVisible = setupOpen || (loaded && !project)
+  const setupVisible = setupOpen && !projectsError && !loadError
   const pending = events.filter((e) => e.status === 'pending' && e.kind !== 'stream')
 
   return (
@@ -1092,7 +1143,12 @@ function Workspace({ user, onUser, covered, onIntro, onLogout }: { user: UserPro
         </button>
       </header>
 
-      <Verdict v={verdict} onAction={onAction} at={obs.mode === 'recording' ? `запись ${fmtDay(t)}` : undefined} />
+      {projectsError || loadError ? (
+        <div className="panel" role="alert">
+          <p className="err-line">{projectsError || loadError}</p>
+          <button type="button" className="btn" onClick={() => projectsError ? setProjectsRetry((n) => n + 1) : setProjectRetry((n) => n + 1)}>Повторить загрузку</button>
+        </div>
+      ) : <Verdict v={verdict} onAction={onAction} at={obs.mode === 'recording' ? `запись ${fmtDay(t)}` : undefined} />}
 
       <main className="work">
         <StageView engine={engine} obs={obs} ev={ev} prof={prof} selected={selected} onSelect={setSelected} focus={focus} boxes={boxes} setBoxes={setBoxes} onAction={(act) => onAction({ act })} settings={settings} />
