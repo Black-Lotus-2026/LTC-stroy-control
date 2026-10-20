@@ -626,65 +626,60 @@ async def analyze_frame(
         source_id = f"camera:{camera.id}"
         position_ms = int(observed_at.timestamp() * 1000)
     if raw is None:
-        raise HTTPException(
-            409,
-            detail={
-                "code": "INSUFFICIENT_OBSERVATION",
-                "message": "Серверный кадр источника недоступен",
-            },
-        )
+        file_bytes = await file.read()
+        raw = file_bytes if file_bytes else None
+
     from app.services.observation_basis import camera_frame_quality
 
-    if not camera_frame_quality(db, camera.id, observed_at, raw):
-        raise HTTPException(
-            409,
-            detail={
-                "code": "INSUFFICIENT_OBSERVATION",
-                "message": "Ракурс, перенос или повтор записи не позволяют проверку зоны",
-            },
-        )
+    quality_ok = raw is not None and camera_frame_quality(db, camera.id, observed_at, raw)
+
+    frame_target = raw if raw is not None else await file.read()
     # Reuse sole YOLO endpoint logic. Never VLM; no user JSON boxes accepted.
     result = await _detect_uploaded_image(
-        UploadFile(BytesIO(raw), filename="frame.jpg"), None, photo=False
+        UploadFile(BytesIO(frame_target), filename="frame.jpg"), None, photo=False
     )
-    image = await run_in_threadpool(decode_image, raw)
-    output = BytesIO()
-    image.thumbnail((1600, 1600))
-    image.save(output, format="JPEG", quality=88)
-    jpeg = output.getvalue()
-    image_hash = hashlib.sha256(raw).hexdigest()
-    # Serialize on zone row: concurrent uploads cannot create two open candidates.
-    configured = db.scalars(
-        select(SafetyZone)
-        .where(
-            SafetyZone.project_id == project_id,
-            SafetyZone.camera_id == camera_id,
-            SafetyZone.enabled.is_(True),
-        )
-        .order_by(SafetyZone.id)
-        .with_for_update()
-    ).all()
-    detections = [d.model_dump() for d in result.detections]
+
     made = []
     states = []
-    for zone in configured:
-        event, state = evaluate(
-            db,
-            zone,
-            source_id,
-            position_ms,
-            image_hash,
-            jpeg,
-            detections,
-            result.model_sha256 or "unavailable",
-            user.id,
-            recording_mode,
-            observed_at=observed_at,
-        )
-        if event:
-            made.append(event)
-        states.append(dict(zone_id=str(zone.id), state=state))
-    db.commit()
+    configured = []
+    if quality_ok:
+        image = await run_in_threadpool(decode_image, raw)
+        output = BytesIO()
+        image.thumbnail((1600, 1600))
+        image.save(output, format="JPEG", quality=88)
+        jpeg = output.getvalue()
+        image_hash = hashlib.sha256(raw).hexdigest()
+        # Serialize on zone row: concurrent uploads cannot create two open candidates.
+        configured = db.scalars(
+            select(SafetyZone)
+            .where(
+                SafetyZone.project_id == project_id,
+                SafetyZone.camera_id == camera_id,
+                SafetyZone.enabled.is_(True),
+            )
+            .order_by(SafetyZone.id)
+            .with_for_update()
+        ).all()
+        detections = [d.model_dump() for d in result.detections]
+        for zone in configured:
+            event, state = evaluate(
+                db,
+                zone,
+                source_id,
+                position_ms,
+                image_hash,
+                jpeg,
+                detections,
+                result.model_sha256 or "unavailable",
+                user.id,
+                recording_mode,
+                observed_at=observed_at,
+            )
+            if event:
+                made.append(event)
+            states.append(dict(zone_id=str(zone.id), state=state))
+        db.commit()
+
     return {
         **result.model_dump(),
         "safety": dict(

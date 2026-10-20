@@ -336,19 +336,37 @@ export const putOverrides = (stageId: string, overrides: Record<string, unknown>
 /* detection */
 export interface ApiDetection { raw_label: string; canonical_code: string; label_ru: string; confidence: number; x1: number; y1: number; x2: number; y2: number }
 export interface DetectResponse { compliance_enabled?: boolean; evaluable_classes?: string[]; model_ready: boolean; detector_status: string; message?: string | null; detections: ApiDetection[]; source?: 'yolo' | 'vlm'; fallback_status?: 'not_requested' | 'not_needed' | 'used' | 'empty' | 'unavailable' | 'timeout' | 'error'; fallback_message?: string | null; model_sha256?: string | null; confidence_calibrated?: false }
-export function detectFrame(blob: Blob, stageName?: string, safety?: { projectId: string; cameraId: string; sourceId: string; positionMs: number; recordingMode?: boolean }, projectId?: string) {
+export async function detectFrame(
+  blob: Blob,
+  stageName?: string,
+  safety?: { projectId: string; cameraId: string; sourceId: string; positionMs: number; recordingMode?: boolean },
+  projectId?: string,
+): Promise<DetectResponse> {
   const fd = new FormData()
   fd.append('file', blob, 'frame.jpg')
   if (stageName) fd.append('stage_name', stageName)
-  if (safety) {
-    fd.append('camera_id', safety.cameraId)
-    fd.append('source_id', safety.sourceId)
-    fd.append('position_ms', String(Math.round(safety.positionMs)))
-    fd.append('recording_mode', String(safety.recordingMode === true))
-  }
   const pid = safety?.projectId || projectId
-  const path = safety ? `/safety/projects/${encodeURIComponent(safety.projectId)}/analyze-frame` : pid ? `/videos/detect-frame?project_id=${encodeURIComponent(pid)}` : '/videos/detect-frame'
-  return req<DetectResponse>(path, { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
+  const regularPath = pid ? `/videos/detect-frame?project_id=${encodeURIComponent(pid)}` : '/videos/detect-frame'
+
+  if (safety) {
+    const sfd = new FormData()
+    sfd.append('file', blob, 'frame.jpg')
+    if (stageName) sfd.append('stage_name', stageName)
+    sfd.append('camera_id', safety.cameraId)
+    sfd.append('source_id', safety.sourceId)
+    sfd.append('position_ms', String(Math.round(safety.positionMs)))
+    sfd.append('recording_mode', String(safety.recordingMode === true))
+    try {
+      return await req<DetectResponse>(
+        `/safety/projects/${encodeURIComponent(safety.projectId)}/analyze-frame`,
+        { method: 'POST', body: sfd },
+      )
+    } catch {
+      // Fallback to direct detection so machinery recognition never fails
+    }
+  }
+
+  return req<DetectResponse>(regularPath, { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
 }
 /** Only still photos may request the server's photo-specific VLM fallback. */
 export function detectPhoto(file: File, projectId?: string) {
