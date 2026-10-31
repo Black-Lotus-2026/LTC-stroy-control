@@ -33,6 +33,8 @@ from app.models.enums import (
     UserRole,
     ZoneRiskLevel,
 )
+from app.models.document import DocumentAnalysisRun, DocumentChunk, ProjectDocument
+from app.models.geocoding import GeocodingThrottle
 from app.models.incident import Incident, IncidentEvent, IncidentEvidence
 from app.models.management import ManagementRun, ManagementRunStep, TaskDependency
 from app.models.ppr_analysis import PprAnalysis, PprPage, PprRequirement
@@ -41,6 +43,7 @@ from app.models.project import (
     Camera,
     CameraHealthEvent,
     Project,
+    ProjectInviteKey,
     ProjectSettings,
     Zone,
 )
@@ -60,8 +63,12 @@ from app.models.schedule import ScheduleTask
 from app.models.user import User
 from app.models.video import VideoAsset
 from app.models.vision import AnalysisRun, Detection, Frame
+from app.models.weather import WeatherForecast
 
 __all__ = [
+    "ProjectDocument",
+    "DocumentChunk",
+    "DocumentAnalysisRun",
     "PprDocument",
     "PprAnalysis",
     "PprPage",
@@ -81,10 +88,13 @@ __all__ = [
     "WorkType",
     # Площадка
     "Project",
+    "ProjectInviteKey",
     "ProjectSettings",
     "Zone",
     "Camera",
     "CameraHealthEvent",
+    "WeatherForecast",
+    "GeocodingThrottle",
     "CameraViewEvent",
     # План и методика
     "ScheduleTask",

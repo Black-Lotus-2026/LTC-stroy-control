@@ -28,11 +28,24 @@ function authHeaders(): Record<string, string> {
 
 export async function req<T>(path: string, init: RequestInit = {}, fallbackMessage = 'Сервер не ответил'): Promise<T> {
   let res: Response
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let controller: AbortController | null = null
+  let signal = init.signal
+  if (!signal) {
+    controller = new AbortController()
+    signal = controller.signal
+    timer = setTimeout(() => controller?.abort(), 15000)
+  }
   try {
-    res = await fetch(`${API_PREFIX}${path}`, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } })
+    res = await fetch(`${API_PREFIX}${path}`, { ...init, signal, headers: { ...authHeaders(), ...(init.headers || {}) } })
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (controller?.signal.aborted) throw new ApiError('Сервер не ответил вовремя. Попробуйте обновить страницу.', 0)
+      throw error
+    }
     throw new ApiError('Нет связи с сервером. Проверьте, что API запущен.', 0)
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   if (!res.ok) {
     let msg = fallbackMessage
@@ -79,8 +92,8 @@ export async function login(username: string, password: string) {
   setStoredToken(r.access_token)
   return r.user
 }
-export async function register(username: string, password: string, confirm: string) {
-  const r = await req<TokenResponse>('/auth/register', json('POST', { username, password, confirm_password: confirm }), 'Не удалось зарегистрироваться')
+export async function register(username: string, password: string, confirm: string, role: string = 'manager') {
+  const r = await req<TokenResponse>('/auth/register', json('POST', { username, password, confirm_password: confirm, role }), 'Не удалось зарегистрироваться')
   setStoredToken(r.access_token)
   return r.user
 }
@@ -129,7 +142,7 @@ export interface StreamCheck { status: 'online' | 'offline' | 'warning' | 'unkno
 export const checkStream = (cameraId: string) => req<StreamCheck>(`/videos/check-stream?camera_id=${encodeURIComponent(cameraId)}`)
 export const proxyUrl = (cameraId: string) => `${API_PREFIX}/videos/proxy-stream?camera_id=${encodeURIComponent(cameraId)}`
 /** Read one bounded frame from an authorized persisted camera and close MJPEG immediately. */
-export async function grabFrame(cameraId: string, timeoutMs = 6000): Promise<HTMLImageElement> {
+export async function grabFrame(cameraId: string, timeoutMs = 12000): Promise<HTMLImageElement> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let imageUrl = ''
@@ -157,13 +170,33 @@ export async function grabFrame(cameraId: string, timeoutMs = 6000): Promise<HTM
     } finally { await reader.cancel().catch(() => undefined) }
     if (!payload?.length) throw new ApiError('Камера не прислала полный кадр.', 0)
     imageUrl = URL.createObjectURL(new Blob([payload.slice().buffer], { type: jpegStart >= 0 ? 'image/jpeg' : response.headers.get('Content-Type') || 'image/jpeg' }))
-    const image = new Image(); image.decoding = 'async'
-    await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new ApiError('Изображение камеры не удалось прочитать.', 0)); image.src = imageUrl })
+    const image = new Image()
+    image.decoding = 'async'
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new ApiError('Изображение камеры не удалось прочитать.', 0))
+      image.src = imageUrl
+    })
+    try {
+      await image.decode()
+    } catch {
+      // image ready
+    }
+    const toRevoke = imageUrl
+    imageUrl = ''
+    setTimeout(() => {
+      try { URL.revokeObjectURL(toRevoke) } catch { /* ignore */ }
+    }, 10000)
     return image
   } catch (error) {
-    if (controller.signal.aborted) throw new ApiError('Камера не прислала кадр за 6 секунд.', 0)
+    if (controller.signal.aborted) throw new ApiError('Камера не прислала кадр вовремя.', 0)
     throw error
-  } finally { clearTimeout(timer); if (imageUrl) URL.revokeObjectURL(imageUrl) }
+  } finally {
+    clearTimeout(timer)
+    if (imageUrl) {
+      try { URL.revokeObjectURL(imageUrl) } catch { /* ignore */ }
+    }
+  }
 }
 /** Connection probes use the saved camera identity and server network policy. */
 export async function probeCamera(cameraId: string): Promise<{ ok: boolean; message: string }> {
@@ -187,6 +220,7 @@ export interface ApiMachinery {
   probability: number
   classification: 'MANDATORY' | 'RECOMMENDED' | 'NEUTRAL' | 'UNCHARACTERISTIC'
   requirement_level: string
+  source?: 'catalog' | 'document' | 'manual'
   basis?: 'ppr' | 'ppr_conflict' | null
   ppr_requirements?: PprCitation[]
 }
@@ -203,6 +237,97 @@ export const updateStage = (stageId: string, data: { planned_start: string; plan
   req<StageItem>(`/schedule/stages/${stageId}`, json('PUT', data), 'Не удалось сохранить сроки этапа')
 /** Always scoped to the object: without project_id the server clears the plans of every object. */
 export const clearPlan = (projectId: string) => req<{ deleted_count: number }>(`/schedule/clear?project_id=${projectId}`, { method: 'POST' }, 'Не удалось очистить план')
+
+/* POS/PPR document agent */
+export type DocumentKind = 'POS' | 'PPR' | 'TER'
+export interface ProjectDocument {
+  id: string
+  kind: DocumentKind
+  filename: string
+  size_bytes: number
+  created_at: string
+  chunk_count: number
+}
+export interface DocumentFinding {
+  name: string
+  purpose: string
+  document_id: string
+  document_name: string
+  document_kind: DocumentKind
+  chunk_id: string
+  locator: string
+  quote: string
+  class_code: string | null
+  requirement: 'required' | 'recommended' | 'mentioned'
+  review_status: string
+  mapping_method?: 'catalog' | 'agent' | 'unmapped'
+}
+export interface DocumentProposal {
+  class_code: string
+  class_name: string
+  current_probability: number | null
+  baseline_probability: number | null
+  proposed_probability: number | null
+  status: 'ready' | 'conflict' | 'manual_override' | 'unchanged'
+  source: string
+  change_kind?: 'document_requirement' | 'replaced_baseline'
+  evidence: DocumentFinding[]
+}
+export interface DocumentStageResult {
+  stage_id: string
+  stage_name: string
+  summary: string
+  reviewed_chunks: number
+  status: 'completed' | 'failed'
+  error?: string
+  findings: DocumentFinding[]
+  proposals: DocumentProposal[]
+  trace?: { step: string; selected_chunks?: number; claims?: number; accepted?: number; proposals?: number; terms?: string[]; status?: string }[]
+}
+export interface DocumentRun {
+  id: string
+  project_id: string
+  status: 'queued' | 'running' | 'completed' | 'partial' | 'failed'
+  stage_count: number
+  completed_count: number
+  created_at: string
+  error: string | null
+  result: {
+    stages: DocumentStageResult[]
+    applied: { stage_id: string; class_code: string; applied_at: string; mode?: 'automatic' | 'manual'; change_kind?: 'document_requirement' | 'replaced_baseline'; previous_probability?: number | null; new_probability?: number; reverted_at?: string }[]
+    auto_apply?: { applied_count: number; skipped: { stage_id?: string; class_code?: string; reason: string }[]; finished_at: string }
+  }
+}
+export interface DocumentAgentStatus { provider: 'openai_compatible' | 'gigachat'; configured: boolean; key_configured: boolean; model: string }
+export type DocumentSelection = { stage_id: string; class_code: string }
+export const documents = (projectId: string) => req<ProjectDocument[]>(`/projects/${projectId}/documents`)
+export const documentAgentStatus = (projectId: string) => req<DocumentAgentStatus>(`/projects/${projectId}/documents/agent-status`)
+export const latestDocumentRun = (projectId: string) => req<DocumentRun | null>(`/projects/${projectId}/documents/analysis-runs/latest`)
+export const documentRuns = (projectId: string) => req<DocumentRun[]>(`/projects/${projectId}/documents/analysis-runs`)
+export const documentRun = (projectId: string, runId: string) => req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}`)
+export const analyzeDocuments = (projectId: string) => req<DocumentRun>(`/projects/${projectId}/documents/analyze-plan`, { method: 'POST' }, 'Не удалось запустить анализ')
+export const applyDocumentProposals = (projectId: string, runId: string, selections: DocumentSelection[]) =>
+  req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}/apply`, json('POST', { selections }), 'Не удалось применить предложения')
+export const revertDocumentProposals = (projectId: string, runId: string, selections: DocumentSelection[]) =>
+  req<DocumentRun>(`/projects/${projectId}/documents/analysis-runs/${runId}/revert`, json('POST', { selections }), 'Не удалось отменить изменения')
+export const uploadDocument = (projectId: string, file: File, kind: DocumentKind) => {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('kind', kind)
+  return req<ProjectDocument>(`/projects/${projectId}/documents`, { method: 'POST', body }, 'Не удалось загрузить документ')
+}
+export const deleteDocument = (projectId: string, documentId: string) =>
+  req<void>(`/projects/${projectId}/documents/${documentId}`, { method: 'DELETE' }, 'Не удалось удалить документ')
+export async function downloadDocument(projectId: string, doc: ProjectDocument) {
+  const response = await fetch(`${API_PREFIX}/projects/${projectId}/documents/${doc.id}/file`, { headers: authHeaders() })
+  if (!response.ok) throw new ApiError('Не удалось скачать документ', response.status)
+  const url = URL.createObjectURL(await response.blob())
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = doc.filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
 export const profile = (stageId: string) => req<ApiProfile>(`/schedule/stages/${stageId}/probabilities`)
 export const pprControlRevision = (projectId: string, signal?: AbortSignal) => req<{ revision: string }>(`/projects/${encodeURIComponent(projectId)}/ppr-control-revision`, { signal })
 export const putOverrides = (stageId: string, overrides: Record<string, unknown>) =>
@@ -211,24 +336,44 @@ export const putOverrides = (stageId: string, overrides: Record<string, unknown>
 /* detection */
 export interface ApiDetection { raw_label: string; canonical_code: string; label_ru: string; confidence: number; x1: number; y1: number; x2: number; y2: number }
 export interface DetectResponse { compliance_enabled?: boolean; evaluable_classes?: string[]; model_ready: boolean; detector_status: string; message?: string | null; detections: ApiDetection[]; source?: 'yolo' | 'vlm'; fallback_status?: 'not_requested' | 'not_needed' | 'used' | 'empty' | 'unavailable' | 'timeout' | 'error'; fallback_message?: string | null; model_sha256?: string | null; confidence_calibrated?: false }
-export function detectFrame(blob: Blob, stageName?: string, safety?: { projectId: string; cameraId: string; sourceId: string; positionMs: number; recordingMode?: boolean }) {
+export async function detectFrame(
+  blob: Blob,
+  stageName?: string,
+  safety?: { projectId: string; cameraId: string; sourceId: string; positionMs: number; recordingMode?: boolean },
+  projectId?: string,
+): Promise<DetectResponse> {
   const fd = new FormData()
   fd.append('file', blob, 'frame.jpg')
   if (stageName) fd.append('stage_name', stageName)
+  const pid = safety?.projectId || projectId
+  const regularPath = pid ? `/videos/detect-frame?project_id=${encodeURIComponent(pid)}` : '/videos/detect-frame'
+
   if (safety) {
-    fd.append('camera_id', safety.cameraId)
-    fd.append('source_id', safety.sourceId)
-    fd.append('position_ms', String(Math.round(safety.positionMs)))
-    fd.append('recording_mode', String(safety.recordingMode === true))
+    const sfd = new FormData()
+    sfd.append('file', blob, 'frame.jpg')
+    if (stageName) sfd.append('stage_name', stageName)
+    sfd.append('camera_id', safety.cameraId)
+    sfd.append('source_id', safety.sourceId)
+    sfd.append('position_ms', String(Math.round(safety.positionMs)))
+    sfd.append('recording_mode', String(safety.recordingMode === true))
+    try {
+      return await req<DetectResponse>(
+        `/safety/projects/${encodeURIComponent(safety.projectId)}/analyze-frame`,
+        { method: 'POST', body: sfd },
+      )
+    } catch {
+      // Fallback to direct detection so machinery recognition never fails
+    }
   }
-  const path = safety ? `/safety/projects/${encodeURIComponent(safety.projectId)}/analyze-frame` : '/videos/detect-frame'
-  return req<DetectResponse>(path, { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
+
+  return req<DetectResponse>(regularPath, { method: 'POST', body: fd }, 'Сервис распознавания не ответил')
 }
 /** Only still photos may request the server's photo-specific VLM fallback. */
-export function detectPhoto(file: File) {
+export function detectPhoto(file: File, projectId?: string) {
   const fd = new FormData()
   fd.append('file', file, file.name)
-  return req<DetectResponse>('/videos/detect-photo', { method: 'POST', body: fd }, 'Не удалось распознать фото')
+  const path = projectId ? `/videos/detect-photo?project_id=${encodeURIComponent(projectId)}` : '/videos/detect-photo'
+  return req<DetectResponse>(path, { method: 'POST', body: fd }, 'Не удалось распознать фото')
 }
 export interface DetectorStatus { compliance_enabled?: boolean; evaluable_classes?: string[]; ready: boolean; status: string; message?: string | null; supported_classes: string[] }
 export const detectorStatus = () => req<DetectorStatus>('/videos/detector-status')
@@ -394,3 +539,41 @@ export async function viewAsset(url: string, signal?: AbortSignal): Promise<Blob
   if (!res.ok) throw new ApiError('Утверждённый кадр не загрузился', res.status)
   return res.blob()
 }
+
+export interface ProjectInviteKeyItem {
+  id: string
+  project_id: string
+  key: string
+  role: string
+  created_by_user_id: string | null
+  expires_at: string | null
+  max_uses: number | null
+  uses_count: number
+  is_active: boolean
+  created_at: string
+}
+
+export interface JoinByKeyResult {
+  success: boolean
+  message: string
+  project_id: string
+  project_name: string
+  role: string
+  side: string
+  assignment_id: string
+  organization_id: string
+  organization_name: string
+}
+
+export const createProjectInvite = (projectId: string, data: { role: string; max_uses?: number | null; expires_in_days?: number | null }) =>
+  req<ProjectInviteKeyItem>(`/projects/${projectId}/invites`, json('POST', data), 'Не удалось создать ключ приглашения')
+
+export const listProjectInvites = (projectId: string) =>
+  req<ProjectInviteKeyItem[]>(`/projects/${projectId}/invites`, {}, 'Не удалось загрузить ключи приглашений')
+
+export const deleteProjectInvite = (projectId: string, inviteId: string) =>
+  req<{ ok: boolean; message: string }>(`/projects/${projectId}/invites/${inviteId}`, { method: 'DELETE' }, 'Не удалось деактивировать ключ')
+
+export const joinProjectByKey = (key: string) =>
+  req<JoinByKeyResult>('/projects/join-by-key', json('POST', { key }), 'Не удалось подключиться по ключу приглашения')
+

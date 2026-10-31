@@ -1,61 +1,7 @@
-# Полный стенд: API, воркер детекции, планировщик, база, брокер.
+# Полный стенд: API, воркер детекции и задач, планировщик, база, брокер, фронтенд.
 # Запуск: make up   (или docker compose up --build)
 
 services:
-  ppr_llm:
-    image: ollama/ollama@sha256:265409e1d931028a8f7d5a32bcbafddd7bffbc6cc629d77efe9560adf692a5e7
-    restart: unless-stopped
-    cpus: 6.0
-    mem_limit: 12g
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_CONTEXT_LENGTH: "8192"
-      OLLAMA_KEEP_ALIVE: 30m
-    volumes:
-      - ppr_models_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  ppr_model_init:
-    image: ollama/ollama@sha256:265409e1d931028a8f7d5a32bcbafddd7bffbc6cc629d77efe9560adf692a5e7
-    environment:
-      OLLAMA_HOST: http://ppr_llm:11434
-    command: ["pull", "qwen2.5:7b"]
-    depends_on:
-      ppr_llm:
-        condition: service_healthy
-
-  ppr_worker:
-    env_file:
-      - ./backend/.env
-    build: ./backend
-    restart: unless-stopped
-    command: celery -A app.workers.celery_app:celery_app worker -Q ppr -c 1 -l info
-    environment:
-      POSTGRES_HOST: postgres
-      REDIS_HOST: redis
-      PPR_STORAGE_ROOT: /app/var/documents
-      CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
-      PPR_PROVIDER: ollama
-      PPR_OLLAMA_URL: http://ppr_llm:11434
-      PPR_ANALYSIS_MODEL: qwen2.5:7b
-    volumes:
-      - ./backend:/app
-      - ppr_documents_data:/app/var/documents
-      - camera_views_private:/app/var/camera-views-private
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      ppr_model_init:
-        condition: service_completed_successfully
-
   postgres:
     image: postgres:16-alpine
     environment:
@@ -90,6 +36,7 @@ services:
       retries: 10
 
   api:
+    image: stroy-control-backend:latest
     env_file:
       - ./backend/.env
     build: ./backend
@@ -103,9 +50,8 @@ services:
       STORAGE_LOCAL_ROOT: /app/var/storage
       PPR_STORAGE_ROOT: /app/var/documents
       CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
-      PPR_PROVIDER: ollama
-      PPR_OLLAMA_URL: http://ppr_llm:11434
-      PPR_ANALYSIS_MODEL: qwen2.5:7b
+      PPR_PROVIDER: ${PPR_PROVIDER:-openrouter}
+      PPR_ANALYSIS_MODEL: ${PPR_ANALYSIS_MODEL:-openai/gpt-4o-mini}
       STORAGE_PUBLIC_URL: http://localhost:8000/media
       REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
       REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
@@ -113,6 +59,13 @@ services:
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      DOCUMENT_LLM_PROVIDER: ${DOCUMENT_LLM_PROVIDER:-openai_compatible}
+      DOCUMENT_LLM_API_KEY: ${DOCUMENT_LLM_API_KEY:-}
+      DOCUMENT_LLM_MODEL: ${DOCUMENT_LLM_MODEL:-openai/gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GIGACHAT_CREDENTIALS: ${GIGACHAT_CREDENTIALS:-}
       YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction-yolov8m-v2.pt}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -138,12 +91,12 @@ services:
         condition: service_healthy
 
   worker:
+    image: stroy-control-backend:latest
     env_file:
       - ./backend/.env
     build: ./backend
-    # Две очереди в одном воркере на время прототипа; когда появится модель,
-    # очередь cv выносится в отдельный сервис с своим параллелизмом.
-    command: celery -A app.workers.celery_app:celery_app worker -Q default,cv -c 2 -l info
+    # Очереди задач: default (фоновые), cv (детекция), ppr (анализ документов по API).
+    command: celery -A app.workers.celery_app:celery_app worker -Q default,cv,ppr -c 2 -l info
     environment:
       ENVIRONMENT: docker
       POSTGRES_HOST: postgres
@@ -151,12 +104,21 @@ services:
       STORAGE_LOCAL_ROOT: /app/var/storage
       PPR_STORAGE_ROOT: /app/var/documents
       CAMERA_VIEW_STORAGE_ROOT: /app/var/camera-views-private
+      PPR_PROVIDER: ${PPR_PROVIDER:-openrouter}
+      PPR_ANALYSIS_MODEL: ${PPR_ANALYSIS_MODEL:-openai/gpt-4o-mini}
       REPORT_LLM_ENABLED: ${REPORT_LLM_ENABLED:-false}
       REPORT_LLM_MODEL: ${REPORT_LLM_MODEL:-gpt-5.5}
       REPORT_LLM_REASONING_EFFORT: ${REPORT_LLM_REASONING_EFFORT:-low}
       REPORT_LLM_TIMEOUT_SECONDS: ${REPORT_LLM_TIMEOUT_SECONDS:-30}
       REPORT_LLM_MAX_RETRIES: ${REPORT_LLM_MAX_RETRIES:-2}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      DOCUMENT_LLM_PROVIDER: ${DOCUMENT_LLM_PROVIDER:-openai_compatible}
+      DOCUMENT_LLM_API_KEY: ${DOCUMENT_LLM_API_KEY:-}
+      DOCUMENT_LLM_MODEL: ${DOCUMENT_LLM_MODEL:-openai/gpt-4o-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GIGACHAT_CREDENTIALS: ${GIGACHAT_CREDENTIALS:-}
       YOLO_WEIGHTS_PATH: ${YOLO_WEIGHTS_PATH:-/app/weights/construction-yolov8m-v2.pt}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -178,6 +140,7 @@ services:
         condition: service_healthy
 
   beat:
+    image: stroy-control-backend:latest
     build: ./backend
     # Файл расписания пишется вне примонтированного кода, чтобы beat не
     # оставлял служебные файлы в репозитории.
@@ -220,5 +183,4 @@ volumes:
   postgres_data:
   storage_data:
   ppr_documents_data:
-  ppr_models_data:
   camera_views_private:

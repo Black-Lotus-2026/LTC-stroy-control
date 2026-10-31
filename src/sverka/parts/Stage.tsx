@@ -323,7 +323,7 @@ function Strip({
         <span>
           Окно сверки {settings.window} с · порог {settings.conf}%
         </span>
-        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Кадры в плеере анализируются в этой вкладке; сохранённые записи также обрабатываются сервером.' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
+        <span className="proto-line">{covered ? (obs.complianceEnabled ? 'Кадры в плеере анализируются во время воспроизведения.' : 'Распознавание работает; автоматические выводы об отсутствии техники выключены') : obs.model === 'down' ? 'Распознавание недоступно' : 'Анализ ещё не начался'}</span>
       </div>
       <div className="frame-tools">
         <button type="button" className="toggle" role="switch" aria-checked={boxes} onClick={() => setBoxes(!boxes)}>

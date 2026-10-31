@@ -24,6 +24,7 @@ import io
 import ipaddress
 import logging
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -789,10 +790,26 @@ def capture_http_frame(url: str, *, timeout: float = 5.0) -> bytes | None:
         return None
 
 
-def capture_frame(camera: Camera) -> bytes | None:
-    url = camera.stream_url or ""
-    if url.startswith(("http://", "https://")):
-        return capture_http_frame(url)
+_FRAME_CACHE: dict[uuid.UUID, tuple[float, bytes]] = {}
+_CAMERA_LOCKS: dict[uuid.UUID, threading.Lock] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _get_camera_lock(camera_id: uuid.UUID) -> threading.Lock:
+    with _CACHE_LOCK:
+        lock = _CAMERA_LOCKS.get(camera_id)
+        if lock is None:
+            lock = threading.Lock()
+            _CAMERA_LOCKS[camera_id] = lock
+        return lock
+
+
+def _do_capture_frame(url: str) -> bytes | None:
+    is_hls = ".m3u8" in url.lower()
+    if url.startswith(("http://", "https://")) and not is_hls:
+        frame = capture_http_frame(url)
+        if frame:
+            return frame
     if url.startswith("rtsp://") and not getattr(
         settings, "camera_allow_rtsp_capture", False
     ):
@@ -804,23 +821,53 @@ def capture_frame(camera: Camera) -> bytes | None:
     try:
         import cv2
 
+        target = url if (is_hls or url.startswith("https://")) else pinned
         capture = cv2.VideoCapture(
-            pinned,
+            target,
             cv2.CAP_FFMPEG,
-            [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000],
+            [
+                cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000,
+                cv2.CAP_PROP_READ_TIMEOUT_MSEC, 4000,
+            ],
         )
         try:
             if not capture.isOpened():
                 return None
             ok, image = capture.read()
-            if not ok:
+            if not ok or image is None:
                 return None
-            encoded, data = cv2.imencode(".jpg", image)
+            encoded, data = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
             return data.tobytes() if encoded else None
         finally:
             capture.release()
-    except ImportError:
+    except (ImportError, Exception):
         return None
+
+
+def capture_frame(camera: Camera) -> bytes | None:
+    url = (camera.stream_url or "").strip()
+    if not url:
+        return None
+    cam_id = getattr(camera, "id", None)
+    if cam_id:
+        now = time.monotonic()
+        with _CACHE_LOCK:
+            cached = _FRAME_CACHE.get(cam_id)
+            if cached and (now - cached[0] < 2.5):
+                return cached[1]
+        lock = _get_camera_lock(cam_id)
+        with lock:
+            now = time.monotonic()
+            with _CACHE_LOCK:
+                cached = _FRAME_CACHE.get(cam_id)
+                if cached and (now - cached[0] < 2.5):
+                    return cached[1]
+            frame = _do_capture_frame(url)
+            if frame:
+                with _CACHE_LOCK:
+                    _FRAME_CACHE[cam_id] = (time.monotonic(), frame)
+            return frame
+    return _do_capture_frame(url)
 
 
 def verify_view_incident(

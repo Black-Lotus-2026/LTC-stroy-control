@@ -6,7 +6,7 @@ import { isSharedDemoProject, recordingAnalysisLabel, sourceCamera, visibleProje
 import type { Episode, EventStatus, Level, LocalRules, Observation, Settings, SourceView, Stage, UiEvent, VerdictAction } from './model'
 import { DEFAULTS, LV_TO_CLS, STATUS_WORD, evaluate, isOpen, loopBlocked, viewBlocked, loadLocalRules, loadSettings, saveLocalRules, saveSettings, stageAt, toEvent, toProfile, toStages, verdictOf } from './model'
 import { PROBLEM_WORD, turnWords } from './lib/view'
-import { CODES, MACH, type Code } from './lib/machinery'
+import { CODES, MACH, toCode, type Code } from './lib/machinery'
 import { DAY_MS, durShort, fmtDay, hhmm, hhmmss, isoDay, plural } from './lib/format'
 import { Spring, clamp, lerp } from './lib/spring'
 import { Seg, ToastProvider, useToast } from './parts/common'
@@ -26,6 +26,8 @@ import { Intro, Showcase } from './parts/Intro'
 import { PprDocuments } from './parts/PprDocuments'
 import { pprCitationFingerprint } from './pprApi'
 import { CustomerWorkspace, roleName, contextKey, can, canReadFullPlan, type WorkspaceAccess } from './parts/CustomerWorkspace'
+import { roleBadgeInfo } from './customerContext'
+import { JoinByKeyModal, ProjectInviteManagerModal } from './parts/ProjectInviteModal'
 import { CustomerPanel, type CustomerSection } from './parts/CustomerPanel'
 import { CustomerCases } from './parts/CustomerCases'
 import { participants, savedVideoPlayback, type ParticipantOptionsDTO } from './customerApi'
@@ -61,7 +63,12 @@ export function SverkaApp() {
   return (
     <ToastProvider>
       {user === undefined ? (
-        <div className="auth" aria-busy="true" />
+        <div className="auth" aria-busy="true">
+          <div className="auth-card" style={{ textAlign: 'center', opacity: 0.85 }}>
+            <div className="brand" style={{ margin: '0 auto 16px' }} aria-hidden="true">СК</div>
+            <p style={{ margin: 0, color: 'var(--fg-2)', fontSize: 14 }}>Загрузка системы…</p>
+          </div>
+        </div>
       ) : (
         <CustomerWorkspace
           user={user}
@@ -119,7 +126,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [liveDemoProject, setLiveDemoProject] = useState<string | null>(null)
   const showLiveDemo = context.is_demo && liveDemoProject === context.project_id
   const [engine] = useState(() => new Engine())
-  engine.inferenceEnabled = !context.is_demo && context.lifecycle === 'active' && can(context, 'video.analyze')
+  engine.inferenceEnabled = engine.mode === 'recording' || (!context.is_demo && context.lifecycle === 'active' && can(context, 'video.analyze'))
   const obs = useObservation(engine)
 
   const [projects, setProjects] = useState<ProjectItem[] | null>(null)
@@ -127,10 +134,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [zones, setZones] = useState<ZoneItem[]>([])
   const [cameras, setCameras] = useState<CameraItem[]>([])
   const [views, setViews] = useState<api.CameraViewState[]>([])
-  const [savedVideos, setSavedVideos] = useState<api.SavedVideo[]>([])
-  const [savedVideoId, setSavedVideoId] = useState('')
-  const [videosError, setVideosError] = useState<string | null>(null)
-  const [recordingUploadError, setRecordingUploadError] = useState<string | null>(null)
+
   const [stages, setStages] = useState<Stage[]>([])
   const [loadedProject, setLoadedProject] = useState<{ id: string; token: number } | null>(null)
   const [apiProfiles, setApiProfiles] = useState<Map<string, ApiProfile>>(new Map())
@@ -147,7 +151,22 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const [safetyRecordingCameraId, setSafetyRecordingCameraId] = useState('')
   const [sheet, setSheet] = useState<SheetTab | null>(null)
   const [pprOpen, setPprOpen] = useState(false)
-  const [customerSection, setCustomerSection] = useState<CustomerSection | null>(context.role === 'pto_engineer' ? 'documents' : null)
+  const [customerSection, setCustomerSection] = useState<CustomerSection | null>(
+    context.role === 'pto_engineer' ? 'documents' : context.role === 'contractor_foreman' ? 'cases' : null
+  )
+  const [joinByKeyOpen, setJoinByKeyOpen] = useState(false)
+  const [inviteManagerOpen, setInviteManagerOpen] = useState(false)
+
+  useEffect(() => {
+    if (context.role === 'pto_engineer') {
+      setCustomerSection('documents')
+    } else if (context.role === 'contractor_foreman') {
+      setCustomerSection('cases')
+    } else {
+      setCustomerSection(null)
+    }
+  }, [context.role, context.assignment_id])
+
   const canReadPlan = canReadFullPlan(context)
   const [journal, setJournal] = useState<{ origin: DOMRect | null } | null>(null)
   const [setupOpen, setSetupOpen] = useState(false)
@@ -175,34 +194,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const lastSaveError = useRef(0)
   const videoSessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const videoRequest = useRef<AbortController | null>(null)
-  const playSavedVideo = async (video: api.SavedVideo) => {
-    videoRequest.current?.abort()
-    if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    const controller = new AbortController(); videoRequest.current = controller
-    const scopeToken = loadToken.current
-    let recovering = false
-    let recoveryAttempts = 0
-    const valid = () => !controller.signal.aborted && scopeToken === loadToken.current
-    const renew = async (restore = false) => {
-      if (recovering || !valid()) return
-      recovering = true
-      try {
-        const session = await savedVideoPlayback(video.video_id, controller.signal)
-        if (!valid()) return
-        if (restore) engine.refreshRecordingSession()
-        videoSessionTimer.current = setTimeout(() => void renew(), Math.max(10_000, Date.parse(session.expires_at) - Date.now() - 60_000))
-      } catch (error) { if (valid()) { engine.stopRecording(); setVideosError(error instanceof Error ? error.message : 'Сессия воспроизведения недоступна.') } }
-      finally { recovering = false }
-    }
-    try {
-      const session = await savedVideoPlayback(video.video_id, controller.signal)
-      if (!valid()) return
-      engine.startRecordingUrl(session.media_url, video.filename, Date.parse(video.start_timestamp), { credentials: true, onPlaybackError: () => { if (recoveryAttempts++ < 1) void renew(true) }, onPlaybackReady: () => { recoveryAttempts = 0 } })
-      videoSessionTimer.current = setTimeout(() => void renew(), Math.max(10_000, Date.parse(session.expires_at) - Date.now() - 60_000))
-      engine.setSafetyRecordingCamera(video.camera_id || undefined)
-      setSafetyRecordingCameraId(video.camera_id || ''); setSavedVideoId(video.video_id); setSelected('recording'); setSetupOpen(false)
-    } catch (error) { if (valid()) setVideosError(error instanceof Error ? error.message : 'Не удалось открыть запись.') }
-  }
+
   useEffect(() => {
     const controller = new AbortController()
     if (canUploadVideo) participants(context.project_id, controller.signal).then(setAssignmentOptions, () => undefined)
@@ -250,10 +242,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
     setCameras([])
     setViews([])
     viewSent.current.clear()
-    setSavedVideos([])
-    setSavedVideoId('')
-    setVideosError(null)
-    setRecordingUploadError(null)
+
     setStages([])
     setApiProfiles(new Map())
     setEvents([])
@@ -280,21 +269,13 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
     store.set('sverka:project', project.id)
     const local = loadSettings(project.id, isSharedDemoProject(project))
     setSettingsState(local)
-    Promise.all([api.zones(project.id), can(context, 'camera.read') ? api.cameras(project.id) : Promise.resolve([]), canReadPlan ? api.stages(project.id) : Promise.resolve([]), can(context, 'incident.read') ? api.incidents(project.id) : Promise.resolve([]), canReadPlan ? api.incidentConfig().catch(() => null) : Promise.resolve(null), can(context, 'video.read') ? api.savedVideos(project.id).catch((e: Error) => {
-      if (token === loadToken.current) setVideosError(e.message)
-      return [] as api.SavedVideo[]
-    }) : Promise.resolve([] as api.SavedVideo[])])
-      .then(([z, c, s, inc, cfg, videos]) => {
+    Promise.all([api.zones(project.id), can(context, 'camera.read') ? api.cameras(project.id) : Promise.resolve([]), canReadPlan ? api.stages(project.id) : Promise.resolve([]), can(context, 'incident.read') ? api.incidents(project.id) : Promise.resolve([]), canReadPlan ? api.incidentConfig().catch(() => null) : Promise.resolve(null)])
+      .then(([z, c, s, inc, cfg]) => {
         if (token !== loadToken.current) return
         setZones(z)
         setCameras(c)
         engine.setCameras(c)
         if (can(context, 'camera.read')) loadViews(project.id, token)
-        setSavedVideos(videos)
-        if (videos.length) {
-          const first = videos[0]
-          void playSavedVideo(first)
-        }
         setStages(toStages(s))
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
         if (cfg) setSettingsState((x) => ({ ...x, window: cfg.violation_evaluation_window_seconds }))
@@ -303,7 +284,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
         const want = wantCase.current
         wantCase.current = null
         if (want && inc.some((i) => i.id === want)) setCaseOpen({ id: want, origin: null })
-        else if (canManageControl && (!s.length || (!c.length && !videos.length))) setSetupOpen(false)
+        else if (canManageControl && (!s.length || !c.length)) setSetupOpen(false)
       })
       .catch((e: Error) => {
         if (token !== loadToken.current) return
@@ -345,10 +326,11 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   useEffect(() => {
     if (!project || !loaded || !can(context, 'incident.read')) return
     const id = project.id
-    const isCurrent = currentScope()
+    const token = loadToken.current
+    let active = true
     const timer = window.setInterval(() => {
       api.incidents(id).then((inc) => {
-        if (!isCurrent()) return
+        if (!active || token !== loadToken.current) return
 
         setEvents((old) => inc.map((i) => keepUnsent(toEvent(i, api.mediaUrl), old)))
       }, () => undefined)
@@ -359,22 +341,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   }, [project, loaded])
 
 
-  useEffect(() => {
-    if (!project || !can(context, 'video.read')) return
-    const id = project.id
-    const token = loadToken.current
-    let active = true
-    const timer = window.setInterval(() => {
-      api.savedVideos(id).then((videos) => {
-        if (!active || token !== loadToken.current) return
-        setSavedVideos(videos)
-        setVideosError(null)
-      }, (error: Error) => {
-        if (active && token === loadToken.current) setVideosError(error.message)
-      })
-    }, 30_000)
-    return () => { active = false; clearInterval(timer) }
-  }, [project?.id])
+
 
   const setSettings = (s: Settings) => {
     const prev = settings
@@ -485,9 +452,8 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   }, [refreshPprProfiles, project?.id, stage?.id])
 
   const ev = evaluate(obs, stage, prof, settings)
-  const activeSavedVideo = savedVideos.find(video => video.video_id === savedVideoId)
   const verdict = loaded ? obs.mode === 'recording'
-    ? { tone: 'none' as const, title: 'Серверная проверка записи', sub: recordingUploadError ? `Запись не сохранена: ${recordingUploadError}. Серверная проверка недоступна; плеер показывает распознавание текущего кадра.` : `${activeSavedVideo ? recordingAnalysisLabel(activeSavedVideo.analysis_status) + '. ' : 'Запись сохраняется для серверной проверки. '}Сервер сопоставляет записи камер вместе. Результаты проверки появляются в журнале; плеер показывает распознавание текущего кадра.` }
+    ? { tone: 'none' as const, title: 'Серверная проверка записи', sub: 'Распознавание выполняется в плеере на основе кадров текущего воспроизведения.' }
     : !canReadPlan ? { tone: 'none' as const, title: context.is_demo ? 'Демонстрация · только просмотр' : context.role === 'pto_engineer' ? 'Документы и требования' : 'Контроль в пределах назначения', sub: context.is_demo ? 'Доступны опубликованные источники и исторические дела. Изменения в общей демонстрации отключены.' : context.role === 'pto_engineer' ? 'Проверяйте цитаты и область применения. Требования включает в контроль управляющий заказчика.' : 'Очередь показывает доступные вам дела. Полный план объекта не входит в текущую область доступа.', actions: [{ label: context.role === 'pto_engineer' ? 'Открыть документы' : context.role === 'contractor_foreman' ? 'Мои задачи' : 'Доступные дела', act: context.role === 'pto_engineer' ? 'customer-documents' : 'customer-cases', primary: true }] }
     : verdictOf({ ev, obs, events, episodes, prof, hasPlan: stages.length > 0, s: settings }) : { tone: 'none' as const, title: 'Загружаем объект', sub: loadError || 'Получаем доступные материалы объекта.' }
 
@@ -892,10 +858,26 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   })
 
   /* rules */
-  /* rules: the level goes to the server (shared); "не учитывать" and own timings stay in this browser */
+  /* Rule levels are shared; the browser only keeps timing and the skip label. */
   const writeLocal = (stageId: string, next: LocalRules) => {
     saveLocalRules(stageId, next)
     setLocalRules((m) => new Map(m).set(stageId, next))
+  }
+  const syncLocalSkippedRules = async () => {
+    for (const item of stages) {
+      const local = localRules.get(item.id) ?? loadLocalRules(item.id)
+      const skipped = CODES.filter(code => local[code]?.skip)
+      if (!skipped.length) continue
+      const profile = await api.profile(item.id)
+      const overrides: Record<string, string> = {}
+      for (const code of skipped) {
+        const rule = profile.probabilities.find(probability => toCode(probability.machinery_code) === code)
+        if (rule && rule.source !== 'document') overrides[MACH[code].api] = 'NEUTRAL'
+      }
+      if (!Object.keys(overrides).length) continue
+      const saved = await api.putOverrides(item.id, overrides)
+      setApiProfiles(current => new Map(current).set(item.id, saved))
+    }
   }
   const applyRule = async (stageId: string, code: Code, d: { lvl: Level; warnAfter: number | null; errAfter: number | null }) => {
     const r = profiles.get(stageId)!.rules[code]
@@ -906,7 +888,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
     rec.skip = d.lvl === 'skip' || undefined
     rec.warnAfter = d.warnAfter ?? undefined
     rec.errAfter = d.errAfter ?? undefined
-    const target = d.lvl === 'skip' ? serverLvl : d.lvl
+    const target = d.lvl === 'skip' ? 'ok' : d.lvl
     if (target !== serverLvl) {
       const res = await api.putOverrides(stageId, { [MACH[code].api]: LV_TO_CLS[target as Exclude<Level, 'skip'>] })
       setApiProfiles((m) => new Map(m).set(stageId, res))
@@ -1108,36 +1090,14 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
 
   const openRecording = (file: File, start: number) => {
     videoRequest.current?.abort(); if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    if (!canUploadVideo || (context.side === 'contractor' && !uploadAreaId)) { toast('Выберите разрешённую область для загрузки записи.', { error: true }); return }
-    const token = loadToken.current
-    setSavedVideoId('')
-    setRecordingUploadError(null)
     engine.startRecording(file, start)
-    const recordingUrl = engine.recording?.url
     engine.setSafetyRecordingCamera(undefined)
     setSafetyRecordingCameraId('')
     setSelected('recording')
-    if (project)
-      api.uploadVideo(project.id, file, new Date(start).toISOString(), uploadAreaId || undefined).then(
-        (asset) => {
-          if (token !== loadToken.current) return
-          if (engine.recording?.url === recordingUrl) setSavedVideoId(asset.video_id)
-          toast('Запись сохранена на сервере')
-          api.savedVideos(project.id).then((videos) => {
-            if (token === loadToken.current) setSavedVideos(videos)
-          }, () => undefined)
-        },
-        (e: Error) => {
-          if (token !== loadToken.current || engine.recording?.url !== recordingUrl) return
-          setRecordingUploadError(e.message)
-          toast(`Запись не сохранена на сервере: ${e.message}. Распознавание в плеере продолжается.`, { error: true })
-        },
-      )
+    toast('Видео открыто для просмотра и анализа')
   }
   const closeRecording = () => {
     videoRequest.current?.abort(); if (videoSessionTimer.current) clearTimeout(videoSessionTimer.current)
-    setSavedVideoId('')
-    setRecordingUploadError(null)
     engine.stopRecording()
     engine.setCameras(cameras)
     setSelected(null)
@@ -1235,6 +1195,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
   const ruleProf = rule ? profiles.get(rule.stageId) : null
   const setupVisible = setupOpen && !projectsError && !loadError
   const pending = events.filter((e) => e.status === 'pending' && e.kind !== 'stream')
+  const roleBadge = roleBadgeInfo(context)
 
   return (
     <div className="app" id="app">
@@ -1243,9 +1204,15 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
           СК
         </button>
         <button type="button" className="ctx" onClick={(e) => setMenu({ kind: 'project', anchor: e.currentTarget.getBoundingClientRect() })} aria-haspopup="menu">
-          <small>{context.organization_name} · {roleName(context)}</small>
+          <small>{context.organization_name}</small>
           <span>{context.project_name}</span>
         </button>
+
+        <div className="role-header-pill" title={roleBadge.desc}>
+          <span className="role-dot" style={{ backgroundColor: roleBadge.color }} />
+          <span className="role-text" style={{ color: roleBadge.color }}>{roleBadge.title}</span>
+        </div>
+
         {canReadSources && zones.length > 0 && (
           <>
             <span className="slash" aria-hidden="true">
@@ -1259,18 +1226,100 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
         )}
         <div className="grow" />
         <TimePill obs={obs} onExit={closeRecording} />
-        <button type="button" className="icon-btn tasks-btn" onClick={() => setCustomerSection('notifications')} aria-label="Уведомления" title="Уведомления">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5z" /><path d="M10 20.5a2.2 2.2 0 0 0 4 0" /></svg>
-        </button>
-        <button type="button" className="btn small ppr-entry" onClick={() => setCustomerSection('documents')} disabled={!can(context, 'document.read')} aria-label="Документы ППР текущего объекта">ППР</button>
-        {canManageControl && <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')} aria-label="Безопасность" title="Безопасность"><svg className="safety-entry-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/></svg><span className="safety-entry-label">Безопасность</span></button>}
-        {canReadSources && <button type="button" className="icon-btn" onClick={() => setSheet('sources')} aria-label="Доступные источники">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-            <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-            <circle cx="16" cy="7" r="2" />
-            <circle cx="10" cy="17" r="2" />
-          </svg>
-        </button>}
+
+        {/* Role-tailored action buttons */}
+        {context.role === 'pto_engineer' ? (
+          <>
+            <button
+              type="button"
+              className="btn small ppr-entry primary"
+              onClick={() => setCustomerSection('documents')}
+              aria-label="Документы ППР"
+            >
+              ППР и график
+            </button>
+            <button
+              type="button"
+              className="btn small safety-entry"
+              disabled={!project}
+              onClick={() => setSheet('documents')}
+            >
+              Чертежи и ПОС
+            </button>
+          </>
+        ) : context.role === 'contractor_foreman' ? (
+          <>
+            <button
+              type="button"
+              className="btn small primary"
+              onClick={() => setCustomerSection('cases')}
+              aria-label="Задачи и замечания прораба"
+            >
+              Мои задачи
+            </button>
+            <button
+              type="button"
+              className="icon-btn tasks-btn"
+              onClick={() => setCustomerSection('notifications')}
+              aria-label="Уведомления"
+              title="Уведомления"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5z" /><path d="M10 20.5a2.2 2.2 0 0 0 4 0" /></svg>
+            </button>
+          </>
+        ) : context.role === 'customer_manager' || user.role === 'admin' ? (
+          <>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setCustomerSection('cases')}
+              aria-label="Решения заказчика"
+            >
+              Решения
+            </button>
+            <button
+              type="button"
+              className="btn small ppr-entry"
+              onClick={() => setCustomerSection('documents')}
+              aria-label="Документы ППР"
+            >
+              ППР
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setCustomerSection('reports')}
+              aria-label="Отчёты"
+            >
+              Отчёты
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              onClick={() => setInviteManagerOpen(true)}
+              title="Ключи приглашений в проект"
+            >
+              🔑 Ключи
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: '12px', color: 'var(--fg-3)', padding: '0 8px' }}>
+            Только просмотр
+          </span>
+        )}
+
+        {canManageControl && context.role !== 'pto_engineer' && (
+          <button type="button" className="btn small safety-entry" onClick={() => setSheet('safety')} aria-label="Безопасность" title="Безопасность"><svg className="safety-entry-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/></svg><span className="safety-entry-label">Безопасность</span></button>
+        )}
+        {canReadSources && (
+          <button type="button" className="icon-btn" onClick={() => setSheet('sources')} aria-label="Доступные источники">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+              <circle cx="16" cy="7" r="2" />
+              <circle cx="10" cy="17" r="2" />
+            </svg>
+          </button>
+        )}
         <button type="button" className="avatar-btn" onClick={(e) => setMenu({ kind: 'user', anchor: e.currentTarget.getBoundingClientRect() })} aria-label={`Пользователь ${user.username}`} aria-haspopup="menu">
           <span className="avatar">{user.username.slice(0, 2).toUpperCase()}</span>
         </button>
@@ -1287,22 +1336,7 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
       ) : <Verdict v={verdict} onAction={onAction} at={obs.mode === 'recording' ? `запись ${fmtDay(t)}` : undefined} />)}
       {!showLiveDemo && project && isSharedDemoProject(project) && <p style={{ margin: 0, padding: '0 20px 6px' }}>Демонстрационные интервалы: предупреждение через {settings.warnAfter} с, отклонение через {settings.errAfter} с, техника не по этапу — через {settings.oopAfter} с.</p>}
 
-      {!showLiveDemo && (savedVideos.length > 0 || videosError) && <div className="saved-recordings" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        {savedVideos.length > 0 && <label style={{ minWidth: 0, maxWidth: '100%' }}>Сохранённые записи{' '}
-          <select style={{ maxWidth: '100%' }} aria-label="Сохранённые записи" value={savedVideoId} onChange={(event) => {
-            const video = savedVideos.find((item) => item.video_id === event.target.value)
-            if (!video) { closeRecording(); return }
-            setRecordingUploadError(null)
-            void playSavedVideo(video)
-          }}>
-            <option value="">Выбрать запись</option>
-            {savedVideos.map((video) => <option key={video.video_id} value={video.video_id}>{video.filename} · {new Date(video.start_timestamp).toLocaleString('ru-RU')} · {recordingAnalysisLabel(video.analysis_status)}</option>)}
-          </select>
-        </label>}
-        {videosError && <span role="status">{videosError}</span>}
-        {savedVideos.find(video => video.video_id === savedVideoId)?.analysis_status === 'FAILED' && <span role="status">Серверный анализ записи завершился ошибкой. Воспроизведение и распознавание в плеере доступны.</span>}
-      </div>}
-      {canUploadVideo && context.side === 'contractor' && <label className="customer-context" style={{ padding: '8px 20px' }}>Область для новой записи<select value={uploadAreaId} onChange={event => setUploadAreaId(event.target.value)}><option value="">Выберите назначенную область</option>{assignmentOptions?.areas.map(area => <option value={area.id} key={area.id}>{area.name}</option>)}</select></label>}
+      <div className="saved-recordings" style={{ display: 'none' }} />
       </div>
 
 
@@ -1433,12 +1467,37 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
       )}
       {sheet && project && (
         <SettingsSheet
-          allowedTabs={['sources', ...(canManageControl ? ['safety'] as const : []), ...(engine.inferenceEnabled ? ['photo'] as const : [])]}
+          allowedTabs={['sources', 'documents', ...(canManageControl ? ['safety'] as const : []), ...(engine.inferenceEnabled ? ['photo'] as const : [])]}
           canConfigure={canManageControl}
           canUpload={canUploadVideo}
           tab={sheet}
           recordingCameraId={safetyRecordingCameraId}
           onRecordingCamera={(id) => { setSafetyRecordingCameraId(id); engine.setSafetyRecordingCamera(id || undefined) }}
+          onBeforeDocumentAnalysis={syncLocalSkippedRules}
+          onDocumentRulesChanged={async (changes) => {
+            const stageIds = [...new Set(changes.map(item => item.stage_id))]
+            const refreshed = await Promise.all(stageIds.map(async id => [id, await api.profile(id)] as const))
+            setApiProfiles(current => {
+              const next = new Map(current)
+              refreshed.forEach(([id, profile]) => next.set(id, profile))
+              return next
+            })
+            for (const stageId of stageIds) {
+              const local = { ...(localRules.get(stageId) ?? loadLocalRules(stageId)) }
+              let changed = false
+              for (const selection of changes.filter(item => item.stage_id === stageId)) {
+                const code = toCode(selection.class_code)
+                const profile = refreshed.find(([id]) => id === stageId)?.[1]
+                const source = profile?.probabilities.find(item => toCode(item.machinery_code) === code)?.source
+                if (!code || source !== 'document' || !local[code]?.skip) continue
+                const rule = { ...local[code], skip: undefined }
+                if (rule.warnAfter == null && rule.errAfter == null) delete local[code]
+                else local[code] = rule
+                changed = true
+              }
+              if (changed) writeLocal(stageId, local)
+            }
+          }}
           settings={settings}
           onSettings={setSettings}
           obs={obs}
@@ -1481,6 +1540,16 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
               <div className="m-k kicker">Организация / объект / назначение</div>
               {contexts.map(item => <button key={contextKey(item)} type="button" className="m-item" role="menuitemradio" aria-checked={contextKey(item) === contextKey(context)} onClick={() => { setMenu(null); onContextChange(contextKey(item)) }}><span className="chk">✓</span><span><b>{item.project_name}</b><small>{item.organization_name} · {roleName(item)}</small></span></button>)}
               <div className="m-sep" />
+              <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setJoinByKeyOpen(true) }}>
+                <span />
+                <span><b>Подключиться по ключу…</b><small>Присоединиться к объекту по коду</small></span>
+              </button>
+              {(can(context, 'assignment.manage') || user.role === 'admin' || context.role === 'customer_manager') && (
+                <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setInviteManagerOpen(true) }}>
+                  <span />
+                  <span><b>Ключи приглашений в проект</b><small>Генерация и отзыв ключей ролей</small></span>
+                </button>
+              )}
               <button type="button" className="m-item" role="menuitem" disabled={accessLoading} onClick={() => { setMenu(null); onRefreshAccess() }}><span /><span><b>Обновить доступы</b></span></button>
               <button type="button" className="m-item" role="menuitem" onClick={() => { setMenu(null); setCustomerSection('organizations') }}><span /><span><b>Организации и приглашения</b></span></button>
             </>
@@ -1512,6 +1581,17 @@ function Workspace({ user, onUser, covered, onIntro, onLogout, context, contexts
           )}
         </Menu>
       )}
+
+      <JoinByKeyModal
+        open={joinByKeyOpen}
+        onClose={() => setJoinByKeyOpen(false)}
+        onSuccess={() => onRefreshAccess()}
+      />
+      <ProjectInviteManagerModal
+        open={inviteManagerOpen}
+        context={context}
+        onClose={() => setInviteManagerOpen(false)}
+      />
     </div>
   )
 }

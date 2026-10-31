@@ -50,6 +50,23 @@ class Settings(BaseSettings):
     management_queue_timeout_seconds: int = 300
     management_run_timeout_seconds: int = 90
 
+    # Provider for the POS/PPR document agent.
+    document_llm_provider: Literal["openai_compatible", "gigachat"] = "gigachat"
+    # External OpenAI-compatible API (OpenRouter by default).
+    document_llm_base_url: str = "https://openrouter.ai/api/v1"
+    document_llm_model: str = "openai/gpt-4o-mini"
+    document_llm_api_key: SecretStr = SecretStr("")
+    # GigaChat SDK exchanges this authorization key for short-lived access tokens.
+    gigachat_credentials: SecretStr = SecretStr("")
+    gigachat_scope: Literal[
+        "GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"
+    ] = "GIGACHAT_API_PERS"
+    gigachat_model: str = "GigaChat-3-Ultra"
+    gigachat_base_url: str = "https://api.giga.chat/v1"
+    gigachat_ca_bundle_file: str = "certs/russian_trusted_root_ca.pem"
+    document_llm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    document_llm_max_chunks: int = Field(default=12, ge=4, le=30)
+
     # --- Хранилище кадров ---
     storage_backend: Literal["local"] = "local"
     storage_local_root: Path = Path("./var/storage")
@@ -58,7 +75,7 @@ class Settings(BaseSettings):
 
     # Original PPR documents must never be mounted as public media.
     ppr_storage_root: Path = Path("./var/documents")
-    ppr_provider: Literal["openrouter", "ollama"] = "openrouter"
+    ppr_provider: Literal["gigachat", "openrouter", "ollama"] = "gigachat"
     ppr_ollama_url: str = "http://ppr_llm:11434"
     ppr_analysis_model: str = ""
     camera_allow_rtsp_capture: bool = False
@@ -141,7 +158,7 @@ class Settings(BaseSettings):
     )
     construction_device: str | None = None
     construction_imgsz: int = Field(default=960, ge=32, le=4096)
-    construction_confidence: float = Field(default=0.5, gt=0, lt=1)
+    construction_confidence: float = Field(default=0.75, gt=0, lt=1)
     # Only independently validated semantic classes may drive rules in enforce.
     construction_approved_classes: list[str] = Field(default_factory=list)
 

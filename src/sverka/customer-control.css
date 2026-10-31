@@ -94,3 +94,66 @@
 .intro-foot .it-role b { white-space: normal; overflow-wrap: anywhere; }
 .intro-foot .it-context-select { width: 100%; }
 @media (max-width: 600px) { .intro .it-tag { display: none; } }
+
+/* Role badges and invite keys */
+.role-header-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  user-select: none;
+}
+.role-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.join-by-key-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.invite-key-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  margin: 12px 0;
+}
+.invite-key-code {
+  font-family: var(--f-mono, monospace);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--plan-2, #3b82f6);
+}
+.invite-keys-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+.invite-keys-table th, .invite-keys-table td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-2);
+}
+.invite-keys-table th {
+  color: var(--fg-2);
+  font-weight: 500;
+}
+.copy-btn {
+  white-space: nowrap;
+}
+

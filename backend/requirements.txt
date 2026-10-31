@@ -10,6 +10,8 @@ celery[redis]>=5.4.0
 redis>=5.2.0
 python-multipart>=0.0.17
 openpyxl>=3.1.0
+python-docx>=1.1,<2
+pypdfium2>=5,<6
 pillow>=11.0.0
 numpy>=1.26
 rapidfuzz>=3.9.0
@@ -17,6 +19,7 @@ ultralytics==8.3.203
 pyjwt>=2.8
 langchain-core>=1.0,<2
 langchain-openai>=1.0,<2
+langchain-gigachat>=0.5,<1
 
 # --- Testing & Quality Assurance ---
 pytest>=8.3.0

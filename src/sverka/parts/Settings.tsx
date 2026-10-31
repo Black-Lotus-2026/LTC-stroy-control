@@ -1,7 +1,8 @@
 import { SafetyPanel } from './Safety'
 import { PhotoInspection } from './PhotoInspection'
+import { DocumentsPanel } from './Documents'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
+import type { AdminRecipient, AlertSettings, CameraItem, CameraViewState, DocumentSelection, ProjectItem, UserProfile, Weather, ZoneItem } from '../api'
 import { CameraViewImage } from './CameraViewImage'
 import type { NumKey, Observation, Settings as S, SourceView } from '../model'
 import { DEFAULTS, DEMO_DEFAULTS, KINDS, STEPS, THRESHOLDS } from '../model'
@@ -13,7 +14,7 @@ import { CloseIcon } from './common'
 
 export type Probe = (url: string) => Promise<{ ok: boolean; message: string }>
 
-export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo' | 'safety'
+export type SheetTab = 'control' | 'sources' | 'shift' | 'tasks' | 'object' | 'photo' | 'safety' | 'documents'
 
 /** The server side of tasks: who answers for the object's events, the deadlines, the user's email. */
 export interface TaskActions {
@@ -70,6 +71,8 @@ export function SettingsSheet({
   views,
   recordingCameraId,
   onRecordingCamera,
+  onDocumentRulesChanged,
+  onBeforeDocumentAnalysis,
   allowedTabs,
   canConfigure = false,
   canUpload = false,
@@ -77,6 +80,8 @@ export function SettingsSheet({
   tab: SheetTab
   recordingCameraId: string
   onRecordingCamera: (id: string) => void
+  onDocumentRulesChanged: (changes: DocumentSelection[]) => Promise<void>
+  onBeforeDocumentAnalysis: () => Promise<void>
   settings: S
   onSettings: (s: S) => void
   obs: Observation
@@ -193,6 +198,7 @@ export function SettingsSheet({
               ['control', 'Контроль'],
               ['sources', 'Источники'],
               ['safety', 'Безопасность'],
+              ['documents', 'Документы'],
               ['photo', 'Фото'],
               ['shift', 'Смена'],
               ['tasks', 'Задачи'],
@@ -206,6 +212,7 @@ export function SettingsSheet({
           <i className="bar-ind" ref={ind} />
         </div>
         <div className="sheet-body">
+          {tab === 'documents' && <DocumentsPanel key={project.id} projectId={project.id} canWrite={user.role !== 'viewer'} beforeAnalyze={onBeforeDocumentAnalysis} onRulesChanged={onDocumentRulesChanged} />}
           {tab === 'safety' && <SafetyPanel key={project.id} projectId={project.id} cameras={cameras} obs={obs} user={user} recordingCameraId={recordingCameraId} onRecordingCamera={onRecordingCamera} onDirtyChange={setSafetyDirty} />}
           {tab === 'control' && (
             <>
@@ -231,7 +238,7 @@ export function SettingsSheet({
               </div>
             </>
           )}
-          {tab === 'photo' && <PhotoInspection />}
+          {tab === 'photo' && <PhotoInspection projectId={project.id} />}
           {tab === 'sources' && <Sources obs={obs} cameras={cameras} zones={zones} onAdd={onAddCamera} onUpdate={objectActions.onUpdateCamera} onDelete={onDeleteCamera} onCheck={onCheck} onRecording={onRecording} views={views ?? null} canConfigure={canConfigure} canUpload={canUpload} />}
           {tab === 'object' && <ObjectPane project={project} zones={zones} cameras={cameras} weather={weather} a={objectActions} user={user} />}
           {tab === 'tasks' && <TasksPane project={project} user={user} admins={admins} a={tasks} />}
@@ -468,7 +475,7 @@ export function CameraForm({
         </label>
         <label>
           Адрес потока
-          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={initial ? "Оставьте пустым, чтобы сохранить подключение" : "https://camera.example/mjpeg"} required={!initial} />
+          <input className="input mono" id="camUrl" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={initial ? "Оставьте пустым, чтобы сохранить подключение" : "https://camera.example/live.m3u8 или /mjpeg"} required={!initial} />
         </label>
       </div>
       <div className="form-grid two-col">
@@ -490,7 +497,7 @@ export function CameraForm({
           </label>
         )}
       </div>
-      {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/MJPEG-адрес или серверный шлюз.</p>}
+      {rtsp && <p className="hint">RTSP-поток браузер не воспроизводит: камера сохранится, но для анализа нужен HTTP/HLS/MJPEG-адрес или серверный шлюз.</p>}
       {state.msg && <p className={state.s === 'error' ? 'err-line' : 'hint'}>{state.msg}</p>}
       <div className="form-actions">
         <button type="submit" className="btn small primary" disabled={state.s === 'busy'}>

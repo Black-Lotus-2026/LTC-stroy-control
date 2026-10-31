@@ -15,6 +15,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.models import PprAnalysis, PprDocument, PprPage, PprRequirement
+from app.models.schedule import ScheduleTask
+from app.db.base import utcnow
 from app.services.management.agents.provider import ProviderError
 from app.services.ppr_documents import original_path, private_root
 from app.services.ppr_extraction import (
@@ -194,7 +196,205 @@ def _save_page_preview(document, page, contents, media_type):
     page.preview_media_type = media_type
 
 
+def stage_matches_requirement(stage: ScheduleTask, req: PprRequirement) -> float:
+    from app.services.stage_matcher import normalize_stage_text
+
+    t_name = normalize_stage_text(stage.name)
+    t_cat = normalize_stage_text(stage.matched_catalog_name or "")
+    r_stage = normalize_stage_text(req.stage_name or "")
+    r_title = normalize_stage_text(req.title or "")
+    r_quote = normalize_stage_text(req.quote or "")
+    r_scope = normalize_stage_text(req.scope_text or "")
+
+    score = 0.0
+    if r_stage:
+        if t_name == r_stage:
+            return 1.0
+        if t_name in r_stage or r_stage in t_name:
+            score = max(score, 0.95)
+        if t_cat and (t_cat == r_stage or t_cat in r_stage or r_stage in t_cat):
+            score = max(score, 0.92)
+        t_tokens = set(t_name.split())
+        r_tokens = set(r_stage.split())
+        if t_tokens and r_tokens:
+            common = t_tokens & r_tokens
+            overlap = len(common) / min(len(t_tokens), len(r_tokens))
+            if overlap >= 0.5:
+                score = max(score, 0.8 + 0.15 * overlap)
+
+    t_tokens = set(t_name.split())
+    if t_tokens:
+        if t_name in r_title or t_name in r_quote:
+            score = max(score, 0.9)
+        title_tokens = set(r_title.split())
+        if title_tokens:
+            common = t_tokens & title_tokens
+            overlap = len(common) / min(len(t_tokens), len(title_tokens))
+            if overlap >= 0.5:
+                score = max(score, 0.75 + 0.2 * overlap)
+
+    keywords = (
+        "котлован",
+        "землян",
+        "грунт",
+        "фундамент",
+        "монтаж",
+        "сваи",
+        "отделк",
+        "кровл",
+        "фасад",
+        "демонтаж",
+        "подготов",
+        "планировк",
+    )
+    shared_kw = [
+        kw
+        for kw in keywords
+        if kw in t_name
+        and (kw in r_stage or kw in r_title or kw in r_quote or kw in r_scope)
+    ]
+    if shared_kw:
+        score = max(score, 0.7)
+
+    return score
+
+
+def sync_ppr_requirements_with_schedule(db, analysis):
+    tasks = list(
+        db.scalars(
+            select(ScheduleTask)
+            .where(ScheduleTask.project_id == analysis.project_id)
+            .order_by(ScheduleTask.order_index)
+        )
+    )
+    if not tasks:
+        return
+    requirements = list(
+        db.scalars(
+            select(PprRequirement).where(PprRequirement.analysis_id == analysis.id)
+        )
+    )
+    document = db.get(PprDocument, analysis.document_id)
+    from app.services.machinery_rules import (
+        code_for_name,
+        current_probability,
+        set_probability,
+    )
+
+    for req in requirements:
+        if req.type not in ("equipment_required", "equipment_forbidden") and not req.equipment_class:
+            continue
+        code = code_for_name(req.equipment_class or "") or code_for_name(req.title or "")
+        if not code:
+            continue
+
+        scored_stages = [(stage, stage_matches_requirement(stage, req)) for stage in tasks]
+        scored_stages.sort(key=lambda x: x[1], reverse=True)
+
+        matched_stages = []
+        if len(tasks) == 1:
+            matched_stages = [tasks[0]]
+        else:
+            best_score = scored_stages[0][1] if scored_stages else 0.0
+            if best_score >= 0.65:
+                matched_stages = [stage for stage, sc in scored_stages if sc >= max(0.65, best_score - 0.05)]
+
+        if not matched_stages:
+            continue
+
+        for stage in matched_stages:
+            req.stage_id = stage.id
+            req.stage_name = stage.name
+            req.applicability = "stage"
+
+            target_prob = 0.95 if req.type == "equipment_required" else 0.0
+            curr_prob = current_probability(stage.machinery_probabilities or {}, code)
+            if curr_prob is None or abs(curr_prob - target_prob) > 0.05:
+                stage.machinery_probabilities = set_probability(
+                    stage.machinery_probabilities or {}, code, target_prob
+                )
+                sources = dict(stage.machinery_rule_sources or {})
+                sources[code] = {
+                    "source": "ppr",
+                    "change_kind": "ppr_requirement",
+                    "document_id": str(analysis.document_id),
+                    "document_name": document.filename if document else "",
+                    "requirement_id": str(req.id),
+                    "quote": req.quote,
+                    "page_number": req.page_number,
+                    "rule": req.type,
+                    "previous_probability": curr_prob,
+                    "new_probability": target_prob,
+                    "updated_at": utcnow().isoformat(),
+                }
+                stage.machinery_rule_sources = sources
+
+
+def sync_stage_with_ppr_requirements(db, stage: ScheduleTask):
+    requirements = list(
+        db.scalars(
+            select(PprRequirement).where(
+                PprRequirement.project_id == stage.project_id,
+                PprRequirement.type.in_(["equipment_required", "equipment_forbidden"]),
+            )
+        )
+    )
+    if not requirements:
+        return
+    from app.services.machinery_rules import (
+        code_for_name,
+        current_probability,
+        set_probability,
+    )
+
+    for req in requirements:
+        code = code_for_name(req.equipment_class or "") or code_for_name(req.title or "")
+        if not code:
+            continue
+        sc = stage_matches_requirement(stage, req)
+        if sc >= 0.65:
+            req.stage_id = stage.id
+            req.stage_name = stage.name
+            req.applicability = "stage"
+
+            target_prob = 0.95 if req.type == "equipment_required" else 0.0
+            curr_prob = current_probability(stage.machinery_probabilities or {}, code)
+            if curr_prob is None or abs(curr_prob - target_prob) > 0.05:
+                stage.machinery_probabilities = set_probability(
+                    stage.machinery_probabilities or {}, code, target_prob
+                )
+                sources = dict(stage.machinery_rule_sources or {})
+                document = db.get(PprDocument, req.document_id)
+                sources[code] = {
+                    "source": "ppr",
+                    "change_kind": "ppr_requirement",
+                    "document_id": str(req.document_id),
+                    "document_name": document.filename if document else "",
+                    "requirement_id": str(req.id),
+                    "quote": req.quote,
+                    "page_number": req.page_number,
+                    "rule": req.type,
+                    "previous_probability": curr_prob,
+                    "new_probability": target_prob,
+                    "updated_at": utcnow().isoformat(),
+                }
+                stage.machinery_rule_sources = sources
+
+
 def _persist_requirements(db, analysis, page, items):
+    tasks = list(
+        db.scalars(
+            select(ScheduleTask)
+            .where(ScheduleTask.project_id == analysis.project_id)
+            .order_by(ScheduleTask.order_index)
+        )
+    )
+    from app.services.machinery_rules import (
+        code_for_name,
+        current_probability,
+        set_probability,
+    )
+
     for item in items:
         if not quote_matches(item.quote, page.text):
             raise ProviderError("quote_not_found")
@@ -234,6 +434,39 @@ def _persist_requirements(db, analysis, page, items):
             human_confirmed=False,
             activated_at=None,
         )
+
+        if tasks and (item.type in ("equipment_required", "equipment_forbidden") or item.equipment_class):
+            scored = [(t, stage_matches_requirement(t, row)) for t in tasks]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            if scored and (len(tasks) == 1 or scored[0][1] >= 0.65):
+                best_task = scored[0][0]
+                row.stage_id = best_task.id
+                row.stage_name = best_task.name
+                row.applicability = "stage"
+
+                code = code_for_name(item.equipment_class or "") or code_for_name(item.title or "")
+                if code:
+                    target = 0.95 if item.type == "equipment_required" else 0.0
+                    curr = current_probability(best_task.machinery_probabilities or {}, code)
+                    if curr is None or abs(curr - target) > 0.05:
+                        best_task.machinery_probabilities = set_probability(
+                            best_task.machinery_probabilities or {}, code, target
+                        )
+                        sources = dict(best_task.machinery_rule_sources or {})
+                        sources[code] = {
+                            "source": "ppr",
+                            "change_kind": "ppr_requirement",
+                            "document_id": str(analysis.document_id),
+                            "requirement_id": str(row.id),
+                            "quote": row.quote,
+                            "page_number": page.page_number,
+                            "rule": item.type,
+                            "previous_probability": curr,
+                            "new_probability": target,
+                            "updated_at": utcnow().isoformat(),
+                        }
+                        best_task.machinery_rule_sources = sources
+
         db.add(row)
 
 
@@ -386,6 +619,10 @@ def process_analysis(db, analysis_id, token, *, extractor=None, ocr=None):
     analysis.error_code = failed[0].error_code if failed else None
     analysis.lease_token = None
     analysis.lease_updated_at = None
+    try:
+        sync_ppr_requirements_with_schedule(db, analysis)
+    except Exception:
+        pass
     db.commit()
     return analysis.status
 

@@ -125,6 +125,7 @@ def boundary(monkeypatch, customer_http):
 
     monkeypatch.setattr(videos, "get_machinery_detector", lambda: Detector())
     monkeypatch.setattr(videos, "get_photo_vlm", factory, raising=False)
+    state["demo_id"] = str(customer_http.projects["demo"].id)
     with TestClient(app, raise_server_exceptions=False) as client:
         client.headers.update(customer_http.headers())
         client.params = {"project_id": str(customer_http.projects["a"].id)}
@@ -521,3 +522,26 @@ def test_frame_and_status_agree_on_enabled_rule_classes(boundary, monkeypatch):
     photo = post(client, "detect-photo").json()
     assert photo["source"] == "vlm" and not photo["compliance_enabled"]
     assert photo["evaluable_classes"] == []
+
+
+def test_detect_frame_and_photo_without_project_id_succeeds(boundary):
+    state, client = boundary
+    client.params = {}
+    response = post(client, "detect-frame")
+    assert response.status_code == 200
+    assert response.json()["model_ready"] is True
+
+    photo_response = post(client, "detect-photo")
+    assert photo_response.status_code == 200
+    assert photo_response.json()["model_ready"] is True
+
+
+def test_detect_frame_with_demo_project_id_is_not_blocked(boundary):
+    state, client = boundary
+    client.params = {"project_id": state["demo_id"]}
+    response = post(client, "detect-frame")
+    assert response.status_code == 200
+    assert response.json()["model_ready"] is True
+
+    photo_response = post(client, "detect-photo")
+    assert photo_response.status_code == 200

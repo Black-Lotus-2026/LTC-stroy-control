@@ -60,6 +60,14 @@ def deliver_alert_emails_task() -> dict[str, int]:
         return deliver_pending_emails(db)
 
 
+@shared_task(name="weather.refresh_all")
+def refresh_weather_task() -> dict[str, int]:
+    from app.services.weather_service import run_weather_refresh
+
+    with session_scope() as db:
+        return run_weather_refresh(db)
+
+
 @shared_task(name="cameras.expire_moves")
 def expire_camera_moves_task() -> dict[str, int]:
     """Согласованный перенос камеры истёк без нового ракурса — событие ответственному."""

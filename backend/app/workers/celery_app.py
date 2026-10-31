@@ -25,6 +25,7 @@ celery_app = Celery(
         "app.workers.tasks",
         "app.workers.cv_tasks",
         "app.workers.management_tasks",
+        "app.workers.document_tasks",
         "app.workers.recording_tasks",
         "app.workers.ppr_tasks",
         "app.workers.safety_tasks",
@@ -85,6 +86,10 @@ celery_app.conf.beat_schedule = {
     "deliver-alert-emails": {
         "task": "alerts.deliver_emails",
         "schedule": crontab(minute="*"),
+    },
+    "refresh-weather-forecast": {
+        "task": "weather.refresh_all",
+        "schedule": crontab(hour=3, minute=0),
     },
     "expire-camera-moves": {
         "task": "cameras.expire_moves",

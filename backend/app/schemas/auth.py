@@ -7,9 +7,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.enums import UserRole
+
 
 class UserRegisterRequest(BaseModel):
-    """Registration request: username + password + confirm_password."""
+    """Registration request: username + password + confirm_password + role."""
 
     username: str = Field(
         ...,
@@ -28,6 +30,10 @@ class UserRegisterRequest(BaseModel):
         min_length=4,
         max_length=128,
         description="Повтор пароля",
+    )
+    role: UserRole = Field(
+        default=UserRole.VIEWER,
+        description="Роль пользователя в системе (admin, manager, inspector, viewer)",
     )
 
     @field_validator("username")

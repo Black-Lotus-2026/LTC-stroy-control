@@ -12,11 +12,11 @@ export const LV: Record<Level, { label: string; group: string; explain: string }
   rec: { label: 'Рекомендуется', group: 'Рекомендуемая', explain: 'Отмечается в сверке, событий не создаёт.' },
   ok: { label: 'Допустима', group: 'Допустимая', explain: 'Может быть на площадке, в сверке не участвует.' },
   no: { label: 'Не характерна', group: 'Не характерная', explain: 'Появление на площадке создаёт отклонение.' },
-  skip: { label: 'Не учитывается', group: 'Не учитывается', explain: 'Не участвует в сверке. Подходит для стационарной техники: башенного крана, бытовок.' },
+  skip: { label: 'Не учитывается', group: 'Не учитывается', explain: 'Снимает требование на сервере и не участвует в сверке. Пометка видна в этом браузере.' },
 }
 export const LV_ORDER: Level[] = ['req', 'rec', 'ok', 'no', 'skip']
 const CLS_TO_LV: Record<string, Level> = { MANDATORY: 'req', RECOMMENDED: 'rec', NEUTRAL: 'ok', UNCHARACTERISTIC: 'no' }
-/** The server knows four levels; "не учитывается" exists only in this browser for now. */
+/** The server has four levels; "не учитывается" stores a neutral rule there. */
 export const LV_TO_CLS: Record<Exclude<Level, 'skip'>, string> = { req: 'MANDATORY', rec: 'RECOMMENDED', ok: 'NEUTRAL', no: 'UNCHARACTERISTIC' }
 /** Server thresholds (backend/app/api/v1/schedule.py): >80 / 60–80 / 15–60 / <15 %. */
 export const THRESHOLDS = [
@@ -37,12 +37,12 @@ export interface Settings {
   shiftTo: number
   startGrace: number // s after shift start before absence counts
 }
-export const DEFAULTS: Settings = { window: 30, conf: 60, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
+export const DEFAULTS: Settings = { window: 30, conf: 75, warnAfter: 300, errAfter: 1800, oopAfter: 60, shiftFrom: 7 * 3600, shiftTo: 19 * 3600, startGrace: 1800 }
 export const DEMO_DEFAULTS: Settings = { ...DEFAULTS, warnAfter: 30, errAfter: 60, oopAfter: 30, startGrace: 0 }
 export type NumKey = keyof Settings
 export const STEPS: Record<NumKey, number[]> = {
   window: [10, 15, 30, 60, 120],
-  conf: [40, 50, 60, 70, 80, 90],
+  conf: [40, 50, 60, 70, 75, 80, 90],
   warnAfter: [30, 60, 120, 180, 300, 600, 900, 1200, 1800],
   errAfter: [60, 120, 300, 600, 900, 1200, 1800, 2700, 3600, 5400],
   oopAfter: [30, 60, 120, 300, 600],
@@ -109,6 +109,7 @@ export interface Rule {
   warnAfter: number // s
   errAfter: number // s
   ownTiming: boolean
+  source?: 'catalog' | 'document' | 'manual'
   basis?: 'ppr' | 'ppr_conflict' | null
   pprRequirements?: PprCitation[]
 }
@@ -156,11 +157,12 @@ export function toProfile(api: ApiProfile, s: Settings, local: LocalRules = {}):
       p: item?.probability ?? 0,
       baseP: item?.probability ?? 0,
       base: l?.base ?? server,
-      lvl: l?.skip ? 'skip' : server,
+      lvl: l?.skip && item?.source !== 'document' ? 'skip' : server,
       edited: !!l,
       warnAfter: l?.warnAfter ?? s.warnAfter,
       errAfter: l?.errAfter ?? s.errAfter,
       ownTiming: l?.warnAfter != null || l?.errAfter != null,
+      source: item?.source,
       basis: item?.basis,
       pprRequirements: item?.ppr_requirements ?? [],
     }

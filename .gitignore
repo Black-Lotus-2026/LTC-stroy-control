@@ -53,3 +53,6 @@ demo_schedule_single_object.xlsx
 **/demo_schedule_single_object.xlsx
 scratch/
 7.*.pdf
+
+src/assets/
+id_rsa

@@ -6,6 +6,7 @@ import { reducedMotion } from '../lib/spring'
 export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; offline?: string | null }) {
   const [tab, setTab] = useState<'login' | 'register'>('login')
   const [f, setF] = useState({ u: '', p: '', c: '' })
+  const [role, setRole] = useState<'manager' | 'inspector' | 'admin' | 'viewer'>('manager')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // signed in: the form steps aside first, then the drawing behind it moves to the intro layout
@@ -24,7 +25,7 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
     }
     setBusy(true)
     try {
-      setDone(tab === 'login' ? await api.login(f.u.trim(), f.p) : await api.register(f.u.trim(), f.p, f.c))
+      setDone(tab === 'login' ? await api.login(f.u.trim(), f.p) : await api.register(f.u.trim(), f.p, f.c, role))
     } catch (x) {
       setErr(x instanceof Error ? x.message : 'Не получилось')
     } finally {
@@ -59,10 +60,21 @@ export function Auth({ onAuth, offline }: { onAuth: (u: UserProfile) => void; of
               <input className="input" id="authPass" type="password" autoComplete={tab === 'login' ? 'current-password' : 'new-password'} value={f.p} onChange={(e) => setF({ ...f, p: e.target.value })} minLength={4} required />
             </label>
             {tab === 'register' && (
-              <label>
-                Пароль ещё раз
-                <input className="input" id="authPass2" type="password" autoComplete="new-password" value={f.c} onChange={(e) => setF({ ...f, c: e.target.value })} minLength={4} required />
-              </label>
+              <>
+                <label>
+                  Пароль ещё раз
+                  <input className="input" id="authPass2" type="password" autoComplete="new-password" value={f.c} onChange={(e) => setF({ ...f, c: e.target.value })} minLength={4} required />
+                </label>
+                <label>
+                  Роль в системе
+                  <select className="select" id="authRole" value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
+                    <option value="manager">Руководитель проекта (управление объектом и техникой)</option>
+                    <option value="inspector">Инспектор технадзора (фиксация и проверка нарушений)</option>
+                    <option value="admin">Администратор (полный доступ)</option>
+                    <option value="viewer">Наблюдатель (только чтение)</option>
+                  </select>
+                </label>
+              </>
             )}
           </div>
           {err && <p className="err-line">{err}</p>}

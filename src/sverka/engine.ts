@@ -81,7 +81,7 @@ export class Engine {
   modelSince?: number
   frames = 0
   evaluationRevision = 0
-  conf = 60
+  conf = 75
   windowMs = 30_000
   stageName?: string
   safetyProjectId?: string
@@ -590,8 +590,9 @@ export class Engine {
       this.judgeFrame(rt, el, w0, h0, snapshot, at)
       this.showView(rt)
     }
+    const recording = isVideo || this.mode === 'recording' || rt.view.id === 'recording'
     // a camera that replays a recording, looks away or is being moved says nothing about the site
-    if (!this.inferenceEnabled || rt.view.loop?.looped || viewBlocked(rt.view)) {
+    if ((!this.inferenceEnabled && !recording) || rt.view.loop?.looped || viewBlocked(rt.view)) {
       rt.view.dets = []
       rt.lastAnalyzed = Date.now()
       this.emit()
@@ -600,14 +601,15 @@ export class Engine {
     rt.inFlight = true
     this.canvas.toBlob(
       (blob) => {
-        if (!blob || !this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
+        const allowed = this.inferenceEnabled || recording
+        if (!blob || !allowed || generation !== this.generation || this.rts.get(rt.view.id) !== rt) {
           rt.inFlight = false
           return
         }
         api
-          .detectFrame(blob, this.stageName, safety)
+          .detectFrame(blob, this.stageName, safety, this.safetyProjectId)
           .then((res) => {
-            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if ((!this.inferenceEnabled && !recording) || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             if (!res.model_ready) {
               this.setModel('down', res.message || 'модель не загружена')
               rt.view.dets = []
@@ -629,7 +631,7 @@ export class Engine {
             this.addCoverage(at)
           })
           .catch((e: unknown) => {
-            if (!this.inferenceEnabled || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
+            if ((!this.inferenceEnabled && !recording) || generation !== this.generation || this.rts.get(rt.view.id) !== rt) return
             const msg = e instanceof Error ? e.message : 'сервис не ответил'
             rt.view.dets = []
             this.setModel('down', msg)
